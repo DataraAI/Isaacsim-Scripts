@@ -1,4 +1,19 @@
-"""Follow-target IK with datacenter USD: re-spawn Franka at the original scene Franka pose and place the target at a port."""
+# SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Follow-target IK with datacenter USD: Franka at old robot world position; target at port world position."""
 
 from isaacsim import SimulationApp
 
@@ -7,7 +22,6 @@ simulation_app = SimulationApp({"headless": False})
 import numpy as np
 import carb
 from pxr import Usd, UsdGeom
-from scipy.spatial.transform import Rotation as Rot
 
 from isaacsim.core.api import World
 from isaacsim.core.utils.prims import delete_prim, is_prim_path_valid
@@ -24,25 +38,15 @@ LEGACY_FRANKA_PATH = "/World/Franka"
 TARGET_PRIM_PATH = "/World/TargetCube"
 
 
-def world_translation_orientation_scale(prim_path: str):
-    """Decompose world (stage) transform of a prim into translation, quaternion (w,x,y,z), and scale."""
+def world_position(prim_path: str) -> np.ndarray:
+    """World-space position (stage frame) of a prim's pivot."""
     stage = get_current_stage()
     prim = stage.GetPrimAtPath(prim_path)
     if not prim.IsValid():
         raise RuntimeError(f"Prim not found: {prim_path}")
     xf = UsdGeom.Xformable(prim)
-    m = np.array(xf.ComputeLocalToWorldTransform(Usd.TimeCode.Default()))
-    trans = m[:3, 3].copy()
-    c0, c1, c2 = m[:3, 0], m[:3, 1], m[:3, 2]
-    sx, sy, sz = np.linalg.norm(c0), np.linalg.norm(c1), np.linalg.norm(c2)
-    scale = np.array([sx, sy, sz], dtype=np.float64)
-    if sx > 1e-10 and sy > 1e-10 and sz > 1e-10:
-        rmat = np.column_stack([c0 / sx, c1 / sy, c2 / sz])
-    else:
-        rmat = np.eye(3)
-    q = Rot.from_matrix(rmat).as_quat()  # x, y, z, w
-    orient_wxyz = np.array([q[3], q[0], q[1], q[2]], dtype=np.float64)
-    return trans, orient_wxyz, scale
+    m = xf.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    return np.array(m.ExtractTranslation(), dtype=np.float64)
 
 
 my_world = World(stage_units_in_meters=1.0)
@@ -52,12 +56,12 @@ if not is_prim_path_valid(LEGACY_FRANKA_PATH):
     carb.log_error(f"Expected Franka at {LEGACY_FRANKA_PATH} in the referenced USD.")
     simulation_app.close()
     raise SystemExit(1)
-saved_translation, saved_orientation, saved_scale = world_translation_orientation_scale(LEGACY_FRANKA_PATH)
+saved_franka_world_position = world_position(LEGACY_FRANKA_PATH)
 if is_prim_path_valid(PORT_PRIM_PATH):
-    port_world_translation = world_translation_orientation_scale(PORT_PRIM_PATH)[0]
+    port_world_position = world_position(PORT_PRIM_PATH)
 else:
     carb.log_warn(f"Port prim not found; target stays at task default: {PORT_PRIM_PATH}")
-    port_world_translation = None
+    port_world_position = None
 
 delete_prim(LEGACY_FRANKA_PATH)
 
@@ -79,12 +83,10 @@ articulation_controller = my_franka.get_articulation_controller()
 
 
 def apply_franka_and_target_from_datacenter():
-    """Restore Franka world pose from the removed asset; move target cube to the port (world translation)."""
-    my_franka.set_local_scale(saved_scale)
-    my_franka.set_world_pose(position=saved_translation, orientation=saved_orientation)
-    if port_world_translation is not None:
-        _, target_orient = my_target.get_world_pose()
-        my_target.set_world_pose(position=port_world_translation, orientation=target_orient)
+    """Set new Franka world position to match removed robot; set TargetCube world position to port."""
+    my_franka.set_world_pose(position=saved_franka_world_position)
+    if port_world_position is not None:
+        my_target.set_world_pose(position=port_world_position)
 
 
 apply_franka_and_target_from_datacenter()
@@ -99,7 +101,6 @@ while simulation_app.is_running():
             my_world.reset()
             apply_franka_and_target_from_datacenter()
             reset_needed = False
-        # IK uses stage/world frame; use world pose so it stays correct if /World is transformed.
         target_pos, target_orient = my_target.get_world_pose()
         actions, succ = my_controller.compute_inverse_kinematics(
             target_position=target_pos,
