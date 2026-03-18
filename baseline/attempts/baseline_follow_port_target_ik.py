@@ -1,5 +1,7 @@
 """Follow-target IK with datacenter USD: re-spawn Franka at the original scene Franka pose and place the target at a port."""
 
+""" The target cube's transformation is wrong, seems to be setting to [0,0,0], perhaps something to do with not getting the world_pose correctly """
+
 from isaacsim import SimulationApp
 
 simulation_app = SimulationApp({"headless": False})
