@@ -13,8 +13,10 @@ import carb
 from pxr import Usd, UsdGeom
 from scipy.spatial.transform import Rotation as Rot
 
+from omni.usd.commands import DeletePrimsCommand
+
 from isaacsim.core.api import World
-from isaacsim.core.utils.prims import delete_prim, is_prim_path_valid
+from isaacsim.core.utils.prims import is_prim_path_valid
 from isaacsim.core.utils.stage import add_reference_to_stage, get_current_stage
 from isaacsim.robot.manipulators.examples.franka import KinematicsSolver
 from isaacsim.robot.manipulators.examples.franka.tasks import FollowTarget
@@ -24,8 +26,17 @@ PORT_PRIM_PATH = (
     "/World/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/"
     "SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01"
 )
-FRANKA_PRIM_PATH = "/World/Franka"
+# Franka inside the datacenter USD is an *ancestral* prim (defined only in the referenced layer).
+# It cannot be removed with destructive delete; we deactivate it instead (active=false on your edit layer).
+# The path /World/Franka then stays reserved by that spec, so the task Franka is spawned on a sibling path.
+LEGACY_FRANKA_PRIM_PATH = "/World/Franka"
+TASK_FRANKA_PRIM_PATH = "/World/Franka_IK"
 TARGET_PRIM_PATH = "/World/TargetCube"
+
+
+def deactivate_ancestral_prim(prim_path: str) -> None:
+    """Turn off composition for a prim that lives inside a reference (same as Editor: Deactivate)."""
+    DeletePrimsCommand([prim_path], destructive=False).do()
 
 
 def world_xform_position_orientation_scale(prim_path: str):
@@ -70,12 +81,12 @@ def world_position_only(prim_path: str) -> np.ndarray:
 my_world = World(stage_units_in_meters=1.0)
 add_reference_to_stage(USD_WORLD_PATH, "/World")
 
-if not is_prim_path_valid(FRANKA_PRIM_PATH):
-    carb.log_error(f"Expected Franka at {FRANKA_PRIM_PATH} in the referenced USD.")
+if not is_prim_path_valid(LEGACY_FRANKA_PRIM_PATH):
+    carb.log_error(f"Expected Franka at {LEGACY_FRANKA_PRIM_PATH} in the referenced USD.")
     simulation_app.close()
     raise SystemExit(1)
 franka_world_position, franka_world_orientation, franka_world_scale = world_xform_position_orientation_scale(
-    FRANKA_PRIM_PATH
+    LEGACY_FRANKA_PRIM_PATH
 )
 if is_prim_path_valid(PORT_PRIM_PATH):
     port_world_position = world_position_only(PORT_PRIM_PATH)
@@ -84,11 +95,22 @@ else:
     simulation_app.close()
     raise SystemExit(1)
 
-delete_prim(FRANKA_PRIM_PATH)
+deactivate_ancestral_prim(LEGACY_FRANKA_PRIM_PATH)
+legacy = get_current_stage().GetPrimAtPath(LEGACY_FRANKA_PRIM_PATH)
+if legacy.IsValid() and legacy.IsActive():
+    carb.log_error(
+        f"Could not deactivate {LEGACY_FRANKA_PRIM_PATH}. It may be locked or overridden in a stronger layer."
+    )
+    simulation_app.close()
+    raise SystemExit(1)
+carb.log_info(
+    f"Deactivated ancestral prim {LEGACY_FRANKA_PRIM_PATH} (referenced asset). "
+    f"Spawning task Franka at {TASK_FRANKA_PRIM_PATH}."
+)
 
 my_task = FollowTarget(
     name="follow_target_task",
-    franka_prim_path=FRANKA_PRIM_PATH,
+    franka_prim_path=TASK_FRANKA_PRIM_PATH,
     target_prim_path=TARGET_PRIM_PATH,
 )
 my_world.add_task(my_task)
@@ -128,6 +150,7 @@ while simulation_app.is_running():
             my_world.reset()
             apply_franka_and_target_from_datacenter()
             reset_needed = False
+            carb_printed = False
         target_pos, target_orient = my_target.get_world_pose()
         actions, succ = my_controller.compute_inverse_kinematics(
             target_position=target_pos,
