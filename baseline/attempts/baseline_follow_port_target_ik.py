@@ -8,12 +8,21 @@ from isaacsim.robot.manipulators.examples.franka import KinematicsSolver
 from isaacsim.robot.manipulators.examples.franka.tasks import FollowTarget
 
 my_world = World(stage_units_in_meters=1.0)
+# my_task = FollowTarget(name="follow_target_task")
+# my_world.add_task(my_task)
+# my_world.reset()
 
 USD_PATH = r"C:\Users\aayus\Downloads\Datacenter_Files\Assets\DigitalTwin\Assets\Datacenter\Facilities\Stages\Data_Hall\DataHall_Full_01.usd"
 add_reference_to_stage(USD_PATH, "/World")
 
 PORT_PRIM_PATH = "/World/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01"
-my_task = FollowTarget(name="follow_target_task", target_prim_path=PORT_PRIM_PATH)
+my_task = FollowTarget(
+    name="follow_target_task",
+    target_prim_path=PORT_PRIM_PATH,
+    target_name="port_target",
+    franka_prim_path="/World/Franka",
+    franka_robot_name="franka"
+)
 my_world.add_task(my_task)
 my_world.reset()
 
@@ -23,10 +32,8 @@ target_name = task_params["target_name"]["value"]
 my_franka = my_world.scene.get_object(franka_name)
 my_controller = KinematicsSolver(my_franka)
 articulation_controller = my_franka.get_articulation_controller()
-
 reset_needed = False
 while simulation_app.is_running():
-    print(target_name)
     my_world.step(render=True)
     if my_world.is_stopped() and not reset_needed:
         reset_needed = True
