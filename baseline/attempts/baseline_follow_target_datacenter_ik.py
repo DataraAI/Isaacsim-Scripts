@@ -1,19 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Follow-target IK: datacenter USD supplies Franka at LEGACY_FRANKA_PRIM_PATH; target cube moves to port world position."""
+"""Datacenter reference + FollowTarget-injected Franka; Franka/target layout applied after scene build."""
 
 from isaacsim import SimulationApp
 
@@ -25,6 +10,7 @@ from pxr import Usd, UsdGeom
 
 from isaacsim.core.api import World
 from isaacsim.core.utils.prims import is_prim_path_valid
+from isaacsim.core.utils.rotations import euler_angles_to_quat
 from isaacsim.core.utils.stage import add_reference_to_stage, get_current_stage
 from isaacsim.robot.manipulators.examples.franka import KinematicsSolver
 from isaacsim.robot.manipulators.examples.franka.tasks import FollowTarget
@@ -34,8 +20,14 @@ PORT_PRIM_PATH = (
     "/World/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/"
     "SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01"
 )
-LEGACY_FRANKA_PRIM_PATH = "/World/Franka"
-TARGET_PRIM_PATH = "/World/TargetCube"
+
+# Set before add_task: injected Franka world pose (applied after first reset when prims exist).
+FRANKA_WORLD_POSITION = np.array([34.3, -100.0, 140.0], dtype=np.float64)
+FRANKA_EULER_DEGREES = np.array([0.0, 0.0, -180.0], dtype=np.float64)
+FRANKA_WORLD_ORIENTATION = euler_angles_to_quat(FRANKA_EULER_DEGREES, degrees=True)
+FRANKA_SCALE = np.array([57.0, 57.0, 57.0], dtype=np.float64)
+
+TARGET_LOCAL_SCALE = np.array([3.0, 3.0, 3.0], dtype=np.float64)
 
 
 def world_position_only(prim_path: str) -> np.ndarray:
@@ -52,22 +44,14 @@ def world_position_only(prim_path: str) -> np.ndarray:
 my_world = World(stage_units_in_meters=1.0)
 add_reference_to_stage(USD_WORLD_PATH, "/World")
 
-if not is_prim_path_valid(LEGACY_FRANKA_PRIM_PATH):
-    carb.log_error(f"Expected Franka at {LEGACY_FRANKA_PRIM_PATH} in the referenced USD.")
-    simulation_app.close()
-    raise SystemExit(1)
-if is_prim_path_valid(PORT_PRIM_PATH):
-    port_world_position = world_position_only(PORT_PRIM_PATH)
-else:
+if not is_prim_path_valid(PORT_PRIM_PATH):
     carb.log_error(f"Port prim not found: {PORT_PRIM_PATH}")
     simulation_app.close()
     raise SystemExit(1)
+PORT_WORLD_POSITION = world_position_only(PORT_PRIM_PATH)
 
-my_task = FollowTarget(
-    name="follow_target_task",
-    franka_prim_path=LEGACY_FRANKA_PRIM_PATH,
-    target_prim_path=TARGET_PRIM_PATH,
-)
+# FollowTarget only creates Franka/target on reset(), so layout is applied immediately after first reset.
+my_task = FollowTarget(name="follow_target_task")
 my_world.add_task(my_task)
 my_world.reset()
 
@@ -80,15 +64,16 @@ my_controller = KinematicsSolver(my_franka)
 articulation_controller = my_franka.get_articulation_controller()
 
 
-def apply_target_at_port():
-    """Place target cube at port world position; keep cube world orientation and local scale."""
-    _, cube_world_orientation = my_target.get_world_pose()
-    cube_local_scale = np.array(my_target.get_local_scale(), dtype=np.float64, copy=True)
-    my_target.set_world_pose(position=port_world_position, orientation=cube_world_orientation)
-    my_target.set_local_scale(cube_local_scale)
+def apply_franka_and_target_layout():
+    """Franka: fixed world pose + scale. Target: port world position, default orientation, scale 3."""
+    my_franka.set_local_scale(FRANKA_SCALE)
+    my_franka.set_world_pose(position=FRANKA_WORLD_POSITION, orientation=FRANKA_WORLD_ORIENTATION)
+    _, target_world_orientation = my_target.get_world_pose()
+    my_target.set_world_pose(position=PORT_WORLD_POSITION, orientation=target_world_orientation)
+    my_target.set_local_scale(TARGET_LOCAL_SCALE)
 
 
-apply_target_at_port()
+apply_franka_and_target_layout()
 my_world.stop()
 
 reset_needed = False
@@ -100,7 +85,7 @@ while simulation_app.is_running():
     if my_world.is_playing():
         if reset_needed:
             my_world.reset()
-            apply_target_at_port()
+            apply_franka_and_target_layout()
             reset_needed = False
             carb_printed = False
         target_pos, target_orient = my_target.get_world_pose()
