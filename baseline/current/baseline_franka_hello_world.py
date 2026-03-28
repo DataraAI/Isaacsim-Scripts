@@ -21,23 +21,47 @@ USD_PATH = r"/home/advaith/Downloads/Assets/DigitalTwin/Assets/Datacenter/Facili
 # )
 
 PORT_PRIM_PATH = "/World/Datacenter/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01"
-PORT_PRIM_PATH_2 = "/World/Datacenter/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_02"
+# PORT_PRIM_PATH_2 = "/World/Datacenter/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_02"
 
 
 # /World/Datacenter/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_02/QSFP_DD_Connector_A_02
 
-
-PORT_PRIM_PATH_LIST = [
-    PORT_PRIM_PATH,
-    PORT_PRIM_PATH_2
-]
+num_quads = 4
+num_pairs = 4
+num_conn_a = 2
 
 
+PORT_BASE_PRIM_PATH = (
+    "/World/Datacenter/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/SN4600C_A_01/msn4600_cs2fc_base"
+    "/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01"
+)
 
-duration = 10.0
-time_elapsed = 0.0
-def move_object(start_pos, end_pos, step_size, prim_path="/World/TargetCube"):
-    global time_elapsed
+PORT_PRIM_PATH_LIST = []
+
+for q in range(1, num_quads+1):
+    for p in range(1, num_pairs+1):
+        for a in range(1, num_conn_a+1):
+            suffix = f"/Connector_Quad_{q:02d}/Connector_Pair_{p:02d}/QSFP_DD_Connector_A_{a:02d}"
+            PORT_PRIM_PATH_LIST.append(PORT_BASE_PRIM_PATH + suffix)
+
+
+# PORT_SUFFIX = (
+#     "/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01"
+# )
+
+
+
+# PORT_PRIM_PATH_LIST = [
+#     PORT_PRIM_PATH,
+#     PORT_PRIM_PATH_2
+# ]
+
+
+
+# duration = 5.0
+# time_elapsed = 0.0
+def move_object(start_pos, end_pos, step_size, prim_path="/World/TargetCube", time_elapsed=0.0, duration=5.0):
+    # global time_elapsed
     prim = omni.usd.get_context().get_stage().GetPrimAtPath(prim_path)
     if time_elapsed < duration:
         time_elapsed += step_size
@@ -47,10 +71,10 @@ def move_object(start_pos, end_pos, step_size, prim_path="/World/TargetCube"):
         # Set new position
         xform = UsdGeom.Xformable(prim)
         # xform.AddTranslateOp().Set(current_pos)
-        print("times", time_elapsed, duration)
-        print("\tstep_size", step_size)
-        print("\tsetting current pos", current_pos, cpgf)
-        print("\tpositions", start_pos, end_pos)
+        # print("times", time_elapsed, duration)
+        # print("\tstep_size", step_size)
+        # print("\tsetting current pos", current_pos, cpgf)
+        # print("\tpositions", start_pos, end_pos)
         prim.GetAttribute("xformOp:translate").Set(cpgf)
 
 
@@ -80,7 +104,7 @@ def hide_prim(prim_path: str):
     set_prim_visibility_attribute(prim_path, "invisible")
 
 
-from isaacsim.robot.manipulators.examples.franka import KinematicsSolver
+# from isaacsim.robot.manipulators.examples.franka import KinematicsSolver
 
 import typing
 
@@ -179,7 +203,7 @@ class HelloWorld(BaseSample):
         port_world_position = get_world_transform_xform(port_prim)[0]
         # print(port_world_position) # (-7.750999993085862, -109.62536725783971, 178.21793722812936)
         # offset = np.array([1.75, 0, 2])
-        offset = np.array([0, 0, -5])
+        self.offset = np.array([0, 0, 2])
         # np.array([-6, -110, 180])
         # Initialize a predefined task for the robot (e.g., following a target)
         my_task = FollowTarget(
@@ -188,10 +212,11 @@ class HelloWorld(BaseSample):
             franka_robot_name="fancy_franka",  # Name for the robot instance
             target_name="target",  # Name of the target object the robot should follow
             # target_prim_path="/World/TargetCube",
-            target_position=np.array(port_world_position) + offset,
+            target_position=np.array(port_world_position) + self.offset,
         )
         # Add the task to the simulation world
         world.add_task(my_task)
+        self._currPort = 0
 
         return
 
@@ -200,9 +225,9 @@ class HelloWorld(BaseSample):
         self._world = self.get_world()
         self._franka = self._world.scene.get_object("fancy_franka")
 
-        # hide_prim("/World/TargetCube")
+        hide_prim("/World/TargetCube")
         targetCube = omni.usd.get_context().get_stage().GetPrimAtPath("/World/TargetCube")
-        # assert targetCube.GetAttribute("visibility").Get() == "invisible"
+        assert targetCube.GetAttribute("visibility").Get() == "invisible"
 
 
         # Set Position (x, y, z) and Rotation (quaternion)
@@ -219,9 +244,12 @@ class HelloWorld(BaseSample):
         # self._controller = KinematicsSolver(
         #     self._franka
         # )
+        self._timeElapsed = 0.0
+        self._duration = 5.0
 
         # Add a physics callback for simulation steps
-        self._world.add_physics_callback("sim_step", callback_fn=self.physics_step)
+        if self._currPort + 1 < len(PORT_PRIM_PATH_LIST):
+            self._world.add_physics_callback("sim_step", callback_fn=self.physics_step)
         await self._world.play_async()
         return
 
@@ -241,16 +269,17 @@ class HelloWorld(BaseSample):
         # print("phys step orientation", observations["target"]["orientation"]) # np.array([0, 0, 1, 0])
 
         # Move target
-        port_prim = omni.usd.get_context().get_stage().GetPrimAtPath(PORT_PRIM_PATH)
+        port_prim = omni.usd.get_context().get_stage().GetPrimAtPath(PORT_PRIM_PATH_LIST[self._currPort])
         port_world_position = get_world_transform_xform(port_prim)[0]
-        start_pos = port_world_position + np.array([0, 0, -5])
+        start_pos = port_world_position + np.array([0, 0, -2 * (1 if self._currPort % 2 == 0 else -1)])
 
-        port_prim = omni.usd.get_context().get_stage().GetPrimAtPath(PORT_PRIM_PATH_2)
+        port_prim = omni.usd.get_context().get_stage().GetPrimAtPath(PORT_PRIM_PATH_LIST[self._currPort + 1])
         port_world_position = get_world_transform_xform(port_prim)[0]
-        end_pos = port_world_position + np.array([0, 0, 5])
-        print("start vs end\n", "\t", start_pos, "\n\t", end_pos)
+        end_pos = port_world_position + np.array([0, 0, 2 * (1 if self._currPort % 2 == 0 else -1)])
+        # print("start vs end\n", "\t", start_pos, "\n\t", end_pos)
 
-        move_object(start_pos, end_pos, step_size)
+        move_object(start_pos, end_pos, step_size, time_elapsed=self._timeElapsed)
+        self._timeElapsed += step_size
 
         # Compute actions for the robot to follow the target's position and orientation
         actions = self._controller.forward(
@@ -260,6 +289,13 @@ class HelloWorld(BaseSample):
 
         # Apply the computed actions to the robot
         self._franka.apply_action(actions)
+        cube_prim = omni.usd.get_context().get_stage().GetPrimAtPath("/World/TargetCube")
+        cube_world_position = get_world_transform_xform(cube_prim)[0]
+        carb.log_info(f"distance away so far {np.array(end_pos - cube_world_position)}")
+        # np.linalg.norm(np.array(end_pos - cube_world_position)) < 0.1
+        if self._timeElapsed >= self._duration:
+            self._currPort += 1
+            self._timeElapsed = 0.0
         return
 
         # actions, succ = self._controller.compute_inverse_kinematics(
