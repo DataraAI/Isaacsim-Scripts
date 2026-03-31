@@ -38,6 +38,10 @@ CABLE_PICK_PRIM_PATH = ""  # e.g. "/World/.../cable_link"
 # Offset added to each port world position for the place goal (e.g. approach along normal / height).
 PLACE_POSITION_OFFSET = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
+# Franka: same distance_scale as baseline_franka_hello_world URDF import (import_config.distance_scale).
+# For the extension Franka prim, match that via uniform local scale (see baseline_follow_target_datacenter_ik).
+FRANKA_DISTANCE_SCALE = 57.0
+
 # Franka world pose in the datacenter (same ballpark as baseline_franka_hello_world).
 FRANKA_WORLD_POSITION = np.array([30.0, -90.0, 150.0], dtype=np.float64)
 FRANKA_WORLD_ORIENTATION = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)  # w, x, y, z
@@ -139,6 +143,14 @@ class CablePickPlacePorts(BaseSample):
         self._spawned_cable_paths.append(prim_path)
         return cyl
 
+    def _apply_franka_distance_scale_and_pose(self):
+        s = float(FRANKA_DISTANCE_SCALE)
+        self._franka.set_local_scale(np.array([s, s, s], dtype=np.float64))
+        self._franka.set_world_pose(
+            position=FRANKA_WORLD_POSITION,
+            orientation=FRANKA_WORLD_ORIENTATION,
+        )
+
     def setup_scene(self):
         world = self.get_world()
         add_reference_to_stage(USD_PATH, "/World/Datacenter")
@@ -172,10 +184,7 @@ class CablePickPlacePorts(BaseSample):
     async def setup_post_load(self):
         self._world = self.get_world()
         self._franka = self._world.scene.get_object("fancy_franka")
-        self._franka.set_world_pose(
-            position=FRANKA_WORLD_POSITION,
-            orientation=FRANKA_WORLD_ORIENTATION,
-        )
+        self._apply_franka_distance_scale_and_pose()
 
         self._controller = PickPlaceController(
             name="cable_pick_place_controller",
@@ -190,6 +199,7 @@ class CablePickPlacePorts(BaseSample):
     async def setup_post_reset(self):
         self._controller.reset()
         self._port_index = 0
+        self._apply_franka_distance_scale_and_pose()
         if not CABLE_URDF_PATH:
             if self._spawned_cable_paths:
                 _delete_prims_at_paths(list(self._spawned_cable_paths))
