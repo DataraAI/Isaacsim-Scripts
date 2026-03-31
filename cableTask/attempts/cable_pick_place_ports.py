@@ -8,7 +8,6 @@ By default thin, long DynamicCylinder cables are used: cable1 → first port, ca
 A new cylinder is spawned at the spawn pose after each place. Set CABLE_URDF_PATH to use a single URDF
 cable instead. Port goals are taken from PORT_PRIM_PATH_LIST (each element is a connector prim path).
 
-After load (and after reset), the world is left stopped so you can set the viewport, then press Play to run.
 """
 
 from isaacsim.examples.interactive.base_sample import BaseSample
@@ -228,11 +227,7 @@ class HelloWorld(BaseSample):
         )
         self._world.add_physics_callback("sim_step", callback_fn=self.physics_step)
         self._franka.gripper.set_joint_positions(self._franka.gripper.joint_opened_positions)
-        # Leave simulation stopped so the user can frame the view and press Play when ready.
-        if hasattr(self._world, "stop_async"):
-            await self._world.stop_async()
-        else:
-            self._world.stop()
+        await self._world.play_async()
         return
 
     async def setup_post_reset(self):
@@ -245,10 +240,7 @@ class HelloWorld(BaseSample):
                 self._spawned_cable_paths.clear()
             self._cable_object = self._spawn_cylinder_cable(self._world, 1)
         self._franka.gripper.set_joint_positions(self._franka.gripper.joint_opened_positions)
-        if hasattr(self._world, "stop_async"):
-            await self._world.stop_async()
-        else:
-            self._world.stop()
+        await self._world.play_async()
         return
 
     def physics_step(self, step_size):
