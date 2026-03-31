@@ -7,6 +7,8 @@ https://docs.isaacsim.omniverse.nvidia.com/4.5.0/core_api_tutorials/tutorial_cor
 By default thin, long DynamicCylinder cables are used: cable1 → first port, cable2 → second port, etc.
 A new cylinder is spawned at the spawn pose after each place. Set CABLE_URDF_PATH to use a single URDF
 cable instead. Port goals are taken from PORT_PRIM_PATH_LIST (each element is a connector prim path).
+
+After load (and after reset), the world is left stopped so you can set the viewport, then press Play to run.
 """
 
 from isaacsim.examples.interactive.base_sample import BaseSample
@@ -18,7 +20,7 @@ import omni.kit.commands
 import omni.usd
 
 from isaacsim.core.utils.stage import add_reference_to_stage
-from pxr import Gf, Sdf, Usd
+from pxr import Gf, Sdf, Usd, PhysxSchema
 import numpy as np
 from typing import List, Optional, Tuple
 
@@ -46,9 +48,17 @@ FRANKA_DISTANCE_SCALE = 57.0
 FRANKA_WORLD_POSITION = np.array([30.0, -90.0, 150.0], dtype=np.float64)
 FRANKA_WORLD_ORIENTATION = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)  # w, x, y, z
 
-# Placeholder cable: thin (x,y) and long (z) cylinder when CABLE_URDF_PATH is empty (tune for your stage).
-CABLE_WORLD_POSITION = np.array([28.0, -92.0, 141.85], dtype=np.float64)
-CABLE_CYLINDER_SCALE = np.array([0.012, 0.012, 0.45], dtype=np.float64)
+# Cable cylinder: diameter 0.1, length 1.0 (stage units). Scale is (radius, radius, height) for DynamicCylinder.
+CABLE_DIAMETER = 0.1
+CABLE_LENGTH = 1.0
+CABLE_CYLINDER_SCALE = np.array(
+    [CABLE_DIAMETER / 2.0, CABLE_DIAMETER / 2.0, CABLE_LENGTH],
+    dtype=np.float64,
+)
+
+# Spawn cable near the Franka base / workspace (same units as FRANKA_WORLD_POSITION); tune if needed.
+CABLE_OFFSET_FROM_FRANKA = np.array([4.0, 5.0, -12.0], dtype=np.float64)
+CABLE_WORLD_POSITION = FRANKA_WORLD_POSITION + CABLE_OFFSET_FROM_FRANKA
 
 num_quads = 4
 num_pairs = 4
@@ -108,6 +118,30 @@ def _delete_prims_at_paths(prim_paths: List[str]) -> None:
         omni.kit.commands.execute("DeletePrims", paths=[Sdf.Path(prim_path)])
 
 
+def _disable_gravity_under_prim(prim_path: str) -> None:
+    """Turn off PhysX gravity on every rigid body under prim_path (keeps cable from falling)."""
+    stage = omni.usd.get_context().get_stage()
+    root = stage.GetPrimAtPath(prim_path)
+    if not root.IsValid():
+        return
+    stack = [root]
+    touched = False
+    while stack:
+        prim = stack.pop()
+        stack.extend(prim.GetChildren())
+        if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
+            rb = PhysxSchema.PhysxRigidBodyAPI(prim)
+            attr = rb.GetDisableGravityAttr()
+            if attr:
+                attr.Set(True)
+            else:
+                rb.CreateDisableGravityAttr(True)
+            touched = True
+    if not touched:
+        rb = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
+        rb.CreateDisableGravityAttr(True)
+
+
 def _port_place_position(port_prim_path: str) -> np.ndarray:
     port_prim = omni.usd.get_context().get_stage().GetPrimAtPath(port_prim_path)
     if not port_prim.IsValid():
@@ -141,6 +175,7 @@ class HelloWorld(BaseSample):
             )
         )
         self._spawned_cable_paths.append(prim_path)
+        _disable_gravity_under_prim(prim_path)
         return cyl
 
     def _apply_franka_distance_scale_and_pose(self):
@@ -193,7 +228,11 @@ class HelloWorld(BaseSample):
         )
         self._world.add_physics_callback("sim_step", callback_fn=self.physics_step)
         self._franka.gripper.set_joint_positions(self._franka.gripper.joint_opened_positions)
-        await self._world.play_async()
+        # Leave simulation stopped so the user can frame the view and press Play when ready.
+        if hasattr(self._world, "stop_async"):
+            await self._world.stop_async()
+        else:
+            self._world.stop()
         return
 
     async def setup_post_reset(self):
@@ -206,7 +245,10 @@ class HelloWorld(BaseSample):
                 self._spawned_cable_paths.clear()
             self._cable_object = self._spawn_cylinder_cable(self._world, 1)
         self._franka.gripper.set_joint_positions(self._franka.gripper.joint_opened_positions)
-        await self._world.play_async()
+        if hasattr(self._world, "stop_async"):
+            await self._world.stop_async()
+        else:
+            self._world.stop()
         return
 
     def physics_step(self, step_size):
