@@ -117,7 +117,7 @@ def _port_place_position(port_prim_path: str) -> np.ndarray:
     return np.array(pos, dtype=np.float64) + PLACE_POSITION_OFFSET
 
 
-class CablePickPlacePorts(BaseSample):
+class HelloWorld(BaseSample):
     """Pick cable (or surrogate), place at PORT_PRIM_PATH_LIST[i], repeat until all ports are done."""
 
     def __init__(self) -> None:
