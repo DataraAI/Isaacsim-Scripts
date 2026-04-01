@@ -5,7 +5,7 @@ Uses PickPlaceController per:
 https://docs.isaacsim.omniverse.nvidia.com/4.5.0/core_api_tutorials/tutorial_core_adding_manipulator.html#using-the-pickandplace-controller
 
 By default DynamicCylinder cables use CABLE_DIAMETER, CABLE_LENGTH, and CABLE_CYLINDER_SCALE; cable1 → first
-port, cable2 → second, etc. Each new cable spawns near the end effector. After a place completes, that cable
+port, cable2 → second, etc. Each new cable spawns at CABLE_WORLD_POSITION. After a place completes, that cable
 is set kinematic at its current pose before the next cable spawns. Set CABLE_URDF_PATH for a URDF cable.
 Port goals come from PORT_PRIM_PATH_LIST.
 
@@ -54,8 +54,8 @@ CABLE_DIAMETER = 0.1
 CABLE_LENGTH = 1.0
 CABLE_CYLINDER_SCALE = np.array([1.0, 1.0, 1.0], dtype=np.float64)
 
-# Added to the Franka end-effector world position when spawning each new cable (tune in world frame).
-CABLE_SPAWN_OFFSET_FROM_EE = np.array([0.0, 0.0, -0.2], dtype=np.float64)
+# World position where each spawned cylinder cable is placed (same units as the stage).
+CABLE_WORLD_POSITION = np.array([10.0, -90.0, 170.0], dtype=np.float64)
 
 
 def _cable_dynamic_cylinder_scale_vector() -> np.ndarray:
@@ -165,15 +165,6 @@ class HelloWorld(BaseSample):
         self._spawned_cable_paths: List[str] = []
         self._port_index = 0
 
-    def _ee_spawn_world_position(self) -> np.ndarray:
-        """World position to spawn the active cable (near end effector / gripper)."""
-        ee = getattr(self._franka, "end_effector", None) or getattr(self._franka, "_end_effector", None)
-        if ee is not None:
-            pos, _ = ee.get_world_pose()
-        else:
-            pos, _ = self._franka.gripper.get_world_pose()
-        return np.array(pos, dtype=np.float64) + CABLE_SPAWN_OFFSET_FROM_EE
-
     def _spawn_cylinder_cable(self, world, index: int, position: np.ndarray):
         """Spawn numbered dynamic cylinder: prim /World/cable{n}, name cable{n} (n is 1-based)."""
         prim_path = f"/World/cable{index}"
@@ -242,9 +233,7 @@ class HelloWorld(BaseSample):
         self._world.add_physics_callback("sim_step", callback_fn=self.physics_step)
         self._franka.gripper.set_joint_positions(self._franka.gripper.joint_opened_positions)
         if not CABLE_URDF_PATH:
-            self._cable_object = self._spawn_cylinder_cable(
-                self._world, 1, self._ee_spawn_world_position()
-            )
+            self._cable_object = self._spawn_cylinder_cable(self._world, 1, CABLE_WORLD_POSITION)
         await self._world.play_async()
         return
 
@@ -256,9 +245,7 @@ class HelloWorld(BaseSample):
             if self._spawned_cable_paths:
                 _delete_prims_at_paths(list(self._spawned_cable_paths))
                 self._spawned_cable_paths.clear()
-            self._cable_object = self._spawn_cylinder_cable(
-                self._world, 1, self._ee_spawn_world_position()
-            )
+            self._cable_object = self._spawn_cylinder_cable(self._world, 1, CABLE_WORLD_POSITION)
         self._franka.gripper.set_joint_positions(self._franka.gripper.joint_opened_positions)
         await self._world.play_async()
         return
@@ -288,7 +275,7 @@ class HelloWorld(BaseSample):
                 self._world.pause()
             elif not CABLE_URDF_PATH:
                 self._cable_object = self._spawn_cylinder_cable(
-                    self._world, self._port_index + 1, self._ee_spawn_world_position()
+                    self._world, self._port_index + 1, CABLE_WORLD_POSITION
                 )
         return
 
