@@ -47,13 +47,8 @@ FRANKA_DISTANCE_SCALE = 57.0
 FRANKA_WORLD_POSITION = np.array([30.0, -90.0, 150.0], dtype=np.float64)
 FRANKA_WORLD_ORIENTATION = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)  # w, x, y, z
 
-# Cable cylinder: diameter 0.1, length 1.0 (stage units). Scale is (radius, radius, height) for DynamicCylinder.
-CABLE_DIAMETER = 0.1
-CABLE_LENGTH = 1.0
-CABLE_CYLINDER_SCALE = np.array(
-    [CABLE_DIAMETER / 2.0, CABLE_DIAMETER / 2.0, CABLE_LENGTH],
-    dtype=np.float64,
-)
+# DynamicCylinder scale (uniform 1 = default asset size).
+CABLE_CYLINDER_SCALE = np.array([1.0, 1.0, 1.0], dtype=np.float64)
 
 # Spawn cable near the Franka base / workspace (same units as FRANKA_WORLD_POSITION); tune if needed.
 CABLE_OFFSET_FROM_FRANKA = np.array([4.0, 5.0, -12.0], dtype=np.float64)
