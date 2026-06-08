@@ -19,8 +19,8 @@ APPROACH_STANDOFF = 0.10
 MIN_SEATED_TIP_AXIAL_M = -0.015
 SEAT_LATERAL_TOL_M = 0.008
 SEAT_SETTLE_FRAMES = 60
-# Insert until block center reaches the port prim origin (no axial offset).
-INSERT_STOP_DEPTH_M = 0.0
+# Default insert depth (m past port origin along +insert_axis). Override in insert_at_prim_lula.py.
+INSERT_STOP_DEPTH_M = 0.005
 TRANSIT_STANDOFF = 0.25
 
 GRIPPER_CLOSE_FRAMES = 60
@@ -50,6 +50,7 @@ def add_qsfp_insert_job(
     port: PortFrame,
     pick_xy: np.ndarray,
     pick_z: float,
+    insert_stop_depth_m: float = INSERT_STOP_DEPTH_M,
     release_frames: int = GRIPPER_RELEASE_FRAMES,
 ) -> None:
     """Queue pick, transport, align, insert, release, and straight retreat for one port."""
@@ -60,7 +61,7 @@ def add_qsfp_insert_job(
     approach_goal = port.approach_position(APPROACH_STANDOFF)
     retreat_goal = port.approach_position(RETREAT_STANDOFF)
     clear_goal = port.approach_position(POST_RETREAT_CLEAR_STANDOFF)
-    insert_goal = port.point_along_axis(INSERT_STOP_DEPTH_M)
+    insert_goal = port.point_along_axis(insert_stop_depth_m)
 
     axis = port.insert_axis
     origin = port.insert_origin

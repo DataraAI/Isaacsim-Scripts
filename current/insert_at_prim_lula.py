@@ -38,10 +38,14 @@ from collision_setup import (
     enable_static_collisions,
 )
 from franka_lula_controller import FrankaLulaController
+from port_collision_proxy import (
+    build_port_insert_colliders,
+    disable_all_port_insert_colliders,
+    enable_port_insert_colliders_for_port,
+)
 from port_frame import PortFrame
 from qsfp_insert_job import (
     APPROACH_STANDOFF,
-    INSERT_STOP_DEPTH_M,
     MIN_SEATED_TIP_AXIAL_M,
     SEAT_LATERAL_TOL_M,
     SEAT_SETTLE_FRAMES,
@@ -102,15 +106,34 @@ INSERT_CARTESIAN_STEP = 0.002
 INSERT_LOCAL_AXIS = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 INSERT_LATERAL_Z_BY_CONNECTOR = {
     "QSFP_DD_Connector_A_01": -0.00075,
-    "QSFP_DD_Connector_A_02": -0.00375,
+    "QSFP_DD_Connector_A_02": -0.00425,
 }
+# Per-port world-frame lateral offset overrides (meters). Index matches
+# INSERT_PORT_PRIM_PATHS / job order. Use these when two ports share the same
+# connector name but need different tuning because they come from different
+# switch instances or connector pairs.
+INSERT_LATERAL_OFFSET_BY_PORT_INDEX = {
+    0: np.array([0.0, 0.0, -0.00425], dtype=np.float64),
+    1: np.array([0.0, 0.0, -0.00075], dtype=np.float64),
+    # Job 2 was visually low/right with the generic A_01 offset. Start by
+    # lifting this target 2 mm; tune Y/Z here without affecting jobs 0 and 1.
+    2: np.array([0.0, 0.0, -0.00125], dtype=np.float64),
+}
+# Axial insert target: module center distance past the port origin along +insert_axis (m).
+# 0.0 = stop at the port face; 0.005 = 5 mm deeper; increase to seat further in.
+INSERT_STOP_DEPTH_M = 0.005
 ROBOT_BASE_POS = np.array([0.45, -0.15, 0.0])
 MODULE_SPAWN_ORIENTATION = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
 POST_RESET_WARMUP_FRAMES = 20
 POST_RESET_SETTLE_STEPS = 10
 
 
-def insert_lateral_offset_for_path(prim_path: str) -> np.ndarray:
+def insert_lateral_offset_for_path(prim_path: str, port_index: int | None = None) -> np.ndarray:
+    if (
+        port_index is not None
+        and port_index in INSERT_LATERAL_OFFSET_BY_PORT_INDEX
+    ):
+        return INSERT_LATERAL_OFFSET_BY_PORT_INDEX[port_index].copy()
     for connector_name, z_offset in INSERT_LATERAL_Z_BY_CONNECTOR.items():
         if connector_name in prim_path:
             return np.array([0.0, 0.0, z_offset], dtype=np.float64)
@@ -268,11 +291,11 @@ if not port_paths:
 
 def build_ports() -> list:
     built = []
-    for path in port_paths:
+    for port_index, path in enumerate(port_paths):
         if not stage.GetPrimAtPath(path).IsValid():
             carb.log_error(f"Insert port prim not found: {path}")
             continue
-        lateral_offset = insert_lateral_offset_for_path(path)
+        lateral_offset = insert_lateral_offset_for_path(path, port_index)
         port = PortFrame.from_prim_path(
             path,
             local_insert_axis=INSERT_LOCAL_AXIS,
@@ -287,8 +310,8 @@ def build_ports() -> list:
         approach_goal = port.approach_position(APPROACH_STANDOFF)
         insert_goal = port.point_along_axis(INSERT_STOP_DEPTH_M)
         carb.log_info(
-            f"Port frame: {path} prim_pos={prim_position} prim_ori={prim_orientation} "
-            f"lateral_offset={lateral_offset}"
+            f"Port frame {port_index}: {path} prim_pos={prim_position} "
+            f"prim_ori={prim_orientation} lateral_offset={lateral_offset}"
         )
         carb.log_info(
             f"Port insert: origin={port.insert_origin} axis={port.insert_axis} "
@@ -299,6 +322,8 @@ def build_ports() -> list:
             f"approach_yz_delta={approach_goal[1:3] - port.insert_origin[1:3]} "
             f"insert_yz_delta={insert_goal[1:3] - port.insert_origin[1:3]}"
         )
+    if built:
+        build_port_insert_colliders(my_world, stage, built)
     return built
 
 
@@ -325,11 +350,18 @@ for i in range(len(port_paths)):
         prim_path=f"/World/QSFP_Module_{i}",
         name=f"qsfp_module_{i}",
         position=np.array([pick_xy[0], pick_xy[1], PICK_SURFACE_Z]),
+        port_index=i,
     )
     modules.append((pick_xy, mod))
     carb.log_info(f"Module {i} at pick_xy={pick_xy} -> port {port_paths[i]}")
 
 my_franka.gripper.set_default_state(my_franka.gripper.joint_opened_positions)
+
+# Build port frames and invisible sleeve colliders before the first physics reset
+# so PhysX registers the static shapes. They stay collision-disabled until each
+# insert completes, so they do not fight the gripper during the crawl.
+_cached_ports = build_ports()
+ports = list(_cached_ports)
 
 PHYSICS_DT = 1.0 / 60.0
 
@@ -418,18 +450,12 @@ def queue_all_insert_jobs() -> None:
     for i, (port, (pick_xy, _mod)) in enumerate(zip(ports, modules)):
         job_start_indices.append(len(franka_controller._command_queue))
         franka_controller.reset_grasp_calibration()
-        release_frames = 1 if i == len(ports) - 1 else None
-        release_kwargs = (
-            {"release_frames": release_frames}
-            if release_frames is not None
-            else {}
-        )
         add_qsfp_insert_job(
             franka_controller,
             port,
             pick_xy=pick_xy,
             pick_z=PICK_SURFACE_Z,
-            **release_kwargs,
+            insert_stop_depth_m=INSERT_STOP_DEPTH_M,
         )
         carb.log_info(
             f"Queued insert job {i} starting at command index {job_start_indices[-1]}"
@@ -537,6 +563,7 @@ def prepare_run_after_warmup() -> bool:
     if not ports:
         carb.log_error("No valid port frames.")
         return False
+    disable_all_port_insert_colliders(stage)
     queue_all_insert_jobs()
     franka_controller.reset()
     register_robot_base_pose()
@@ -612,6 +639,16 @@ def check_pick_after_lift(completed_cmd_idx: int) -> None:
     opened = np.asarray(my_franka.gripper.joint_opened_positions, dtype=np.float64)
     my_franka.gripper.set_joint_positions(opened)
     carb.log_info(f"Retrying pick for job {job_idx} from command {grasp_idx}")
+
+
+def enable_port_colliders_after_insert(completed_cmd_idx: int) -> None:
+    """Enable the matching sleeve after insertion, before opening the gripper."""
+    for job_idx, start_idx in enumerate(job_start_indices):
+        if completed_cmd_idx != start_idx + 7:
+            continue
+        enable_port_insert_colliders_for_port(stage, job_idx)
+        print(f"Enabled port sleeve collisions for job {job_idx}.")
+        return
 
 
 def log_job_completion_seat(completed_cmd_idx: int) -> None:
@@ -789,6 +826,7 @@ while simulation_app.is_running():
             new_cmd_idx = franka_controller._current_command_index
             if new_cmd_idx != _prev_controller_cmd_idx:
                 check_pick_after_lift(_prev_controller_cmd_idx)
+                enable_port_colliders_after_insert(_prev_controller_cmd_idx)
                 log_job_completion_seat(_prev_controller_cmd_idx)
                 _prev_controller_cmd_idx = new_cmd_idx
 

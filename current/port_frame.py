@@ -124,6 +124,14 @@ class PortFrame:
     def point_along_axis(self, axial_distance: float) -> np.ndarray:
         return self.insert_origin + self.insert_axis * axial_distance
 
+    def insert_frame_axes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return orthonormal port-frame axes; local +Z is the insert axis."""
+        rot = _quat_wxyz_to_rot(np.asarray(self.insert_rot, dtype=np.float64))
+        x_axis = _normalize(rot[:, 0])
+        y_axis = _normalize(rot[:, 1])
+        z_axis = _normalize(self.insert_axis)
+        return x_axis, y_axis, z_axis
+
     def approach_position(self, standoff: float) -> np.ndarray:
         return self.point_along_axis(-abs(standoff))
 
