@@ -466,7 +466,18 @@ class FrankaLulaController(BaseController):
         self._align_lat_correction = np.zeros(3, dtype=np.float64)
 
     def _current_hand_pose(self) -> typing.Tuple[np.ndarray, np.ndarray]:
-        hand_pos, hand_rot = self._art_kinematics.compute_end_effector_pose()
+        pose = self._art_kinematics.compute_end_effector_pose()
+        if pose is None or pose[0] is None or pose[1] is None:
+            warm_start = self._joints_view.get_joint_positions()
+            if warm_start is None:
+                raise RuntimeError("End-effector pose unavailable before articulation initialization.")
+            if hasattr(warm_start, "cpu"):
+                warm_start = warm_start.cpu().numpy()
+            hand_pos, hand_rot = self._lula_kinematics.compute_forward_kinematics(
+                self._ee_frame, np.asarray(warm_start, dtype=np.float64)
+            )
+        else:
+            hand_pos, hand_rot = pose
         hand_quat = rot_matrices_to_quats(hand_rot)
         if hand_quat.ndim > 1:
             hand_quat = hand_quat[0]

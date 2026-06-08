@@ -106,7 +106,7 @@ INSERT_LATERAL_Z_BY_CONNECTOR = {
 }
 ROBOT_BASE_POS = np.array([0.45, -0.15, 0.0])
 MODULE_SPAWN_ORIENTATION = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
-POST_RESET_WARMUP_FRAMES = 60
+POST_RESET_WARMUP_FRAMES = 20
 POST_RESET_SETTLE_STEPS = 10
 
 
@@ -205,6 +205,17 @@ def log_viewport_camera_for_config() -> None:
     carb.log_info(msg)
     print(msg)
 
+
+def select_robot_physics_variant(robot_prim) -> None:
+    physics_variant = robot_prim.GetVariantSet("Physics")
+    names = list(physics_variant.GetVariantNames())
+    if not names:
+        carb.log_warn("Franka asset has no Physics variant set.")
+        return
+    selection = next((name for name in names if name.lower() == "physx"), names[0])
+    physics_variant.SetVariantSelection(selection)
+    carb.log_info(f"Selected Franka Physics variant: {selection}")
+
 assets_root_path = get_assets_root_path()
 if assets_root_path is None:
     carb.log_error("Could not find Isaac Sim assets folder")
@@ -236,6 +247,7 @@ robot = add_reference_to_stage(
 )
 robot.GetVariantSet("Gripper").SetVariantSelection("AlternateFinger")
 robot.GetVariantSet("Mesh").SetVariantSelection("Quality")
+select_robot_physics_variant(robot)
 enable_articulation_collisions("/World/Franka")
 
 closed_grip = gripper_closed_positions()
@@ -291,6 +303,7 @@ def build_ports() -> list:
 
 
 ports: list = []
+_cached_ports: list = []
 
 PICK_SURFACE_Z = QSFP_LENGTH_M / 2.0
 
@@ -320,7 +333,35 @@ my_franka.gripper.set_default_state(my_franka.gripper.joint_opened_positions)
 
 PHYSICS_DT = 1.0 / 60.0
 
+def _settle_physics_steps() -> None:
+    for i in range(POST_RESET_SETTLE_STEPS):
+        my_world.step(render=(i >= POST_RESET_SETTLE_STEPS - 3))
+
+
+def update_view_if_available(obj) -> None:
+    update = getattr(obj, "update", None)
+    if callable(update):
+        try:
+            update()
+        except TypeError:
+            carb.log_warn(f"Could not update runtime view for {getattr(obj, 'name', obj)}.")
+
+
+def flush_runtime_views() -> None:
+    update_view_if_available(my_franka)
+    for _, mod in modules:
+        update_view_if_available(mod)
+
+
+def get_ports(rebuild: bool = False) -> list:
+    global _cached_ports
+    if rebuild or not _cached_ports:
+        _cached_ports = build_ports()
+    return list(_cached_ports)
+
+
 my_world.reset()
+_settle_physics_steps()
 ROBOT_HOME_POSITION, ROBOT_HOME_ORIENTATION = my_franka.get_world_pose()
 _home_joints = my_franka.get_joint_positions()
 if _home_joints is not None:
@@ -331,11 +372,6 @@ else:
     ROBOT_HOME_JOINT_POSITIONS = None
 if hasattr(my_franka, "post_reset"):
     my_franka.post_reset()
-ports = build_ports()
-if not ports:
-    carb.log_error("No valid port frames.")
-    simulation_app.close()
-    sys.exit()
 simulation_app.update()
 configure_viewport_only_layout()
 apply_startup_camera_view()
@@ -382,22 +418,24 @@ def queue_all_insert_jobs() -> None:
     for i, (port, (pick_xy, _mod)) in enumerate(zip(ports, modules)):
         job_start_indices.append(len(franka_controller._command_queue))
         franka_controller.reset_grasp_calibration()
+        release_frames = 1 if i == len(ports) - 1 else None
+        release_kwargs = (
+            {"release_frames": release_frames}
+            if release_frames is not None
+            else {}
+        )
         add_qsfp_insert_job(
             franka_controller,
             port,
             pick_xy=pick_xy,
             pick_z=PICK_SURFACE_Z,
+            **release_kwargs,
         )
         carb.log_info(
             f"Queued insert job {i} starting at command index {job_start_indices[-1]}"
         )
     port_frames_by_job = list(ports)
     carb.log_info(f"Running {len(ports)} insert jobs ({len(modules)} modules)")
-
-
-def _settle_physics_steps() -> None:
-    for i in range(POST_RESET_SETTLE_STEPS):
-        my_world.step(render=(i >= POST_RESET_SETTLE_STEPS - 3))
 
 
 def reset_modules_to_pick() -> None:
@@ -445,6 +483,7 @@ def restart_job_at_pick(job_idx: int) -> None:
 
 
 def log_reset_state(label: str) -> None:
+    flush_runtime_views()
     for i, (pick_xy, mod) in enumerate(modules):
         pos, _ = mod.get_world_pose()
         carb.log_info(
@@ -459,8 +498,8 @@ def log_reset_state(label: str) -> None:
 
 
 def on_simulation_reset() -> None:
-    global ports, _post_reset_warmup_frames
-    msg = "Simulation restart: rebuilding ports, jobs, and scene state."
+    global _post_reset_warmup_frames, _run_ready
+    msg = "Simulation restart: staging scene state before warmup."
     carb.log_info(msg)
     print(msg)
     my_world.reset()
@@ -472,31 +511,44 @@ def on_simulation_reset() -> None:
     _settle_physics_steps()
     reset_robot_to_home()
     reset_modules_to_pick()
-    ports = build_ports()
-    if not ports:
-        carb.log_error("No valid port frames after simulation reset.")
-        return
-    queue_all_insert_jobs()
-    _settle_physics_steps()
-    reset_modules_to_pick()
-    reset_robot_to_home()
     franka_controller.reset()
     register_robot_base_pose()
-    log_reset_state("After simulation reset:")
     done_msg = (
-        f"Simulation restart complete: {len(ports)} ports, "
-        f"{len(franka_controller._command_queue)} queued commands, "
-        f"warmup={POST_RESET_WARMUP_FRAMES} frames."
+        f"Simulation restart staged: warmup={POST_RESET_WARMUP_FRAMES} frames."
     )
     carb.log_info(done_msg)
     print(done_msg)
+    _run_ready = False
     _post_reset_warmup_frames = POST_RESET_WARMUP_FRAMES
     simulation_app.update()
-    configure_viewport_only_layout()
+    if VIEWPORT_ONLY_LAYOUT:
+        configure_viewport_only_layout()
     apply_startup_camera_view()
 
 
-queue_all_insert_jobs()
+def prepare_run_after_warmup() -> bool:
+    global ports, _run_ready
+    flush_runtime_views()
+    reset_modules_to_pick()
+    reset_robot_to_home()
+    _settle_physics_steps()
+    flush_runtime_views()
+    ports = get_ports()
+    if not ports:
+        carb.log_error("No valid port frames.")
+        return False
+    queue_all_insert_jobs()
+    franka_controller.reset()
+    register_robot_base_pose()
+    log_reset_state("After warmup:")
+    msg = (
+        f"Run ready: {len(ports)} ports, "
+        f"{len(franka_controller._command_queue)} queued commands."
+    )
+    carb.log_info(msg)
+    print(msg)
+    _run_ready = True
+    return True
 
 
 def register_robot_base_pose():
@@ -526,6 +578,7 @@ def check_pick_after_lift(completed_cmd_idx: int) -> None:
 
     job_idx = active_job_index(completed_cmd_idx)
     _, mod = modules[job_idx]
+    flush_runtime_views()
     pos, _ = mod.get_world_pose()
     min_lift_z = prev_cmd.get("verify_pick_min_z")
     if min_lift_z is None:
@@ -561,6 +614,38 @@ def check_pick_after_lift(completed_cmd_idx: int) -> None:
     carb.log_info(f"Retrying pick for job {job_idx} from command {grasp_idx}")
 
 
+def log_job_completion_seat(completed_cmd_idx: int) -> None:
+    for job_idx, start_idx in enumerate(job_start_indices):
+        # Each QSFP job queues 11 commands. Check once right after insert and
+        # again after the final rack-clear retreat before the next job starts.
+        if completed_cmd_idx == start_idx + 7:
+            label = "post-insert"
+        elif completed_cmd_idx == start_idx + 10:
+            label = "post-retreat"
+        else:
+            continue
+        port = port_frames_by_job[job_idx]
+        _, mod = modules[job_idx]
+        flush_runtime_views()
+        pos, ori = mod.get_world_pose()
+        passed, metrics = port.evaluate_seat(
+            pos,
+            seat_depth=MIN_SEATED_TIP_AXIAL_M,
+            module_orientation=ori,
+            module_half_length=QSFP_LENGTH_M * 0.5,
+            lateral_tol=SEAT_LATERAL_TOL_M,
+            depth_fraction=1.0,
+        )
+        msg = (
+            f"Job {job_idx} {label} seat check passed={passed} "
+            f"lateral={metrics['lateral_error_m']:.4f}m "
+            f"tip_axial={metrics['tip_axial_m']:.4f}m"
+        )
+        carb.log_info(msg)
+        print(msg)
+        return
+
+
 reset_needed = False
 task_completed = False
 _last_cmd_index = -1
@@ -576,7 +661,8 @@ _timeline = omni.timeline.get_timeline_interface()
 _last_timeline_time = 0.0
 _pick_retry_by_job: dict[int, bool] = {}
 _full_job_retry_by_job: dict[int, bool] = {}
-_post_reset_warmup_frames = 0
+_post_reset_warmup_frames = POST_RESET_WARMUP_FRAMES
+_run_ready = False
 
 while simulation_app.is_running():
     playing = my_world.is_playing()
@@ -629,22 +715,27 @@ while simulation_app.is_running():
 
         _has_seen_play = True
 
-        my_world.step(render=True)
-
-        if not my_world.is_playing():
-            reset_needed = True
-            task_completed = False
-            msg = "Simulation stopped — will fully reset on next play."
-            carb.log_info(msg)
-            print(msg)
-        elif _post_reset_warmup_frames > 0:
+        if _post_reset_warmup_frames > 0:
+            my_world.step(render=True)
+            if not my_world.is_playing():
+                reset_needed = True
+                task_completed = False
+                msg = "Simulation stopped — will fully reset on next play."
+                carb.log_info(msg)
+                print(msg)
+                _was_playing = playing
+                continue
             _post_reset_warmup_frames -= 1
             if _post_reset_warmup_frames == 0:
-                reset_robot_to_home()
-                register_robot_base_pose()
-                carb.log_info("Post-reset warmup complete — starting control.")
-                print("Post-reset warmup complete — starting control.")
+                if prepare_run_after_warmup():
+                    carb.log_info("Warmup complete — starting control.")
+                    print("Warmup complete — starting control.")
         else:
+            if not _run_ready and not prepare_run_after_warmup():
+                my_world.step(render=True)
+                _was_playing = playing
+                continue
+
             if VIEWPORT_ONLY_LAYOUT and _viewport_layout_frames < 120:
                 _viewport_layout_frames += 1
                 configure_viewport_only_layout()
@@ -655,6 +746,7 @@ while simulation_app.is_running():
                     log_viewport_camera_for_config()
                     _viewport_camera_logged = True
 
+            flush_runtime_views()
             current_joint_pos = my_franka.get_joint_positions()
             if current_joint_pos is None:
                 carb.log_warn("Skipping control update: joint positions unavailable.")
@@ -673,6 +765,7 @@ while simulation_app.is_running():
                         current_cmd.get("type") == "cartesian"
                         and current_cmd.get("track_block")
                     ):
+                        flush_runtime_views()
                         tracked_pos, _ = module.get_world_pose()
 
                 actions = franka_controller.forward(
@@ -681,68 +774,82 @@ while simulation_app.is_running():
                 )
                 articulation_controller.apply_action(actions)
 
-                new_cmd_idx = franka_controller._current_command_index
-                if new_cmd_idx != _prev_controller_cmd_idx:
-                    check_pick_after_lift(_prev_controller_cmd_idx)
-                    _prev_controller_cmd_idx = new_cmd_idx
+            my_world.step(render=True)
 
-                if DEBUG_TRAJ_LOG:
-                    dbg = franka_controller.get_traj_debug_state()
-                    if dbg is not None and dbg.get("cmd_index") != _last_cmd_index:
-                        _last_cmd_index = dbg["cmd_index"]
-                        err_parts = []
-                        for key in (
-                            "x_err",
-                            "y_err",
-                            "z_err",
-                            "yz_err",
-                            "y_drift",
-                            "z_drift",
-                            "yz_drift",
-                        ):
-                            if key in dbg:
-                                err_parts.append(f"{key}={dbg[key]:.4f}m")
-                        err_msg = " " + " ".join(err_parts) if err_parts else ""
-                        carb.log_info(
-                            f"lula wp={dbg['cmd_index']} "
-                            f"job={active_job_index(dbg['cmd_index'])} "
-                            f"mode={dbg.get('mode')}{err_msg}"
-                        )
+            if not my_world.is_playing():
+                reset_needed = True
+                task_completed = False
+                msg = "Simulation stopped — will fully reset on next play."
+                carb.log_info(msg)
+                print(msg)
+                _was_playing = playing
+                continue
 
-                if franka_controller.is_done() and not task_completed:
-                    if _seat_settle_count < SEAT_SETTLE_FRAMES:
-                        _seat_settle_count += 1
-                    else:
-                        for i, port in enumerate(port_frames_by_job):
-                            _, mod = modules[i]
-                            pos, ori = mod.get_world_pose()
-                            passed, metrics = port.evaluate_seat(
-                                pos,
-                                seat_depth=MIN_SEATED_TIP_AXIAL_M,
-                                module_orientation=ori,
-                                module_half_length=QSFP_LENGTH_M * 0.5,
-                                lateral_tol=SEAT_LATERAL_TOL_M,
-                                depth_fraction=1.0,
-                            )
-                            _job_results.append((port.prim_path, passed, metrics))
-                            msg = (
-                                f"Job {i} seat check path={port.prim_path} passed={passed} "
-                                f"lateral={metrics['lateral_error_m']:.4f}m "
-                                f"center_axial={metrics['axial_depth_m']:.4f}m "
-                                f"tip_axial={metrics['tip_axial_m']:.4f}m "
-                                f"lateral_ok={metrics['lateral_ok']} "
-                                f"depth_ok={metrics['depth_ok']}"
-                            )
-                            carb.log_info(msg)
-                            print(msg)
-                        all_pass = all(r[1] for r in _job_results)
-                        print(
-                            f"Wire insert run complete. "
-                            f"{sum(r[1] for r in _job_results)}/{len(_job_results)} seated."
+            flush_runtime_views()
+            new_cmd_idx = franka_controller._current_command_index
+            if new_cmd_idx != _prev_controller_cmd_idx:
+                check_pick_after_lift(_prev_controller_cmd_idx)
+                log_job_completion_seat(_prev_controller_cmd_idx)
+                _prev_controller_cmd_idx = new_cmd_idx
+
+            if DEBUG_TRAJ_LOG:
+                dbg = franka_controller.get_traj_debug_state()
+                if dbg is not None and dbg.get("cmd_index") != _last_cmd_index:
+                    _last_cmd_index = dbg["cmd_index"]
+                    err_parts = []
+                    for key in (
+                        "x_err",
+                        "y_err",
+                        "z_err",
+                        "yz_err",
+                        "y_drift",
+                        "z_drift",
+                        "yz_drift",
+                    ):
+                        if key in dbg:
+                            err_parts.append(f"{key}={dbg[key]:.4f}m")
+                    err_msg = " " + " ".join(err_parts) if err_parts else ""
+                    carb.log_info(
+                        f"lula wp={dbg['cmd_index']} "
+                        f"job={active_job_index(dbg['cmd_index'])} "
+                        f"mode={dbg.get('mode')}{err_msg}"
+                    )
+
+            if franka_controller.is_done() and not task_completed:
+                if _seat_settle_count < SEAT_SETTLE_FRAMES:
+                    _seat_settle_count += 1
+                else:
+                    flush_runtime_views()
+                    for i, port in enumerate(port_frames_by_job):
+                        _, mod = modules[i]
+                        pos, ori = mod.get_world_pose()
+                        passed, metrics = port.evaluate_seat(
+                            pos,
+                            seat_depth=MIN_SEATED_TIP_AXIAL_M,
+                            module_orientation=ori,
+                            module_half_length=QSFP_LENGTH_M * 0.5,
+                            lateral_tol=SEAT_LATERAL_TOL_M,
+                            depth_fraction=1.0,
                         )
-                        if not all_pass:
-                            carb.log_warn("One or more inserts did not meet seat criteria.")
-                        task_completed = True
+                        _job_results.append((port.prim_path, passed, metrics))
+                        msg = (
+                            f"Job {i} seat check path={port.prim_path} passed={passed} "
+                            f"lateral={metrics['lateral_error_m']:.4f}m "
+                            f"center_axial={metrics['axial_depth_m']:.4f}m "
+                            f"tip_axial={metrics['tip_axial_m']:.4f}m "
+                            f"lateral_ok={metrics['lateral_ok']} "
+                            f"depth_ok={metrics['depth_ok']}"
+                        )
+                        carb.log_info(msg)
+                        print(msg)
+                    all_pass = all(r[1] for r in _job_results)
+                    print(
+                        f"Wire insert run complete. "
+                        f"{sum(r[1] for r in _job_results)}/{len(_job_results)} seated."
+                    )
+                    if not all_pass:
+                        carb.log_warn("One or more inserts did not meet seat criteria.")
+                    task_completed = True
 
     else:
         simulation_app.update()

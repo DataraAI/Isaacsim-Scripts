@@ -23,9 +23,9 @@ SEAT_SETTLE_FRAMES = 60
 INSERT_STOP_DEPTH_M = 0.0
 TRANSIT_STANDOFF = 0.25
 
-GRIPPER_CLOSE_FRAMES = 45
+GRIPPER_CLOSE_FRAMES = 60
 # One frame to command open; retreat starts immediately on the next frame.
-GRIPPER_RELEASE_FRAMES = 1
+GRIPPER_RELEASE_FRAMES = 30
 TRANSIT_MAX_FRAMES = 300
 ALIGN_MAX_FRAMES = 300
 INSERT_APPROACH_MAX_FRAMES = 900
@@ -50,6 +50,7 @@ def add_qsfp_insert_job(
     port: PortFrame,
     pick_xy: np.ndarray,
     pick_z: float,
+    release_frames: int = GRIPPER_RELEASE_FRAMES,
 ) -> None:
     """Queue pick, transport, align, insert, release, and straight retreat for one port."""
     pick_hover_z = pick_z + HOVER_CLEARANCE
@@ -140,7 +141,7 @@ def add_qsfp_insert_job(
     # 9. Release — command open, then retreat starts on the very next frame.
     controller.add_gripper_command(
         action="open",
-        wait_frames=GRIPPER_RELEASE_FRAMES,
+        wait_frames=release_frames,
         full_open=True,
         freeze_arm=True,
     )
