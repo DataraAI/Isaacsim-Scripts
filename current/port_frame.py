@@ -124,6 +124,27 @@ class PortFrame:
     def point_along_axis(self, axial_distance: float) -> np.ndarray:
         return self.insert_origin + self.insert_axis * axial_distance
 
+    def center_goal_for_tip_depth(
+        self,
+        tip_axial_m: float,
+        module_half_length: float,
+        module_orientation_wxyz: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Return module-center goal so the leading tip sits tip_axial_m past the port origin."""
+        ori = (
+            self.insert_rot
+            if module_orientation_wxyz is None
+            else np.asarray(module_orientation_wxyz, dtype=np.float64)
+        )
+        tip_goal = self.point_along_axis(tip_axial_m)
+        half = float(module_half_length)
+        for sign in (1.0, -1.0):
+            center = tip_goal - sign * self.insert_axis * half
+            lead = self._leading_tip_position(center, ori, half)
+            if abs(self.axial_coordinate(lead) - tip_axial_m) < 1e-5:
+                return center
+        return self.point_along_axis(tip_axial_m - half)
+
     def insert_frame_axes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return orthonormal port-frame axes; local +Z is the insert axis."""
         rot = _quat_wxyz_to_rot(np.asarray(self.insert_rot, dtype=np.float64))

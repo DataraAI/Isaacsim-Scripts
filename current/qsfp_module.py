@@ -8,8 +8,8 @@ from pxr import PhysxSchema, Usd, UsdPhysics
 
 # Slim proxy body (meters). The proxy's local +Z is the insertion axis so it
 # matches FrankaLulaController.tool_offset and panda_hand grasping.
-QSFP_WIDTH_M = 0.0025
-QSFP_HEIGHT_M = 0.005
+QSFP_WIDTH_M = 0.004
+QSFP_HEIGHT_M = 0.008
 QSFP_LENGTH_M = 0.090
 QSFP_MASS_KG = 0.002
 # Keep contact padding small relative to the 3 mm module width.
@@ -79,10 +79,18 @@ def grasp_tool_offset() -> float:
     return 0.1
 
 
-def pick_grasp_block_z(module_center_z: float) -> float:
+def pick_grasp_block_z(
+    module_center_z: float,
+    offset_to_top_m: float | None = None,
+) -> float:
     """Block-center Z for vertical pick, shifted up toward the module top (+local Z)."""
     half_len = QSFP_LENGTH_M * 0.5
-    offset = min(QSFP_GRASP_OFFSET_TO_TOP_M, half_len * 0.8)
+    offset = (
+        QSFP_GRASP_OFFSET_TO_TOP_M
+        if offset_to_top_m is None
+        else float(offset_to_top_m)
+    )
+    offset = min(max(0.0, offset), half_len * 0.95)
     return float(module_center_z + offset)
 
 

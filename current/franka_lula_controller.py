@@ -90,6 +90,7 @@ class FrankaLulaController(BaseController):
         self._last_arm_action: typing.Optional[ArticulationAction] = None
         self._insert_contact_monitor: typing.Optional[object] = None
         self._post_contact_arm_joints: typing.Optional[np.ndarray] = None
+        self._current_tracked_orientation: typing.Optional[np.ndarray] = None
 
     def set_insert_contact_monitor(self, monitor) -> None:
         self._insert_contact_monitor = monitor
@@ -129,6 +130,51 @@ class FrankaLulaController(BaseController):
         self._traj_debug = {
             "cmd_index": self._current_command_index - 1,
             "mode": "module_port_contact_stop",
+        }
+        return hold
+
+    def _stop_on_insert_blocked(
+        self,
+        current_cmd: dict,
+        current_joint_positions: np.ndarray,
+        tracked: np.ndarray,
+    ) -> typing.Optional[ArticulationAction]:
+        if not current_cmd.get("stop_on_insert_blocked"):
+            return None
+        if not current_cmd.get("x_only_insert") or current_cmd.get("post_contact_retreat"):
+            return None
+        if not current_cmd.get("track_block"):
+            return None
+
+        effort = self._estimate_contact_force()
+        threshold = float(current_cmd.get("contact_force_threshold", 18.0))
+        tip_axial = self._leading_tip_axial(tracked, current_cmd)
+        prev_tip = current_cmd.get("_stall_tip_axial")
+        if tip_axial is not None and prev_tip is not None:
+            if tip_axial - float(prev_tip) < 0.00015:
+                current_cmd["_stall_frames"] = int(current_cmd.get("_stall_frames", 0)) + 1
+            else:
+                current_cmd["_stall_frames"] = 0
+        if tip_axial is not None:
+            current_cmd["_stall_tip_axial"] = float(tip_axial)
+
+        stall_frames = int(current_cmd.get("_stall_frames", 0))
+        if effort < threshold or stall_frames < 6:
+            return None
+
+        self._post_contact_arm_joints = np.asarray(
+            current_joint_positions[:7], dtype=np.float64
+        ).copy()
+        hold = self._hold_arm_joints_action(current_joint_positions)
+        self._cache_arm_action(hold)
+        self._advance_command()
+        tip_msg = f" tip_axial={tip_axial:.4f}m" if tip_axial is not None else ""
+        carb.log_info(
+            f"Insert stopped: module blocked (effort={effort:.1f}{tip_msg})."
+        )
+        self._traj_debug = {
+            "cmd_index": self._current_command_index - 1,
+            "mode": "insert_blocked_stop",
         }
         return hold
 
@@ -194,6 +240,9 @@ class FrankaLulaController(BaseController):
         contact_force_threshold: float = 15.0,
         hold_current_orientation: bool = False,
         stop_on_module_contact: bool = False,
+        stop_on_insert_blocked: bool = False,
+        insert_tip_depth_m: typing.Optional[float] = None,
+        module_half_length: typing.Optional[float] = None,
         post_contact_retreat: bool = False,
         keep_gripper_open: bool = False,
         settle_frames: typing.Optional[int] = None,
@@ -240,6 +289,11 @@ class FrankaLulaController(BaseController):
             "contact_force_threshold": contact_force_threshold,
             "hold_current_orientation": hold_current_orientation,
             "stop_on_module_contact": stop_on_module_contact,
+            "stop_on_insert_blocked": stop_on_insert_blocked,
+            "insert_tip_depth_m": insert_tip_depth_m,
+            "_stall_frames": 0,
+            "_stall_tip_axial": None,
+            "module_half_length": module_half_length,
             "post_contact_retreat": post_contact_retreat,
             "keep_gripper_open": keep_gripper_open,
             "settle_frames": settle_frames,
@@ -350,6 +404,59 @@ class FrankaLulaController(BaseController):
             lat_dir = lat_dir / n
         return lateral + lat_dir * (amp * np.sin(phase))
 
+    def _module_orientation_for_depth(self, current_cmd: dict) -> np.ndarray:
+        if self._current_tracked_orientation is not None:
+            return np.asarray(self._current_tracked_orientation, dtype=np.float64)
+        return np.asarray(current_cmd["ori"], dtype=np.float64)
+
+    def _leading_tip_axial(
+        self, center: np.ndarray, current_cmd: dict
+    ) -> typing.Optional[float]:
+        half = current_cmd.get("module_half_length")
+        if half is None or float(half) <= 0.0:
+            return None
+        origin = self._segment_origin(current_cmd, center)
+        axis = current_cmd["insert_axis"]
+        ori = self._module_orientation_for_depth(current_cmd)
+        rot = quats_to_rot_matrices(ori.reshape(1, 4))[0]
+        length_axis = rot @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        center = np.asarray(center, dtype=np.float64)
+        half = float(half)
+        tips = (center + length_axis * half, center - length_axis * half)
+        return max(self._axial_coord(tip, origin, axis) for tip in tips)
+
+    def _center_axial_for_tip_depth(
+        self,
+        tip_target: float,
+        current_cmd: dict,
+        reference: np.ndarray,
+    ) -> typing.Optional[float]:
+        half = current_cmd.get("module_half_length")
+        if half is None or float(half) <= 0.0:
+            return None
+        origin = self._segment_origin(current_cmd, reference)
+        axis = current_cmd["insert_axis"]
+        ori = self._module_orientation_for_depth(current_cmd)
+        rot = quats_to_rot_matrices(ori.reshape(1, 4))[0]
+        length_axis = rot @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        tip_point = origin + axis * float(tip_target)
+        fallback = self._axial_coord(tip_point - axis * float(half), origin, axis)
+        for sign in (1.0, -1.0):
+            center = tip_point - sign * length_axis * float(half)
+            tip_axial = self._leading_tip_axial(center, current_cmd)
+            if tip_axial is not None and abs(tip_axial - float(tip_target)) < 1e-4:
+                return self._axial_coord(center, origin, axis)
+        return fallback
+
+    def _insert_depth_sign(self, tracked: np.ndarray, current_cmd: dict) -> float:
+        tip_target = current_cmd.get("insert_tip_depth_m")
+        if tip_target is None:
+            return float(current_cmd.get("insert_sign", 1.0))
+        tip_now = self._leading_tip_axial(tracked, current_cmd)
+        if tip_now is None:
+            return float(current_cmd.get("insert_sign", 1.0))
+        return 1.0 if float(tip_target) >= tip_now else -1.0
+
     def _axis_insert_reached(
         self,
         tracked: np.ndarray,
@@ -358,9 +465,20 @@ class FrankaLulaController(BaseController):
         current_cmd: dict,
     ) -> bool:
         origin = self._segment_origin(current_cmd, goal)
-        axis = current_cmd["insert_axis"]
-        sign = float(current_cmd.get("insert_sign", 1.0))
-        t_tracked = self._axial_coord(tracked, origin, axis)
+        sign = self._insert_depth_sign(tracked, current_cmd)
+        tip_target = current_cmd.get("insert_tip_depth_m")
+        if (
+            tip_target is not None
+            and current_cmd.get("track_block")
+            and not current_cmd.get("post_contact_retreat")
+        ):
+            tip_axial = self._leading_tip_axial(tracked, current_cmd)
+            if tip_axial is not None:
+                target = float(tip_target)
+                if sign > 0:
+                    return tip_axial >= target - tol
+                return tip_axial <= target + tol
+        t_tracked = self._axial_coord(tracked, origin, axis := current_cmd["insert_axis"])
         t_goal = self._axial_coord(goal, origin, axis)
         if sign > 0:
             return t_tracked >= t_goal - tol
@@ -623,6 +741,8 @@ class FrankaLulaController(BaseController):
     ) -> None:
         current_cmd["settle_count"] = 0
         current_cmd["frames_spent"] = 0
+        current_cmd["_stall_frames"] = 0
+        current_cmd["_stall_tip_axial"] = None
         if (
             current_cmd.get("track_block")
             and tracked is not None
@@ -662,15 +782,23 @@ class FrankaLulaController(BaseController):
                 current_cmd["locked_lateral"] = self._lateral_offset_vec(
                     tracked, origin, axis
                 )
-                t_tracked = self._axial_coord(tracked, origin, axis)
-                t_goal = self._axial_coord(goal, origin, axis)
-                delta_t = t_goal - t_tracked
-                if abs(delta_t) > 1e-6:
-                    current_cmd["insert_sign"] = np.sign(delta_t)
-                elif current_cmd.get("post_contact_retreat"):
-                    current_cmd["insert_sign"] = -1.0
+                if (
+                    current_cmd.get("insert_tip_depth_m") is not None
+                    and not current_cmd.get("post_contact_retreat")
+                ):
+                    current_cmd["insert_sign"] = self._insert_depth_sign(
+                        tracked, current_cmd
+                    )
                 else:
-                    current_cmd["insert_sign"] = 1.0
+                    t_tracked = self._axial_coord(tracked, origin, axis)
+                    t_goal = self._axial_coord(goal, origin, axis)
+                    delta_t = t_goal - t_tracked
+                    if abs(delta_t) > 1e-6:
+                        current_cmd["insert_sign"] = np.sign(delta_t)
+                    elif current_cmd.get("post_contact_retreat"):
+                        current_cmd["insert_sign"] = -1.0
+                    else:
+                        current_cmd["insert_sign"] = 1.0
             else:
                 current_cmd["locked_yz"] = tracked[1:3].copy()
                 delta = float(goal[0] - tracked[0])
@@ -739,15 +867,28 @@ class FrankaLulaController(BaseController):
                         self._lateral_offset_vec(goal, origin, axis)
                         + self._align_lat_correction
                     )
-                if self._axis_insert_reached(tracked, goal, tol, current_cmd):
+                sign = self._insert_depth_sign(tracked, current_cmd)
+                tip_target = current_cmd.get("insert_tip_depth_m")
+                if (
+                    tip_target is not None
+                    and not current_cmd.get("post_contact_retreat")
+                ):
+                    t_cap = self._center_axial_for_tip_depth(
+                        float(tip_target), current_cmd, tracked
+                    )
+                    t_goal = (
+                        t_cap
+                        if t_cap is not None
+                        else self._axial_coord(goal, origin, axis)
+                    )
+                else:
                     t_goal = self._axial_coord(goal, origin, axis)
+                if self._axis_insert_reached(tracked, goal, tol, current_cmd):
                     return self._pos_from_axial_lateral(origin, axis, t_goal, locked_lat)
                 step = self._effective_insert_step(
                     current_cmd, current_cmd.get("cartesian_step") or self._cartesian_step
                 )
-                sign = float(current_cmd.get("insert_sign", 1.0))
                 t = self._axial_coord(tracked, origin, axis)
-                t_goal = self._axial_coord(goal, origin, axis)
                 t_new = t + sign * min(step, abs(t_goal - t))
                 if sign < 0:
                     t_new = max(t_new, t_goal)
@@ -829,6 +970,11 @@ class FrankaLulaController(BaseController):
             return contact_stop
 
         tracked = self._block_for_command(current_cmd, current_tracked_position)
+        blocked_stop = self._stop_on_insert_blocked(
+            current_cmd, current_joint_positions, tracked
+        )
+        if blocked_stop is not None:
+            return blocked_stop
         goal = current_cmd["pos"]
         tol = self._ik_tolerance(current_cmd)
 
@@ -923,6 +1069,14 @@ class FrankaLulaController(BaseController):
 
         if self._closed_loop_segment_done(current_cmd, current_tracked_position):
             if current_cmd.get("x_only_insert") and current_cmd.get("track_block"):
+                tip_target = current_cmd.get("insert_tip_depth_m")
+                if tip_target is not None:
+                    tip_axial = self._leading_tip_axial(tracked, current_cmd)
+                    if tip_axial is not None:
+                        carb.log_info(
+                            f"Insert done: tip_axial={tip_axial:.4f} m "
+                            f"target={float(tip_target):.4f} m"
+                        )
                 self._save_post_contact_arm_joints(current_joint_positions)
             elif current_cmd.get("post_contact_retreat"):
                 self._post_contact_arm_joints = None
@@ -966,7 +1120,11 @@ class FrankaLulaController(BaseController):
                 )
             self._current_command_index += 1
             self._clear_segment_playback()
-            return self.forward(current_joint_positions, current_tracked_position)
+            return self.forward(
+                current_joint_positions,
+                current_tracked_position,
+                self._current_tracked_orientation,
+            )
 
         self._cache_arm_action(action)
         if current_cmd.get("post_contact_retreat"):
@@ -1139,7 +1297,13 @@ class FrankaLulaController(BaseController):
         self,
         current_joint_positions: np.ndarray,
         current_tracked_position: typing.Optional[np.ndarray] = None,
+        current_tracked_orientation: typing.Optional[np.ndarray] = None,
     ) -> ArticulationAction:
+        self._current_tracked_orientation = (
+            np.asarray(current_tracked_orientation, dtype=np.float64)
+            if current_tracked_orientation is not None
+            else None
+        )
         if current_joint_positions is None:
             warm = self._joints_view.get_joint_positions()
             if warm is not None:
@@ -1176,7 +1340,9 @@ class FrankaLulaController(BaseController):
             if current_cmd["frames_spent"] >= current_cmd["max_frames"]:
                 self._current_command_index += 1
                 self._clear_segment_playback()
-                return self.forward(joints, current_tracked_position)
+                return self.forward(
+                    joints, current_tracked_position, current_tracked_orientation
+                )
             return action
 
         if current_cmd["type"] == "cartesian":
@@ -1186,7 +1352,7 @@ class FrankaLulaController(BaseController):
                     self._segment_ready = True
                 return self._forward_closed_loop(
                     current_cmd, joints, current_tracked_position
-                )
+                )  # orientation read from self._current_tracked_orientation
 
             if not self._segment_ready:
                 if not self._build_segment_actions(current_cmd, current_tracked_position):
@@ -1208,7 +1374,9 @@ class FrankaLulaController(BaseController):
             ):
                 self._current_command_index += 1
                 self._clear_segment_playback()
-                return self.forward(joints, current_tracked_position)
+                return self.forward(
+                    joints, current_tracked_position, self._current_tracked_orientation
+                )
 
             return self._finalize_cartesian_action(
                 self._current_segment_action(n_dof), current_cmd, n_dof

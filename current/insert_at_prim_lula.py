@@ -16,6 +16,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 from isaacsim.core.api import World
+from isaacsim.core.api.objects import FixedCuboid
 from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.core.utils.xforms import get_world_pose
 try:
@@ -39,19 +40,23 @@ from collision_setup import (
 )
 from franka_lula_controller import FrankaLulaController
 from port_collision_proxy import (
+    PORT_SLEEVE_DEPTH_M,
     build_port_insert_colliders,
     disable_all_port_insert_colliders,
     enable_port_insert_colliders_for_port,
 )
 from port_frame import PortFrame
 from qsfp_insert_job import (
-    APPROACH_STANDOFF,
+    ALIGN_STANDOFF,
+    JOB_CMD_CLEAR,
+    JOB_CMD_INSERT,
     MIN_SEATED_TIP_AXIAL_M,
     SEAT_LATERAL_TOL_M,
     SEAT_SETTLE_FRAMES,
     add_qsfp_insert_job,
 )
 from qsfp_module import (
+    QSFP_GRASP_OFFSET_TO_TOP_M,
     QSFP_LENGTH_M,
     create_qsfp_module,
     grasp_tool_offset,
@@ -67,17 +72,19 @@ VIEWPORT_HIDE_TOKENS = ("Sensors Output",)
 AUTO_CAMERA_ON_OPEN = True
 # Set both to fixed [x, y, z] lists to use a custom view on open.
 # Leave as None to auto-frame the robot, pick tray, and ports.
-STARTUP_CAMERA_EYE = [1.3438452186512029, 1.2295915975598826, 1.6191613759601924]
-STARTUP_CAMERA_TARGET = [-0.20123143762967688, -0.1274897566344806, 0.22558066095187224]
+STARTUP_CAMERA_EYE = [1.8809555265110907, 1.5749548281281234, 2.8130942736157993]
+STARTUP_CAMERA_TARGET = [-0.40583929622548287, -0.43359704675040334, 0.7505214224942818]
 # Set to a positive step count to print the current viewport camera once
 # (frame the view manually first, then copy the printed values above).
-LOG_VIEWPORT_CAMERA_AT_STEP = 900
+LOG_VIEWPORT_CAMERA_AT_STEP = 1000
 
 DATAHALL_USD = (
     "/home/aayush/isaacsim_assets/datacenter/Assets/DigitalTwin"
     "/Assets/Datacenter/Facilities/Stages/Data_Hall/DataHall_Full_01.usd"
 )
-DATAHALL_SCALE = 0.5
+DATAHALL_SCALE = 1.0
+TABLE_HEIGHT = 1.0
+TABLE_THICKNESS = 0.05
 INSERT_PORT_PRIM_PATHS = [
     (
         "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
@@ -90,12 +97,6 @@ INSERT_PORT_PRIM_PATHS = [
         "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
         "pcb003636_idf_01/Connector_Quad_02/Connector_Pair_01/"
         "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
-    ),
-    (
-        "/World/DataHall/Network_Switches/SN4600C_CS2FC_02/msn4600_cs2fc_01/"
-        "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
-        "pcb003636_idf_01/Connector_Quad_04/Connector_Pair_04/"
-        "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
     )
 ]
 MAX_PORTS = len(INSERT_PORT_PRIM_PATHS)
@@ -105,7 +106,7 @@ INSERT_CARTESIAN_STEP = 0.002
 # con002228_* connector prims use local +Z as the rack-facing insert normal.
 INSERT_LOCAL_AXIS = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 INSERT_LATERAL_Z_BY_CONNECTOR = {
-    "QSFP_DD_Connector_A_01": -0.00075,
+    "QSFP_DD_Connector_A_01": -0.00085,
     "QSFP_DD_Connector_A_02": -0.00425,
 }
 # Per-port world-frame lateral offset overrides (meters). Index matches
@@ -113,19 +114,82 @@ INSERT_LATERAL_Z_BY_CONNECTOR = {
 # connector name but need different tuning because they come from different
 # switch instances or connector pairs.
 INSERT_LATERAL_OFFSET_BY_PORT_INDEX = {
-    0: np.array([0.0, 0.0, -0.00425], dtype=np.float64),
-    1: np.array([0.0, 0.0, -0.00075], dtype=np.float64),
-    # Job 2 was visually low/right with the generic A_01 offset. Start by
-    # lifting this target 2 mm; tune Y/Z here without affecting jobs 0 and 1.
-    2: np.array([0.0, 0.0, -0.00125], dtype=np.float64),
+    0: np.array([0.0, 0.0, -0.0105], dtype=np.float64),
+    1: np.array([0.0, 0.0, -0.00675], dtype=np.float64),
 }
-# Axial insert target: module center distance past the port origin along +insert_axis (m).
-# 0.0 = stop at the port face; 0.005 = 5 mm deeper; increase to seat further in.
-INSERT_STOP_DEPTH_M = 0.005
-ROBOT_BASE_POS = np.array([0.45, -0.15, 0.0])
+# Default leading-tip depth (m) past the port opening along +insert_axis.
+# Override at runtime with the "QSFP Insert" UI panel (stop → play to apply).
+INSERT_TIP_DEPTH_M_DEFAULT = 0.048
+INSERT_TIP_DEPTH_M_MIN = 0.020
+# Stay inside the port sleeve back wall (60 mm) to avoid switch / arm collisions.
+INSERT_TIP_DEPTH_M_MAX = PORT_SLEEVE_DEPTH_M - 0.005
+# Vertical pick: shift IK block-center toward module +Z (top). Higher = more body below fingers.
+PICK_GRASP_OFFSET_TO_TOP_M_DEFAULT = QSFP_GRASP_OFFSET_TO_TOP_M
+PICK_GRASP_OFFSET_TO_TOP_M_MIN = 0.0
+PICK_GRASP_OFFSET_TO_TOP_M_MAX = QSFP_LENGTH_M * 0.5 * 0.95
+ROBOT_BASE_POS = np.array([0.45, -0.15, TABLE_HEIGHT])
+PICK_SURFACE_Z = TABLE_HEIGHT + QSFP_LENGTH_M / 2.0
 MODULE_SPAWN_ORIENTATION = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
 POST_RESET_WARMUP_FRAMES = 20
-POST_RESET_SETTLE_STEPS = 10
+POST_RESET_SETTLE_STEPS = 15
+
+_insert_depth_model = ui.SimpleFloatModel(INSERT_TIP_DEPTH_M_DEFAULT)
+_pick_grasp_offset_model = ui.SimpleFloatModel(PICK_GRASP_OFFSET_TO_TOP_M_DEFAULT)
+_tune_status = ui.SimpleStringModel(
+    "Stop, then play to apply slider changes"
+)
+
+
+def build_qsfp_tune_panel() -> None:
+    window = ui.Window("QSFP Tuning", width=360, height=175)
+    with window.frame:
+        with ui.VStack(spacing=6, height=0):
+            ui.Label("Pick grasp height — offset toward module top (m)")
+            ui.Label(
+                "Higher = grip nearer the top, more length hangs below the fingers",
+                word_wrap=True,
+            )
+            ui.FloatDrag(
+                _pick_grasp_offset_model,
+                min=PICK_GRASP_OFFSET_TO_TOP_M_MIN,
+                max=PICK_GRASP_OFFSET_TO_TOP_M_MAX,
+                step=0.002,
+                format="%.3f",
+            )
+            ui.Label("Insert tip depth past port face (m)")
+            ui.FloatDrag(
+                _insert_depth_model,
+                min=INSERT_TIP_DEPTH_M_MIN,
+                max=INSERT_TIP_DEPTH_M_MAX,
+                step=0.005,
+                format="%.3f",
+            )
+            ui.StringField(
+                _tune_status,
+                read_only=True,
+                style={"background_color": 0x00000000},
+            )
+
+
+def get_insert_tip_depth_m() -> float:
+    depth = float(_insert_depth_model.get_value_as_float())
+    return float(
+        np.clip(depth, INSERT_TIP_DEPTH_M_MIN, INSERT_TIP_DEPTH_M_MAX)
+    )
+
+
+def get_pick_grasp_offset_to_top_m() -> float:
+    offset = float(_pick_grasp_offset_model.get_value_as_float())
+    return float(
+        np.clip(
+            offset,
+            PICK_GRASP_OFFSET_TO_TOP_M_MIN,
+            PICK_GRASP_OFFSET_TO_TOP_M_MAX,
+        )
+    )
+
+
+build_qsfp_tune_panel()
 
 
 def insert_lateral_offset_for_path(prim_path: str, port_index: int | None = None) -> np.ndarray:
@@ -170,7 +234,7 @@ def configure_viewport_only_layout() -> None:
 def work_area_camera_target() -> np.ndarray:
     points = [
         ROBOT_BASE_POS + np.array([0.0, 0.0, 0.25], dtype=np.float64),
-        np.array([PICK_TRAY_XY[0], PICK_TRAY_XY[1], QSFP_LENGTH_M / 2.0], dtype=np.float64),
+        np.array([PICK_TRAY_XY[0], PICK_TRAY_XY[1], PICK_SURFACE_Z], dtype=np.float64),
     ]
     points.extend(port.insert_origin for port in ports)
     target = np.mean(np.asarray(points, dtype=np.float64), axis=0)
@@ -289,6 +353,47 @@ if not port_paths:
     sys.exit()
 
 
+def build_work_table(world, module_count: int) -> None:
+    """Spawn a physics-enabled slab under the robot and module tray."""
+    _TABLE_MARGIN_M = 0.20
+    _CUBOID_BASE_SIZE = 1.0
+
+    robot_xy = ROBOT_BASE_POS[:2]
+    center_xy = (robot_xy + PICK_TRAY_XY) / 2.0
+
+    coverage_x = [robot_xy[0]] + [
+        PICK_TRAY_XY[0] + i * PICK_SPACING for i in range(module_count)
+    ]
+    coverage_y = [robot_xy[1], PICK_TRAY_XY[1]]
+
+    half_x = max(abs(x - center_xy[0]) for x in coverage_x) + _TABLE_MARGIN_M
+    half_y = max(abs(y - center_xy[1]) for y in coverage_y) + _TABLE_MARGIN_M
+    size_xy = np.array([2.0 * half_x, 2.0 * half_y], dtype=np.float64)
+
+    center_z = TABLE_HEIGHT - TABLE_THICKNESS / 2.0
+    position = np.array([center_xy[0], center_xy[1], center_z], dtype=np.float64)
+    scale = np.array([size_xy[0], size_xy[1], TABLE_THICKNESS], dtype=np.float64)
+    orientation = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    color = np.array([0.55, 0.35, 0.18], dtype=np.float64)
+
+    world.scene.add(
+        FixedCuboid(
+            name="work_table",
+            prim_path="/World/WorkTable",
+            position=position,
+            orientation=orientation,
+            scale=scale,
+            size=_CUBOID_BASE_SIZE,
+            color=color,
+            visible=True,
+        )
+    )
+    carb.log_info(
+        f"Work table: center={position.tolist()} size_xy={size_xy.tolist()} "
+        f"thickness={TABLE_THICKNESS} top_surface_z={TABLE_HEIGHT}"
+    )
+
+
 def build_ports() -> list:
     built = []
     for port_index, path in enumerate(port_paths):
@@ -307,8 +412,11 @@ def build_ports() -> list:
             continue
         built.append(port)
         prim_position, prim_orientation = get_world_pose(path)
-        approach_goal = port.approach_position(APPROACH_STANDOFF)
-        insert_goal = port.point_along_axis(INSERT_STOP_DEPTH_M)
+        approach_goal = port.approach_position(ALIGN_STANDOFF)
+        insert_goal = port.center_goal_for_tip_depth(
+            get_insert_tip_depth_m(),
+            QSFP_LENGTH_M / 2.0,
+        )
         carb.log_info(
             f"Port frame {port_index}: {path} prim_pos={prim_position} "
             f"prim_ori={prim_orientation} lateral_offset={lateral_offset}"
@@ -318,7 +426,8 @@ def build_ports() -> list:
             f"rot={port.insert_rot}"
         )
         carb.log_info(
-            f"Port goals: approach={approach_goal} insert={insert_goal} "
+            f"Port goals: approach={approach_goal} insert_tip_depth_m={get_insert_tip_depth_m()} "
+            f"insert_center={insert_goal} "
             f"approach_yz_delta={approach_goal[1:3] - port.insert_origin[1:3]} "
             f"insert_yz_delta={insert_goal[1:3] - port.insert_origin[1:3]}"
         )
@@ -330,7 +439,7 @@ def build_ports() -> list:
 ports: list = []
 _cached_ports: list = []
 
-PICK_SURFACE_Z = QSFP_LENGTH_M / 2.0
+build_work_table(my_world, len(port_paths))
 
 my_franka = my_world.scene.add(
     SingleManipulator(
@@ -440,6 +549,12 @@ port_frames_by_job: list = []
 
 def queue_all_insert_jobs() -> None:
     global job_start_indices, port_frames_by_job
+    insert_depth_m = get_insert_tip_depth_m()
+    pick_grasp_offset_m = get_pick_grasp_offset_to_top_m()
+    _tune_status.set_value(
+        f"Queued {len(modules)} jobs: pick_offset={pick_grasp_offset_m:.3f} m "
+        f"insert_depth={insert_depth_m:.3f} m"
+    )
     if len(ports) != len(modules):
         carb.log_error(
             f"Port/module count mismatch: {len(ports)} ports, {len(modules)} modules."
@@ -455,11 +570,21 @@ def queue_all_insert_jobs() -> None:
             port,
             pick_xy=pick_xy,
             pick_z=PICK_SURFACE_Z,
-            insert_stop_depth_m=INSERT_STOP_DEPTH_M,
+            insert_tip_depth_m=insert_depth_m,
+            pick_grasp_offset_to_top_m=pick_grasp_offset_m,
         )
-        carb.log_info(
-            f"Queued insert job {i} starting at command index {job_start_indices[-1]}"
+        tip_goal = port.center_goal_for_tip_depth(
+            insert_depth_m,
+            QSFP_LENGTH_M / 2.0,
         )
+        msg = (
+            f"Queued insert job {i} pick_grasp_offset={pick_grasp_offset_m:.3f} m "
+            f"insert_tip_depth={insert_depth_m:.3f} m "
+            f"center_goal_axial={port.axial_coordinate(tip_goal):.4f} m "
+            f"cmd_index={job_start_indices[-1]}"
+        )
+        carb.log_info(msg)
+        print(msg)
     port_frames_by_job = list(ports)
     carb.log_info(f"Running {len(ports)} insert jobs ({len(modules)} modules)")
 
@@ -480,6 +605,7 @@ def reset_modules_to_pick() -> None:
             mod.set_linear_velocity(np.zeros(3, dtype=np.float64))
         if hasattr(mod, "set_angular_velocity"):
             mod.set_angular_velocity(np.zeros(3, dtype=np.float64))
+    flush_runtime_views()
 
 
 def reset_robot_to_home() -> None:
@@ -559,7 +685,7 @@ def prepare_run_after_warmup() -> bool:
     reset_robot_to_home()
     _settle_physics_steps()
     flush_runtime_views()
-    ports = get_ports()
+    ports = get_ports(rebuild=True)
     if not ports:
         carb.log_error("No valid port frames.")
         return False
@@ -596,55 +722,14 @@ def active_module(cmd_index: int):
 
 
 def check_pick_after_lift(completed_cmd_idx: int) -> None:
-    """Verify the module left the tray after the lift waypoint; retry grasp once."""
-    if completed_cmd_idx < 0 or completed_cmd_idx >= len(franka_controller._command_queue):
-        return
-    prev_cmd = franka_controller._command_queue[completed_cmd_idx]
-    if prev_cmd.get("type") != "cartesian" or not prev_cmd.get("verify_pick_lift"):
-        return
-
-    job_idx = active_job_index(completed_cmd_idx)
-    _, mod = modules[job_idx]
-    flush_runtime_views()
-    pos, _ = mod.get_world_pose()
-    min_lift_z = prev_cmd.get("verify_pick_min_z")
-    if min_lift_z is None:
-        from qsfp_insert_job import HOVER_CLEARANCE
-
-        min_lift_z = PICK_SURFACE_Z + HOVER_CLEARANCE - 0.08
-    if float(pos[2]) >= float(min_lift_z):
-        return
-
-    msg = (
-        f"Pick failed for job {job_idx} — module did not lift "
-        f"(z={pos[2]:.4f}, expected >= {float(min_lift_z):.4f})"
-    )
-    carb.log_warn(msg)
-    print(msg)
-
-    if _pick_retry_by_job.get(job_idx, False):
-        if not _full_job_retry_by_job.get(job_idx, False):
-            _full_job_retry_by_job[job_idx] = True
-            _pick_retry_by_job[job_idx] = False
-            restart_job_at_pick(job_idx)
-            retry_msg = f"Restarting full job {job_idx} after repeated pick failure."
-            carb.log_warn(retry_msg)
-            print(retry_msg)
-        return
-
-    _pick_retry_by_job[job_idx] = True
-    grasp_idx = job_start_indices[job_idx] + 1
-    franka_controller._current_command_index = grasp_idx
-    franka_controller._clear_segment_playback()
-    opened = np.asarray(my_franka.gripper.joint_opened_positions, dtype=np.float64)
-    my_franka.gripper.set_joint_positions(opened)
-    carb.log_info(f"Retrying pick for job {job_idx} from command {grasp_idx}")
+    """Log-only pick check; never rewind or open the gripper (that caused drops)."""
+    return
 
 
 def enable_port_colliders_after_insert(completed_cmd_idx: int) -> None:
     """Enable the matching sleeve after insertion, before opening the gripper."""
     for job_idx, start_idx in enumerate(job_start_indices):
-        if completed_cmd_idx != start_idx + 7:
+        if completed_cmd_idx != start_idx + JOB_CMD_INSERT:
             continue
         enable_port_insert_colliders_for_port(stage, job_idx)
         print(f"Enabled port sleeve collisions for job {job_idx}.")
@@ -653,11 +738,10 @@ def enable_port_colliders_after_insert(completed_cmd_idx: int) -> None:
 
 def log_job_completion_seat(completed_cmd_idx: int) -> None:
     for job_idx, start_idx in enumerate(job_start_indices):
-        # Each QSFP job queues 11 commands. Check once right after insert and
-        # again after the final rack-clear retreat before the next job starts.
-        if completed_cmd_idx == start_idx + 7:
+        # Check once right after insert and again after the final rack-clear retreat.
+        if completed_cmd_idx == start_idx + JOB_CMD_INSERT:
             label = "post-insert"
-        elif completed_cmd_idx == start_idx + 10:
+        elif completed_cmd_idx == start_idx + JOB_CMD_CLEAR:
             label = "post-retreat"
         else:
             continue
@@ -796,6 +880,7 @@ while simulation_app.is_running():
                 module = active_module(cmd_idx)
 
                 tracked_pos = None
+                tracked_ori = None
                 if not franka_controller.is_done():
                     current_cmd = franka_controller._command_queue[cmd_idx]
                     if (
@@ -803,11 +888,16 @@ while simulation_app.is_running():
                         and current_cmd.get("track_block")
                     ):
                         flush_runtime_views()
-                        tracked_pos, _ = module.get_world_pose()
+                        tracked_pos, tracked_ori = module.get_world_pose()
+                        if tracked_ori is not None and hasattr(tracked_ori, "cpu"):
+                            tracked_ori = tracked_ori.cpu().numpy()
+                        if tracked_ori is not None:
+                            tracked_ori = np.asarray(tracked_ori, dtype=np.float64)
 
                 actions = franka_controller.forward(
                     current_joint_positions=current_joint_pos,
                     current_tracked_position=tracked_pos,
+                    current_tracked_orientation=tracked_ori,
                 )
                 articulation_controller.apply_action(actions)
 
