@@ -34,6 +34,7 @@ class FrankaLulaController(BaseController):
         position_tolerance: float = 0.005,
         orientation_tolerance: float = 0.05,
         ee_frame: str = "panda_hand",
+        debug: bool = False,
     ) -> None:
         super().__init__(name=name)
         self._robot = robot_articulation
@@ -41,6 +42,7 @@ class FrankaLulaController(BaseController):
         self._art_kinematics = art_kinematics
         self._gripper = gripper
         self._ee_frame = ee_frame
+        self._debug = debug
 
         self._tool_offset = tool_offset
         self._physics_dt = physics_dt
@@ -68,13 +70,15 @@ class FrankaLulaController(BaseController):
         pos_tolerance: typing.Optional[float] = None,
         linear: bool = False,
         linear_step: float = 0.001,
+        label: str = "",
     ) -> None:
         """Queue a Cartesian goal.
 
         linear=True guarantees straight-line end-effector motion: the target is
         stepped along the start->goal line by linear_step meters per frame with
-        per-frame IK, instead of relying on Lula trajectory generation (whose
-        failure falls back to a single IK jump with no path guarantee).
+        per-frame IK, instead of relying on Lula trajectory generation.
+
+        label is an optional string used in debug output to identify waypoints.
         """
         self._command_queue.append({
             "type": "cartesian",
@@ -85,6 +89,7 @@ class FrankaLulaController(BaseController):
             "pos_tolerance": pos_tolerance,
             "linear": linear,
             "linear_step": linear_step,
+            "label": label,
         })
 
     def add_gripper_command(self, action: str, wait_frames: int = 60) -> None:
@@ -94,6 +99,16 @@ class FrankaLulaController(BaseController):
             "max_frames": wait_frames,
             "frames_spent": 0,
         })
+
+    def clear_queue(self) -> None:
+        """Remove all queued commands and reset playback state.
+
+        Use this before re-queuing a new phase of commands so previous
+        commands don't persist and the index starts clean.
+        """
+        self._command_queue = []
+        self._current_command_index = 0
+        self._clear_segment_playback()
 
     def _hold_action(self, n_dof: int) -> ArticulationAction:
         return ArticulationAction(joint_positions=[None] * n_dof)
@@ -114,8 +129,6 @@ class FrankaLulaController(BaseController):
     def _build_hand_waypoints(self, current_cmd: dict) -> typing.Tuple[np.ndarray, np.ndarray]:
         hand_start_pos, hand_start_quat = self._current_hand_pose()
         hand_goal_pos = self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
-        # Shift both endpoints by tool offset so Lula's straight task-space segment
-        # stays above the block; segment completion still checks single-offset goal.
         block_points = np.stack([hand_start_pos, hand_goal_pos], axis=0)
         orientations = np.stack([hand_start_quat, current_cmd["ori"]], axis=0)
         hand_positions = np.array(
@@ -128,13 +141,22 @@ class FrankaLulaController(BaseController):
         hand_positions, orientations = self._build_hand_waypoints(current_cmd)
         self._segment_goal_hand = self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
 
+        label = current_cmd.get("label", "")
+        tag = f" [{label}]" if label else ""
+
+        if self._debug:
+            carb.log_info(
+                f"[Controller] Building trajectory{tag} → target {np.round(current_cmd['pos'], 4)}"
+                f"  hand_target={np.round(self._segment_goal_hand, 4)}"
+            )
+
         trajectory = self._task_traj_gen.compute_task_space_trajectory_from_points(
             hand_positions, orientations, self._ee_frame
         )
 
         if trajectory is None:
             carb.log_warn(
-                "Lula task-space trajectory failed; falling back to single-point IK."
+                f"Lula task-space trajectory failed{tag}; falling back to single-point IK."
             )
             ik_action, success = self._art_kinematics.compute_inverse_kinematics(
                 target_position=self._segment_goal_hand,
@@ -143,12 +165,15 @@ class FrankaLulaController(BaseController):
                 orientation_tolerance=self._ori_tolerance,
             )
             if not success:
-                carb.log_warn("IK fallback did not report convergence.")
+                carb.log_warn(f"IK fallback did not report convergence{tag}.")
             self._action_sequence = [ik_action]
             return
 
         art_traj = ArticulationTrajectory(self._robot, trajectory, self._physics_dt)
         self._action_sequence = art_traj.get_action_sequence()
+
+        if self._debug:
+            carb.log_info(f"[Controller] Trajectory{tag} built: {len(self._action_sequence)} steps")
 
     def _init_linear_segment(self, current_cmd: dict) -> None:
         start, _ = self._current_hand_pose()
@@ -172,8 +197,6 @@ class FrankaLulaController(BaseController):
             target_orientation=current_cmd["ori"],
         )
         if not success:
-            # Hold and retry the same target next frame so the crawl never
-            # outruns IK; commanded poses stay on the line by construction.
             if not self._linear_ik_warned:
                 carb.log_warn(
                     f"Linear segment IK failed at {np.round(target, 4)}; holding."
@@ -186,7 +209,21 @@ class FrankaLulaController(BaseController):
     def _segment_goal_reached(self, current_cmd: dict) -> bool:
         tolerance = current_cmd.get("pos_tolerance") or self._pos_tolerance
         hand_pos, _ = self._current_hand_pose()
-        return float(np.linalg.norm(self._segment_goal_hand - hand_pos)) < tolerance
+        dist = float(np.linalg.norm(self._segment_goal_hand - hand_pos))
+        return dist < tolerance
+
+    def _log_waypoint_complete(self, current_cmd: dict, timed_out: bool) -> None:
+        if not self._debug:
+            return
+        label = current_cmd.get("label", "")
+        tag = f" [{label}]" if label else ""
+        hand_pos, _ = self._current_hand_pose()
+        dist = float(np.linalg.norm(self._segment_goal_hand - hand_pos))
+        timeout_note = " (TIMEOUT — goal not reached)" if timed_out else ""
+        carb.log_info(
+            f"[Controller] Waypoint complete{tag}: "
+            f"final_err={dist*1000:.2f}mm  frames={current_cmd['frames_spent']}{timeout_note}"
+        )
 
     def _clear_segment_playback(self) -> None:
         self._action_sequence = []
@@ -208,6 +245,11 @@ class FrankaLulaController(BaseController):
             if current_cmd["type"] == "gripper":
                 current_cmd["frames_spent"] += 1
                 if current_cmd["frames_spent"] >= current_cmd["max_frames"]:
+                    if self._debug:
+                        carb.log_info(
+                            f"[Controller] Gripper '{current_cmd['action']}' complete "
+                            f"(frames={current_cmd['frames_spent']})"
+                        )
                     self._current_command_index += 1
                     self._clear_segment_playback()
                     continue
@@ -225,10 +267,13 @@ class FrankaLulaController(BaseController):
 
                 if current_cmd.get("linear"):
                     current_cmd["frames_spent"] += 1
-                    if (
+                    timed_out = current_cmd["frames_spent"] >= current_cmd["max_frames"]
+                    goal_reached = (
                         self._linear_progress >= self._linear_length
                         and self._segment_goal_reached(current_cmd)
-                    ) or current_cmd["frames_spent"] >= current_cmd["max_frames"]:
+                    )
+                    if goal_reached or timed_out:
+                        self._log_waypoint_complete(current_cmd, timed_out)
                         self._current_command_index += 1
                         self._clear_segment_playback()
                         continue
@@ -241,9 +286,9 @@ class FrankaLulaController(BaseController):
                     return action
 
                 current_cmd["frames_spent"] += 1
-                if self._segment_goal_reached(current_cmd) or (
-                    current_cmd["frames_spent"] >= current_cmd["max_frames"]
-                ):
+                timed_out = current_cmd["frames_spent"] >= current_cmd["max_frames"]
+                if self._segment_goal_reached(current_cmd) or timed_out:
+                    self._log_waypoint_complete(current_cmd, timed_out)
                     self._current_command_index += 1
                     self._clear_segment_playback()
                     continue

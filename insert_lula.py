@@ -10,6 +10,7 @@ import numpy as np
 import omni.usd
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid, FixedCuboid
+from isaacsim.core.utils.numpy.rotations import quats_to_rot_matrices
 from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.robot.manipulators import SingleManipulator
 from isaacsim.robot.manipulators.grippers import ParallelGripper
@@ -23,6 +24,42 @@ from isaacsim.storage.native import get_assets_root_path
 from pxr import Sdf, UsdLux
 
 from franka_lula_controller import FrankaLulaController
+
+# =============================================================================
+# CONFIG
+# =============================================================================
+
+DEBUG = True
+TOOL_OFFSET = 0.05
+
+BLOCK_HALF_WIDTH   = 0.002
+BLOCK_HALF_LENGTH  = 0.025
+FINGER_CONTACT_MIN = BLOCK_HALF_WIDTH - 0.001
+MAX_GRASP_ATTEMPTS = 2
+
+# How far back from PORT_POSITION to sit before the insert stroke.
+# Change this one number when the port asset defines the approach clearance.
+PRE_INSERT_CLEARANCE = 0.10   # meters
+
+# PORT_POSITION is the target BLOCK CENTER at insert.
+# TODO: replace with port.get_world_pose()[0] when asset is ready.
+PORT_POSITION = np.array([-0.6, 0.0, 0.20])
+
+DOWN_ORI   = np.array([0.0, 1.0, 0.0, 0.0])
+INSERT_ORI = np.array([-0.7071068, 0.0, 0.7071068, 0.0])
+
+# =============================================================================
+# PHASES
+# =============================================================================
+
+PHASE_GRASP   = 0
+PHASE_TRANSIT = 1
+PHASE_INSERT  = 2
+PHASE_DONE    = 3
+
+# =============================================================================
+# WORLD SETUP
+# =============================================================================
 
 assets_root_path = get_assets_root_path()
 if assets_root_path is None:
@@ -91,30 +128,6 @@ block = world.scene.add(
     )
 )
 
-PORT_POS = np.array([-0.7, 0.0, 0.20])
-
-# Thin backplate facing +X (robot inserts along -X). Visual only — no collision needed.
-port = world.scene.add(
-    FixedCuboid(
-        name="port",
-        position=PORT_POS,
-        prim_path="/World/Port",
-        size=1.0,
-        scale=np.array([0.006, 0.030, 0.055]),
-        color=np.array([0.15, 0.55, 0.25]),
-    )
-)
-world.scene.add(
-    FixedCuboid(
-        name="port_opening",
-        position=PORT_POS + np.array([0.004, 0.0, 0.0]),
-        prim_path="/World/PortOpening",
-        size=1.0,
-        scale=np.array([0.002, 0.018, 0.038]),
-        color=np.array([0.05, 0.12, 0.08]),
-    )
-)
-
 franka.gripper.set_default_state(franka.gripper.joint_opened_positions)
 world.reset()
 
@@ -130,63 +143,229 @@ controller = FrankaLulaController(
     task_traj_gen=task_traj_gen,
     art_kinematics=art_kinematics,
     gripper=franka.gripper,
-    tool_offset=0.05,
+    tool_offset=TOOL_OFFSET,
+    debug=DEBUG,
 )
 
-down_ori = np.array([0.0, 1.0, 0.0, 0.0])
-insert_ori = np.array([-0.7071068, 0.0, 0.7071068, 0.0])
-controller.add_cartesian_waypoint(
-    position=np.array([0.5, 0.0, 0.20]),
-    orientation=down_ori,
-    pos_tolerance=0.05,
-)
-controller.add_cartesian_waypoint(
-    position=np.array([0.5, 0.0, 0.04]),
-    orientation=down_ori,
-    pos_tolerance=0.001,
-)
-controller.add_gripper_command(action="open")
+# =============================================================================
+# RUN STATISTICS
+# =============================================================================
 
-controller.add_gripper_command(action="close")
+run_count         = 0
+all_block_offsets = []
+all_hand_errors   = []
+all_block_errors  = []
 
-controller.add_cartesian_waypoint(
-    position=np.array([0.5, 0.0, 0.20]),
-    orientation=down_ori,
-    pos_tolerance=0.001,
-)
+# =============================================================================
+# HELPERS
+# =============================================================================
 
-controller.add_cartesian_waypoint(
-    position=np.array([0, 0.5, 0.20]),
-    orientation=down_ori,
-    pos_tolerance=0.001,
-)
+def _sep(char="-", width=60):
+    return char * width
 
 
-controller.add_cartesian_waypoint(
-    position=np.array([-0.5, 0.0, 0.20]),
-    orientation=down_ori,
-    pos_tolerance=0.001,
-)
-
-controller.add_cartesian_waypoint(
-    position=np.array([-0.5, 0.0, 0.20]),
-    orientation=insert_ori,
-    pos_tolerance=0.001,
-)
-
-controller.add_cartesian_waypoint(
-    position=PORT_POS.copy(),
-    orientation=insert_ori,
-    pos_tolerance=0.001,
-    linear=True,
-    linear_step=0.001,
-)
+def _get_hand_pose():
+    pos_raw, rot_raw = art_kinematics.compute_end_effector_pose()
+    pos = np.asarray(pos_raw, dtype=np.float64).flatten()
+    rot = np.asarray(rot_raw, dtype=np.float64)
+    if rot.ndim == 3:
+        rot = rot[0]
+    return pos, rot
 
 
-controller.add_gripper_command(action="open")
+def print_run_banner(run):
+    print(f"\n{_sep('=')}")
+    print(f"  RUN {run}")
+    print(_sep("="))
 
 
-reset_needed = False
+def check_grasp():
+    fingers = franka.gripper.get_joint_positions()
+    if fingers is None:
+        print("[GRASP] Cannot read finger positions")
+        return False
+    f1, f2 = float(fingers[0]), float(fingers[1])
+    closed = float(franka.gripper.joint_closed_positions[0])
+    print(f"\n{_sep()}")
+    print("[GRASP CHECK]")
+    print(f"  finger_1:      {f1*1000:.3f} mm")
+    print(f"  finger_2:      {f2*1000:.3f} mm")
+    print(f"  contact_min:   {FINGER_CONTACT_MIN*1000:.3f} mm")
+    print(f"  fully_closed:  {closed*1000:.1f} mm")
+    ok = f1 >= FINGER_CONTACT_MIN and f2 >= FINGER_CONTACT_MIN
+    if ok:
+        print("  RESULT: ✓  Contact confirmed")
+    else:
+        if f1 <= closed + 0.0005 and f2 <= closed + 0.0005:
+            print("  RESULT: ✗  Fingers at hard-stop — missed block entirely")
+        else:
+            print("  RESULT: ✗  Below contact threshold — check approach alignment")
+    print(_sep())
+    return ok
+
+
+def compute_and_log_block_offset():
+    """Store offset in hand LOCAL frame so it stays valid across orientation changes."""
+    block_pos = np.asarray(block.get_world_pose()[0], dtype=np.float64).flatten()
+    hand_pos, hand_rot = _get_hand_pose()
+    offset_world = block_pos - hand_pos
+    offset_local = hand_rot.T @ offset_world
+    print(f"\n{_sep()}")
+    print("[GRASP OFFSET]")
+    print(f"  block_world:    {np.round(block_pos, 4)}")
+    print(f"  hand_world:     {np.round(hand_pos, 4)}")
+    print(f"  offset_world:   {np.round(offset_world, 4)}")
+    print(f"  offset_local:   {np.round(offset_local, 4)}  ← hand frame (rotation-invariant)")
+    print(f"  magnitude:      {np.linalg.norm(offset_local)*1000:.2f} mm")
+    all_block_offsets.append(offset_local.copy())
+    if len(all_block_offsets) > 1:
+        arr = np.array(all_block_offsets)
+        std = np.std(arr, axis=0)
+        print(f"\n  Grasp consistency across {len(all_block_offsets)} runs:")
+        print(f"    std  x={std[0]*1000:.2f}mm  y={std[1]*1000:.2f}mm  z={std[2]*1000:.2f}mm")
+        print(f"    max_deviation={np.max(np.linalg.norm(arr - arr.mean(axis=0), axis=1))*1000:.2f}mm")
+    print(_sep())
+    return offset_local
+
+
+def measure_insert_error(offset_local):
+    hand_pos, hand_rot = _get_hand_pose()
+    R_insert = quats_to_rot_matrices(INSERT_ORI.reshape(1, 4))[0]
+    expected_hand   = PORT_POSITION - R_insert @ np.array([0.0, 0.0, TOOL_OFFSET])
+    est_block_center = hand_pos + hand_rot @ offset_local
+    est_block_tip    = est_block_center + hand_rot @ np.array([0.0, 0.0, BLOCK_HALF_LENGTH])
+    hand_err   = float(np.linalg.norm(hand_pos - expected_hand))
+    center_err = float(np.linalg.norm(est_block_center - PORT_POSITION))
+    all_hand_errors.append(hand_err)
+    all_block_errors.append(center_err)
+    print(f"\n{_sep()}")
+    print("[INSERT RESULT]")
+    print(f"  hand_pos:            {np.round(hand_pos, 4)}")
+    print(f"  expected_hand_pos:   {np.round(expected_hand, 4)}")
+    print(f"  hand_error:          {hand_err*1000:.2f} mm  ← trajectory accuracy")
+    print(f"  est_block_center:    {np.round(est_block_center, 4)}")
+    print(f"  est_block_tip:       {np.round(est_block_tip, 4)}")
+    print(f"  port_pos (center):   {np.round(PORT_POSITION, 4)}")
+    print(f"  block_center_error:  {center_err*1000:.2f} mm  ← overall accuracy")
+    if len(all_hand_errors) > 1:
+        print(f"\n  Repeatability across {len(all_hand_errors)} runs:")
+        print(f"    hand   mean={np.mean(all_hand_errors)*1000:.2f}mm  "
+              f"std={np.std(all_hand_errors)*1000:.2f}mm  "
+              f"max={np.max(all_hand_errors)*1000:.2f}mm")
+        print(f"    block  mean={np.mean(all_block_errors)*1000:.2f}mm  "
+              f"std={np.std(all_block_errors)*1000:.2f}mm  "
+              f"max={np.max(all_block_errors)*1000:.2f}mm")
+    print(_sep())
+
+# =============================================================================
+# PHASE COMMAND BUILDERS
+# =============================================================================
+
+def queue_grasp_phase():
+    controller.clear_queue()
+    controller.add_cartesian_waypoint(
+        position=np.array([0.5, 0.0, 0.20]),
+        orientation=DOWN_ORI,
+        pos_tolerance=0.05,
+        label="approach_above",
+    )
+    controller.add_cartesian_waypoint(
+        position=np.array([0.5, 0.0, 0.04]),
+        orientation=DOWN_ORI,
+        pos_tolerance=0.001,
+        label="descend_to_block",
+    )
+    controller.add_gripper_command(action="open",  wait_frames=30)
+    controller.add_gripper_command(action="close", wait_frames=90)
+
+
+def queue_transit_phase():
+    """
+    This route was empirically working before. Keep it.
+
+    The Y-detour through [0, 0.5, 0.2] is not cosmetic — it keeps the arm
+    in a joint configuration where INSERT_ORI is reachable at the negative-X
+    workspace edge. Without it (going straight to [-0.5, 0, 0.2]), the arm
+    arrives in a joint config where the wrist can't rotate to INSERT_ORI.
+
+    Lula may fail on the [-0.5, 0, 0.2] DOWN_ORI segment (workspace edge),
+    but the IK fallback lands close enough. The orientation change at that
+    position (same XYZ, only rotation) Lula handles fine.
+    """
+    controller.clear_queue()
+    controller.add_cartesian_waypoint(
+        position=np.array([0.5, 0.0, 0.20]),
+        orientation=DOWN_ORI,
+        pos_tolerance=0.001,
+        label="lift",
+    )
+    controller.add_cartesian_waypoint(
+        position=np.array([0.0, 0.5, 0.20]),
+        orientation=DOWN_ORI,
+        pos_tolerance=0.001,
+        label="y_detour",
+    )
+    controller.add_cartesian_waypoint(
+        position=np.array([-0.5, 0.0, 0.20]),
+        orientation=DOWN_ORI,
+        pos_tolerance=0.001,
+        label="neg_x_side",
+    )
+    # Change orientation at the same position — reachable here after the Y-detour
+    controller.add_cartesian_waypoint(
+        position=np.array([-0.5, 0.0, 0.20]),
+        orientation=INSERT_ORI,
+        pos_tolerance=0.001,
+        label="reorient",
+    )
+
+
+def queue_insert_phase():
+    """
+    linear=True: the insert stroke MUST be straight and controlled.
+    Lula is not used here — per-frame IK stepping guarantees a straight line.
+
+    PRE_INSERT_CLEARANCE positions the arm back from the port before the stroke.
+    Derived from PORT_POSITION so changing one constant covers both waypoints.
+
+    Distance = PRE_INSERT_CLEARANCE (0.10m default) at 0.001m/step = 100 frames.
+    max_frames=400 gives 4x headroom.
+    """
+    pre_insert_pos = PORT_POSITION + np.array([PRE_INSERT_CLEARANCE, 0.0, 0.0])
+    controller.clear_queue()
+    controller.add_cartesian_waypoint(
+        position=pre_insert_pos,
+        orientation=INSERT_ORI,
+        pos_tolerance=0.002,
+        label="pre_insert",
+    )
+    controller.add_cartesian_waypoint(
+        position=PORT_POSITION,   # TODO: swap with port.get_world_pose()[0] when asset is ready
+        orientation=INSERT_ORI,
+        pos_tolerance=0.001,
+        linear=True,
+        linear_step=0.001,
+        max_frames=400,
+        label="insert_stroke",
+    )
+    controller.add_gripper_command(action="open", wait_frames=60)
+
+# =============================================================================
+# STATE
+# =============================================================================
+
+phase              = PHASE_GRASP
+grasp_attempt      = 0
+block_offset_local = None
+reset_needed       = False
+
+run_count += 1
+print_run_banner(run_count)
+queue_grasp_phase()
+
+# =============================================================================
+# MAIN LOOP
+# =============================================================================
 
 while simulation_app.is_running():
     world.step(render=True)
@@ -196,15 +375,51 @@ while simulation_app.is_running():
 
     if world.is_playing():
         if reset_needed:
+            run_count += 1
+            print_run_banner(run_count)
             world.reset()
             controller.reset()
             lula_kinematics.set_robot_base_pose(*franka.get_world_pose())
+            phase = PHASE_GRASP
+            grasp_attempt = 0
+            block_offset_local = None
             reset_needed = False
+            queue_grasp_phase()
             continue
 
         joint_pos = franka.get_joint_positions()
         if joint_pos is None:
             continue
+
+        if controller.is_done():
+
+            if phase == PHASE_GRASP:
+                print(f"\n[PHASE] GRASP complete (attempt {grasp_attempt + 1})")
+                if check_grasp():
+                    block_offset_local = compute_and_log_block_offset()
+                    print("[PHASE] → TRANSIT")
+                    phase = PHASE_TRANSIT
+                    grasp_attempt = 0
+                    queue_transit_phase()
+                else:
+                    grasp_attempt += 1
+                    if grasp_attempt >= MAX_GRASP_ATTEMPTS:
+                        print(f"\n[PHASE] Grasp failed {MAX_GRASP_ATTEMPTS} times. HALTING.")
+                        break
+                    print(f"[PHASE] Retrying grasp ({grasp_attempt}/{MAX_GRASP_ATTEMPTS})")
+                    queue_grasp_phase()
+
+            elif phase == PHASE_TRANSIT:
+                print("\n[PHASE] TRANSIT complete")
+                print("[PHASE] → INSERT")
+                phase = PHASE_INSERT
+                queue_insert_phase()
+
+            elif phase == PHASE_INSERT:
+                print("\n[PHASE] INSERT complete")
+                measure_insert_error(block_offset_local)
+                phase = PHASE_DONE
+                print("\n[PHASE] DONE — press Stop to reset and run again")
 
         franka.get_articulation_controller().apply_action(
             controller.forward(joint_pos)
