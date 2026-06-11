@@ -79,6 +79,7 @@ class FrankaLulaController(BaseController):
         joint_interp: bool = False,
         joint_steps: int = 120,
         hold_gripper: bool = False,
+        target_is_hand: bool = False,
         label: str = "",
     ) -> None:
         """Queue a Cartesian goal.
@@ -96,6 +97,11 @@ class FrankaLulaController(BaseController):
         interpolation can preserve the current finger width instead of applying
         squeeze force, and the block can slip during transit.
 
+        target_is_hand=True means position is already a desired hand/end-effector
+        target. Use this when the task script has already converted a desired
+        block-center target into the exact hand target using the measured grasp
+        offset. Leave it False for the older block-center waypoint behavior.
+
         label is an optional string used in debug output to identify waypoints.
         """
         self._command_queue.append({
@@ -110,6 +116,7 @@ class FrankaLulaController(BaseController):
             "joint_interp": joint_interp,
             "joint_steps": joint_steps,
             "hold_gripper": hold_gripper,
+            "target_is_hand": target_is_hand,
             "label": label,
         })
 
@@ -200,6 +207,19 @@ class FrankaLulaController(BaseController):
             [0.0, 0.0, self._tool_offset], dtype=np.float64
         )
 
+    def _goal_hand_from_command(self, current_cmd: dict) -> np.ndarray:
+        """Return the hand target for a command.
+
+        By default, command positions are interpreted as block-center targets and
+        converted using the legacy TOOL_OFFSET behavior. When target_is_hand=True,
+        the command position is already the desired hand target. This is used for
+        high-accuracy insertion after the task script converts the desired block
+        center path using the measured grasp offset.
+        """
+        if current_cmd.get("target_is_hand", False):
+            return np.asarray(current_cmd["pos"], dtype=np.float64)
+        return self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
+
     def _current_hand_pose(self) -> typing.Tuple[np.ndarray, np.ndarray]:
         hand_pos, hand_rot = self._art_kinematics.compute_end_effector_pose()
         hand_quat = rot_matrices_to_quats(hand_rot)
@@ -209,9 +229,17 @@ class FrankaLulaController(BaseController):
 
     def _build_hand_waypoints(self, current_cmd: dict) -> typing.Tuple[np.ndarray, np.ndarray]:
         hand_start_pos, hand_start_quat = self._current_hand_pose()
-        hand_goal_pos = self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
-        block_points = np.stack([hand_start_pos, hand_goal_pos], axis=0)
+        hand_goal_pos = self._goal_hand_from_command(current_cmd)
         orientations = np.stack([hand_start_quat, current_cmd["ori"]], axis=0)
+
+        if current_cmd.get("target_is_hand", False):
+            hand_positions = np.stack([hand_start_pos, hand_goal_pos], axis=0).astype(np.float64)
+            return hand_positions, orientations
+
+        # Preserve legacy behavior for existing grasp/transit waypoints. Those
+        # waypoints were tuned with command positions interpreted as block-center
+        # targets and TOOL_OFFSET conversion inside the controller.
+        block_points = np.stack([hand_start_pos, hand_goal_pos], axis=0)
         hand_positions = np.array(
             [self._hand_from_block(p, orientations[i]) for i, p in enumerate(block_points)],
             dtype=np.float64,
@@ -220,7 +248,7 @@ class FrankaLulaController(BaseController):
 
     def _build_trajectory_for_current_command(self, current_cmd: dict) -> None:
         hand_positions, orientations = self._build_hand_waypoints(current_cmd)
-        self._segment_goal_hand = self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
+        self._segment_goal_hand = self._goal_hand_from_command(current_cmd)
 
         label = current_cmd.get("label", "")
         tag = f" [{label}]" if label else ""
@@ -258,7 +286,7 @@ class FrankaLulaController(BaseController):
 
     def _init_linear_segment(self, current_cmd: dict) -> None:
         start, _ = self._current_hand_pose()
-        goal = self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
+        goal = self._goal_hand_from_command(current_cmd)
         self._segment_goal_hand = goal
         delta = goal - start
         length = float(np.linalg.norm(delta))
@@ -281,6 +309,8 @@ class FrankaLulaController(BaseController):
         action, success = self._art_kinematics.compute_inverse_kinematics(
             target_position=target,
             target_orientation=current_cmd["ori"],
+            position_tolerance=current_cmd.get("pos_tolerance") or self._pos_tolerance,
+            orientation_tolerance=self._ori_tolerance,
         )
         if not success:
             if not self._linear_ik_warned:
@@ -306,7 +336,7 @@ class FrankaLulaController(BaseController):
         the object only needs to get safely to the next area. Final insertion
         should still use linear=True.
         """
-        self._segment_goal_hand = self._hand_from_block(current_cmd["pos"], current_cmd["ori"])
+        self._segment_goal_hand = self._goal_hand_from_command(current_cmd)
         label = current_cmd.get("label", "")
         tag = f" [{label}]" if label else ""
 
@@ -478,6 +508,12 @@ class FrankaLulaController(BaseController):
             return self._hold_action(n_dof)
 
         return self._hold_action(n_dof)
+
+    def current_label(self) -> str:
+        """Return the label of the command currently being executed, if any."""
+        if self.is_done():
+            return ""
+        return str(self._command_queue[self._current_command_index].get("label", ""))
 
     def reset(self) -> None:
         super().reset()
