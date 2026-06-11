@@ -41,41 +41,81 @@ BLOCK_HALF_LENGTH  = 0.025
 FINGER_CONTACT_MIN = BLOCK_HALF_DEPTH - 0.0005
 MAX_GRASP_ATTEMPTS = 2
 
-# How far back from PORT_POSITION to sit before the insert stroke.
-# Change this one number when the port asset defines the approach clearance.
-PRE_INSERT_CLEARANCE = 0.02   # meters
+# =============================================================================
+# TASK CONFIG — CHANGE THESE VALUES FOR EACH BLOCK/PORT
+# =============================================================================
+# The goal of this section is to make the task reusable:
+#   - set where the block starts
+#   - set where the block center should end up
+#   - keep fixed clearances/speeds as reusable policy
+# Everything else is computed from those values.
+
+INSERT_TASKS = [
+    {
+        "name": "demo_block_to_port_A",
+        "block_spawn_position": np.array([0.5, 0.0, 0.025], dtype=np.float64),
+        "port_center_position": np.array([-0.6, 0.0, 0.20], dtype=np.float64),
+        # Direction the block travels during insertion.
+        # Current controller/reporting assumes an X-dominant insertion axis.
+        # Use [-1,0,0] for inserting toward negative X, [1,0,0] for positive X.
+        "insert_axis_world": np.array([-1.0, 0.0, 0.0], dtype=np.float64),
+    },
+
+    # Add more tasks later like this:
+    # {
+    #     "name": "block_to_port_B",
+    #     "block_spawn_position": np.array([0.45, 0.10, 0.025], dtype=np.float64),
+    #     "port_center_position": np.array([-0.62, 0.08, 0.20], dtype=np.float64),
+    #     "insert_axis_world": np.array([-1.0, 0.0, 0.0], dtype=np.float64),
+    # },
+]
+
+ACTIVE_TASK_INDEX = 0
+TASK = INSERT_TASKS[ACTIVE_TASK_INDEX]
+
+BLOCK_SPAWN_POSITION = np.asarray(TASK["block_spawn_position"], dtype=np.float64).copy()
+PORT_POSITION = np.asarray(TASK["port_center_position"], dtype=np.float64).copy()
+INSERT_AXIS_WORLD = np.asarray(TASK["insert_axis_world"], dtype=np.float64).copy()
+INSERT_AXIS_WORLD = INSERT_AXIS_WORLD / np.linalg.norm(INSERT_AXIS_WORLD)
+
+if abs(float(INSERT_AXIS_WORLD[0])) < 0.9:
+    raise ValueError(
+        "This version expects an X-dominant insert axis. "
+        "Use [-1,0,0] or [1,0,0], or refactor the X-band helpers to use full-axis projection."
+    )
+
+# Permanent offsets/policy. These stay the same across ports unless your fixture changes.
+# pre-insert = port center moved backward along the insertion axis by PRE_INSERT_CLEARANCE.
+PRE_INSERT_CLEARANCE = 0.02       # 2 cm away from the final port center; slow insertion begins here
+TRANSIT_STAGING_CLEARANCE = 0.10  # staging point before pre-insert; joint interpolation handles the route
+
+# Grasp/transport policy. These are hand/waypoint heights used before insertion.
+GRASP_APPROACH_Z = 0.20
+GRASP_DESCEND_Z_OFFSET = 0.015    # descend target z = block_spawn_z + this
+TRANSIT_LIFT_Z = 0.20
 
 # Closed-loop insertion servo. Align Y/Z first, then record the true stroke.
 INSERT_ALIGN_TOL = 0.0005        # 0.5 mm before starting the measured stroke
 INSERT_ALIGN_HOLD_FRAMES = 12    # require several stable frames before stroke
 INSERT_ALIGN_MAX_FRAMES = 360
 
-# Adaptive horizontal insertion. No manual short-stop/freeze offsets:
-# X target is the mathematically defined entry edge of the final +/-0.5mm band.
-# The servo keeps moving until the ACTUAL block center enters that band.
+# Final X band and slow insertion. No manual short-stop/freeze offsets:
+# The servo creeps forward until the ACTUAL block center enters this final band.
 FINAL_AXIS_TOL = 0.0005          # +/-0.5 mm acceptable final coordinate band
 FINAL_ENDPOINT_NORM_TOL = 0.001  # final Euclidean error should be <= 1 mm
-INSERT_SERVO_YZ_KP = 1
+INSERT_X_SLOW_STEP = 0.00005     # 0.05 mm/frame ≈ 3 mm/s at 60 Hz
+INSERT_SERVO_YZ_KP = 0.85
 INSERT_SERVO_MAX_CORRECTION = 0.003  # clamp Y/Z feedback to 3 mm
-INSERT_STROKE_MAX_FRAMES = 3000      # safety cap only; should stop by X band, not timeout
-
-# Slow constant-speed insertion. This is a SPEED limit, not a manual endpoint offset.
-# At 60 Hz, 0.00005 m/frame is about 3 mm/sec.
-# From 2 cm away, the measured insertion takes ~6-7 seconds.
-INSERT_X_SLOW_STEP = 0.00005       # 0.05 mm per frame during measured insertion
+INSERT_STROKE_MAX_FRAMES = 5000      # safety cap only; should stop by X band, not timeout
 
 # Final endpoint seating after the measured horizontal stroke. X is never pushed
 # once the actual block center is inside the +/-0.5mm target band. The seat phase
 # only corrects Y/Z while holding the measured X.
 ENDPOINT_SEAT_TOL = 0.0005          # 0.5 mm per axis before considering stable
-ENDPOINT_SEAT_HOLD_FRAMES = 15      # require stability, not one lucky frame
-ENDPOINT_SEAT_MAX_FRAMES = 240
-ENDPOINT_SEAT_KP = 0.90
-ENDPOINT_SEAT_MAX_CORRECTION = 0.002  # 2 mm clamp for gentle final Y/Z correction
-
-# PORT_POSITION is the target BLOCK CENTER at insert.
-# TODO: replace with port.get_world_pose()[0] when asset is ready.
-PORT_POSITION = np.array([-0.6, 0.0, 0.20])
+ENDPOINT_SEAT_HOLD_FRAMES = 10      # shorter seat: do not let Y/Z cleanup shove X deeper
+ENDPOINT_SEAT_MAX_FRAMES = 120
+ENDPOINT_SEAT_KP = 0.70
+ENDPOINT_SEAT_MAX_CORRECTION = 0.001  # 1 mm clamp for gentler final Y/Z correction
 
 DOWN_ORI   = np.array([0.0, 1.0, 0.0, 0.0])
 INSERT_ORI = np.array([-0.7071068, 0.0, 0.7071068, 0.0])
@@ -153,7 +193,7 @@ franka = world.scene.add(
 block = world.scene.add(
     DynamicCuboid(
         name="block",
-        position=np.array([0.5, 0.0, 0.025]),
+        position=BLOCK_SPAWN_POSITION,
         prim_path="/World/Block",
         size=1.0,
         scale=np.array([0.004, 0.008, 0.050]),
@@ -218,6 +258,63 @@ insert_servo = {
 
 def _sep(char="-", width=60):
     return char * width
+
+
+def point_before_port(clearance):
+    """Block-center point before the port along the approach side.
+
+    If INSERT_AXIS_WORLD is [-1, 0, 0] and PORT_POSITION is [-0.6, 0, 0.2],
+    then point_before_port(0.02) returns [-0.58, 0, 0.2].
+    """
+    return PORT_POSITION - INSERT_AXIS_WORLD * float(clearance)
+
+
+def grasp_approach_position():
+    return np.array([
+        BLOCK_SPAWN_POSITION[0],
+        BLOCK_SPAWN_POSITION[1],
+        GRASP_APPROACH_Z,
+    ], dtype=np.float64)
+
+
+def grasp_descend_position():
+    return np.array([
+        BLOCK_SPAWN_POSITION[0],
+        BLOCK_SPAWN_POSITION[1],
+        BLOCK_SPAWN_POSITION[2] + GRASP_DESCEND_Z_OFFSET,
+    ], dtype=np.float64)
+
+
+def transit_lift_position():
+    return np.array([
+        BLOCK_SPAWN_POSITION[0],
+        BLOCK_SPAWN_POSITION[1],
+        TRANSIT_LIFT_Z,
+    ], dtype=np.float64)
+
+
+def transit_staging_block_center():
+    return point_before_port(TRANSIT_STAGING_CLEARANCE)
+
+
+def pre_insert_block_center():
+    return point_before_port(PRE_INSERT_CLEARANCE)
+
+
+def print_task_plan():
+    print(f"\n{_sep('=')}")
+    print(f"[TASK CONFIG] {TASK['name']}")
+    print(f"  block_spawn_position:       {np.round(BLOCK_SPAWN_POSITION, 4)}")
+    print(f"  port_center_position:       {np.round(PORT_POSITION, 4)}")
+    print(f"  insert_axis_world:          {np.round(INSERT_AXIS_WORLD, 4)}")
+    print(f"  grasp_approach_position:    {np.round(grasp_approach_position(), 4)}")
+    print(f"  grasp_descend_position:     {np.round(grasp_descend_position(), 4)}")
+    print(f"  transit_lift_position:      {np.round(transit_lift_position(), 4)}")
+    print(f"  transit_staging_center:     {np.round(transit_staging_block_center(), 4)}")
+    print(f"  pre_insert_block_center:    {np.round(pre_insert_block_center(), 4)}")
+    print(f"  final_block_center:         {np.round(PORT_POSITION, 4)}")
+    print(f"  slow_insert_step:           {INSERT_X_SLOW_STEP*1000:.3f} mm/frame")
+    print(_sep('='))
 
 
 def _get_hand_pose():
@@ -528,78 +625,61 @@ def measure_insert_error(offset_local):
 
 def queue_grasp_phase():
     controller.clear_queue()
+    controller.add_gripper_command(action="open",  wait_frames=30)
     controller.add_cartesian_waypoint(
-        position=np.array([0.5, 0.0, 0.20]),
+        position=grasp_approach_position(),
         orientation=DOWN_ORI,
         pos_tolerance=0.05,
         label="approach_above",
     )
     controller.add_cartesian_waypoint(
-        position=np.array([0.5, 0.0, 0.04]),
+        position=grasp_descend_position(),
         orientation=DOWN_ORI,
         pos_tolerance=0.001,
         label="descend_to_block",
     )
-    controller.add_gripper_command(action="open",  wait_frames=30)
     controller.add_gripper_command(action="close", wait_frames=90)
 
 
 def queue_transit_phase():
-    """
-    Reliable baseline transport.
+    """Reliable baseline transport computed from the active task.
 
-    Transport does not need a Cartesian-straight path. The old failing warning
-    came from asking Lula to convert the edge-of-workspace neg_x_side segment.
-    The blended slerp version then failed near the end because it forced a
-    continuous Cartesian pose path through an awkward wrist region.
-
-    This version keeps the route that actually picks up and carries the block,
-    but uses joint-space interpolation for the transit/reorientation pieces.
-    That bypasses Lula without forcing per-frame Cartesian IK through the wrist
-    singularity. The final insert stroke remains linear=True in queue_insert_phase(block_offset_local).
+    We no longer hardcode [-0.5, 0, 0.20]. The negative/positive X staging
+    point is computed from the final port center and TRANSIT_STAGING_CLEARANCE.
+    Joint interpolation is allowed to choose the detour automatically.
     """
     controller.clear_queue()
 
+    staging_center = transit_staging_block_center()
+
     controller.add_cartesian_waypoint(
-        position=np.array([0.5, 0.0, 0.20]),
+        position=transit_lift_position(),
         orientation=DOWN_ORI,
         pos_tolerance=0.001,
         hold_gripper=True,
         label="lift",
     )
 
-    # controller.add_cartesian_waypoint(
-    #     position=np.array([0.0, 0.5, 0.20]),
-    #     orientation=DOWN_ORI,
-    #     pos_tolerance=0.001,
-    #     hold_gripper=True,
-    #     label="y_detour",
-    # )
-
-    # Transport: smooth joint-space move to the negative-X side.
-    # No Lula. No Cartesian straight-line requirement. Keeps the grasp stable.
     controller.add_cartesian_waypoint(
-        position=np.array([-0.5, 0.0, 0.20]),
+        position=staging_center,
         orientation=DOWN_ORI,
         pos_tolerance=0.003,
         joint_interp=True,
         joint_steps=260,
         max_frames=320,
         hold_gripper=True,
-        label="neg_x_side_joint",
+        label="task_staging_joint",
     )
 
-    # Reorientation is also a transport/setup action, not the insert stroke.
-    # Smooth it in joint space to avoid wrist snapping / branch flipping.
     controller.add_cartesian_waypoint(
-        position=np.array([-0.5, 0.0, 0.20]),
+        position=staging_center,
         orientation=INSERT_ORI,
         pos_tolerance=0.003,
         joint_interp=True,
         joint_steps=220,
         max_frames=280,
         hold_gripper=True,
-        label="reorient_joint",
+        label="task_reorient_joint",
     )
 
 
@@ -613,11 +693,11 @@ def queue_pre_insert_phase(offset_local):
     """
     controller.clear_queue()
 
-    pre_insert_block_center = PORT_POSITION + np.array([PRE_INSERT_CLEARANCE, 0.0, 0.0])
+    pre_insert_center = pre_insert_block_center()
     final_block_center = PORT_POSITION.copy()
 
     pre_insert_hand = hand_target_for_block_center(
-        pre_insert_block_center,
+        pre_insert_center,
         INSERT_ORI,
         offset_local,
     )
@@ -629,12 +709,12 @@ def queue_pre_insert_phase(offset_local):
 
     print(f"\n{_sep()}")
     print("[INSERT TARGETS]")
-    print(f"  pre_insert_block_center: {np.round(pre_insert_block_center, 4)}")
+    print(f"  pre_insert_block_center: {np.round(pre_insert_center, 4)}")
     print(f"  final_block_center:      {np.round(final_block_center, 4)}")
     print(f"  pre_insert_hand:         {np.round(pre_insert_hand, 4)}")
     print(f"  final_insert_hand:       {np.round(final_insert_hand, 4)}")
-    print("  horizontal axis:         negative X, constant Y/Z")
-    print("  control mode:            closed-loop Y/Z servo + super-slow X insertion")
+    print(f"  insert_axis_world:       {np.round(INSERT_AXIS_WORLD, 4)}")
+    print("  control mode:            slow closed-loop insert; stop when actual block enters final band")
     print(_sep())
 
     controller.add_cartesian_waypoint(
@@ -676,7 +756,7 @@ def init_insert_servo():
         'seat_frames': 0,
         'seat_stable_frames': 0,
         'start_x': float(actual_block_center[0]),
-        'x_direction': float(np.sign(PORT_POSITION[0] - actual_block_center[0])) if abs(PORT_POSITION[0] - actual_block_center[0]) > 1e-9 else -1.0,
+        'x_direction': float(np.sign(INSERT_AXIS_WORLD[0])),
         'max_x_overshoot': 0.0,
         'stopped_by_target_plane': False,
         'warned_ik': False,
@@ -686,8 +766,8 @@ def init_insert_servo():
     print(f"  actual_start_block_center: {np.round(actual_block_center, 4)}")
     print(f"  align target Y/Z:          y={PORT_POSITION[1]:.4f}, z={PORT_POSITION[2]:.4f}")
     print(f"  final X target band:       [{_x_far_band_edge():.4f}, {_x_near_band_edge():.4f}] (±{FINAL_AXIS_TOL*1000:.1f}mm)")
-    print(f"  slow insert X step:        {INSERT_X_SLOW_STEP*1000:.3f} mm/frame")
-    print("  control rule:              slow constant X step; stop when actual block enters band")
+    print(f"  slow insert step:          {INSERT_X_SLOW_STEP*1000:.3f} mm/frame")
+    print("  control rule:              creep forward; stop when actual block enters final X band")
     print("  NOTE: alignment frames are not counted as insertion path samples")
     print(_sep())
 
@@ -703,16 +783,15 @@ def _clamp_endpoint_correction(value):
 def _insert_direction():
     """Return +1 or -1 for the insertion direction along world X.
 
-    For the current task, start_x is greater than PORT_POSITION[0], so the
-    direction is -1. This helper keeps the no-overshoot logic explicit and
-    reusable if you later insert along +X.
+    Direction is taken from INSERT_AXIS_WORLD. Current code supports X-dominant
+    insertion axes, so this returns -1 for [-1,0,0] and +1 for [1,0,0].
     """
     d = insert_servo.get('x_direction', None)
     if d is None or abs(float(d)) < 1e-9:
         start_x = insert_servo.get('start_x', None)
         if start_x is None:
-            return -1.0 if PORT_POSITION[0] < 0.0 else 1.0
-        d = np.sign(float(PORT_POSITION[0]) - float(start_x))
+            return float(np.sign(INSERT_AXIS_WORLD[0]))
+        d = np.sign(float(INSERT_AXIS_WORLD[0]))
         if abs(float(d)) < 1e-9:
             d = -1.0
     return float(d)
@@ -825,9 +904,10 @@ def _servo_target_block_center(actual_block_center):
         return target, port_err
 
     # True insertion stroke:
-    # Move at a deliberately slow constant X step until the ACTUAL block center
-    # enters the +/-0.5mm final X band. This avoids the previous behavior where
-    # the controller aimed directly at the band entry and moved too fast.
+    # Move slowly from the pre-insert point toward the final X band. Do not aim
+    # directly at the final band; that arrives fast but disturbs Y/Z. Instead,
+    # command a tiny X advance every frame and automatically shrink the final
+    # step so we never intentionally command past the near edge of the band.
     if _x_in_target_band(actual_block_center[0]):
         target_x = float(actual_block_center[0])  # freeze X once actually in band
     else:
@@ -845,7 +925,7 @@ def _servo_target_block_center(actual_block_center):
     err = desired - actual_block_center
 
     correction = np.array([
-        0.0,  # X is controlled only by the slow step above; no aggressive X correction.
+        0.0,  # X correction is handled by adaptive braking above.
         _clamp_correction(INSERT_SERVO_YZ_KP * err[1]),
         _clamp_correction(INSERT_SERVO_YZ_KP * err[2]),
     ], dtype=np.float64)
@@ -1052,6 +1132,7 @@ reset_needed       = False
 
 run_count += 1
 print_run_banner(run_count)
+print_task_plan()
 queue_grasp_phase()
 
 # =============================================================================
@@ -1068,6 +1149,7 @@ while simulation_app.is_running():
         if reset_needed:
             run_count += 1
             print_run_banner(run_count)
+            print_task_plan()
             world.reset()
             controller.reset()
             lula_kinematics.set_robot_base_pose(*franka.get_world_pose())
