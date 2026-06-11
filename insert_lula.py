@@ -32,9 +32,13 @@ from franka_lula_controller import FrankaLulaController
 DEBUG = True
 TOOL_OFFSET = 0.05
 
+# Block dimensions from scale=[0.004, 0.008, 0.050].
+# The gripper appears to be grasping across the 8mm side, so each finger
+# should stop around 4mm from center when there is real contact.
 BLOCK_HALF_WIDTH   = 0.002
+BLOCK_HALF_DEPTH   = 0.004
 BLOCK_HALF_LENGTH  = 0.025
-FINGER_CONTACT_MIN = BLOCK_HALF_WIDTH - 0.001
+FINGER_CONTACT_MIN = BLOCK_HALF_DEPTH - 0.0005
 MAX_GRASP_ATTEMPTS = 2
 
 # How far back from PORT_POSITION to sit before the insert stroke.
@@ -191,6 +195,7 @@ def check_grasp():
     print(f"  finger_1:      {f1*1000:.3f} mm")
     print(f"  finger_2:      {f2*1000:.3f} mm")
     print(f"  contact_min:   {FINGER_CONTACT_MIN*1000:.3f} mm")
+    print(f"  total_gap:     {(f1 + f2)*1000:.3f} mm")
     print(f"  fully_closed:  {closed*1000:.1f} mm")
     ok = f1 >= FINGER_CONTACT_MIN and f2 >= FINGER_CONTACT_MIN
     if ok:
@@ -226,6 +231,32 @@ def compute_and_log_block_offset():
         print(f"    max_deviation={np.max(np.linalg.norm(arr - arr.mean(axis=0), axis=1))*1000:.2f}mm")
     print(_sep())
     return offset_local
+
+
+def check_block_still_held(offset_local, label="HOLD CHECK"):
+    """Compare actual block pose to the rigid-body estimate from the hand pose."""
+    block_pos = np.asarray(block.get_world_pose()[0], dtype=np.float64).flatten()
+    hand_pos, hand_rot = _get_hand_pose()
+    est_block_center = hand_pos + hand_rot @ offset_local
+    err = float(np.linalg.norm(block_pos - est_block_center))
+    fingers = franka.gripper.get_joint_positions()
+
+    print(f"\n{_sep()}")
+    print(f"[{label}]")
+    print(f"  actual_block:      {np.round(block_pos, 4)}")
+    print(f"  estimated_block:   {np.round(est_block_center, 4)}")
+    print(f"  block_hold_error:  {err*1000:.2f} mm")
+    if fingers is not None:
+        f1, f2 = float(fingers[0]), float(fingers[1])
+        print(f"  finger_1:          {f1*1000:.3f} mm")
+        print(f"  finger_2:          {f2*1000:.3f} mm")
+        print(f"  total_gap:         {(f1 + f2)*1000:.3f} mm")
+    if err > 0.015:
+        print("  RESULT: ✗ block moved relative to hand — grasp slipped/dropped")
+    else:
+        print("  RESULT: ✓ block still matches hand-frame offset")
+    print(_sep())
+    return err < 0.015
 
 
 def measure_insert_error(offset_local):
@@ -281,42 +312,60 @@ def queue_grasp_phase():
 
 def queue_transit_phase():
     """
-    This route was empirically working before. Keep it.
+    Reliable baseline transport.
 
-    The Y-detour through [0, 0.5, 0.2] is not cosmetic — it keeps the arm
-    in a joint configuration where INSERT_ORI is reachable at the negative-X
-    workspace edge. Without it (going straight to [-0.5, 0, 0.2]), the arm
-    arrives in a joint config where the wrist can't rotate to INSERT_ORI.
+    Transport does not need a Cartesian-straight path. The old failing warning
+    came from asking Lula to convert the edge-of-workspace neg_x_side segment.
+    The blended slerp version then failed near the end because it forced a
+    continuous Cartesian pose path through an awkward wrist region.
 
-    Lula may fail on the [-0.5, 0, 0.2] DOWN_ORI segment (workspace edge),
-    but the IK fallback lands close enough. The orientation change at that
-    position (same XYZ, only rotation) Lula handles fine.
+    This version keeps the route that actually picks up and carries the block,
+    but uses joint-space interpolation for the transit/reorientation pieces.
+    That bypasses Lula without forcing per-frame Cartesian IK through the wrist
+    singularity. The final insert stroke remains linear=True in queue_insert_phase().
     """
     controller.clear_queue()
+
     controller.add_cartesian_waypoint(
         position=np.array([0.5, 0.0, 0.20]),
         orientation=DOWN_ORI,
         pos_tolerance=0.001,
+        hold_gripper=True,
         label="lift",
     )
+
     controller.add_cartesian_waypoint(
         position=np.array([0.0, 0.5, 0.20]),
         orientation=DOWN_ORI,
         pos_tolerance=0.001,
+        hold_gripper=True,
         label="y_detour",
     )
+
+    # Transport: smooth joint-space move to the negative-X side.
+    # No Lula. No Cartesian straight-line requirement. Keeps the grasp stable.
     controller.add_cartesian_waypoint(
         position=np.array([-0.5, 0.0, 0.20]),
         orientation=DOWN_ORI,
-        pos_tolerance=0.001,
-        label="neg_x_side",
+        pos_tolerance=0.003,
+        joint_interp=True,
+        joint_steps=260,
+        max_frames=320,
+        hold_gripper=True,
+        label="neg_x_side_joint",
     )
-    # Change orientation at the same position — reachable here after the Y-detour
+
+    # Reorientation is also a transport/setup action, not the insert stroke.
+    # Smooth it in joint space to avoid wrist snapping / branch flipping.
     controller.add_cartesian_waypoint(
         position=np.array([-0.5, 0.0, 0.20]),
         orientation=INSERT_ORI,
-        pos_tolerance=0.001,
-        label="reorient",
+        pos_tolerance=0.003,
+        joint_interp=True,
+        joint_steps=220,
+        max_frames=280,
+        hold_gripper=True,
+        label="reorient_joint",
     )
 
 
@@ -337,6 +386,7 @@ def queue_insert_phase():
         position=pre_insert_pos,
         orientation=INSERT_ORI,
         pos_tolerance=0.002,
+        hold_gripper=True,
         label="pre_insert",
     )
     controller.add_cartesian_waypoint(
@@ -346,6 +396,7 @@ def queue_insert_phase():
         linear=True,
         linear_step=0.001,
         max_frames=400,
+        hold_gripper=True,
         label="insert_stroke",
     )
     controller.add_gripper_command(action="open", wait_frames=60)
@@ -411,6 +462,11 @@ while simulation_app.is_running():
 
             elif phase == PHASE_TRANSIT:
                 print("\n[PHASE] TRANSIT complete")
+                if block_offset_local is not None:
+                    still_held = check_block_still_held(block_offset_local, label="POST-TRANSIT HOLD CHECK")
+                    if not still_held:
+                        print("[PHASE] Block slipped during transit. HALTING before insert.")
+                        break
                 print("[PHASE] → INSERT")
                 phase = PHASE_INSERT
                 queue_insert_phase()
