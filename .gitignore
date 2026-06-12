@@ -1,5 +1,3 @@
-current/__pycache__
+__pycache__/
 .venv
 .cursorignore
-current
-__pycache__
