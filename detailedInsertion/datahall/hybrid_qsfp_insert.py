@@ -8,7 +8,6 @@ import sys
 
 import carb
 import numpy as np
-import omni.timeline
 import omni.usd
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import FixedCuboid
@@ -49,21 +48,20 @@ from qsfp_module import (
 
 
 # =============================================================================
-# ONE-PORT HYBRID V1
+# STABLE MULTI-QSFP INSERT
 # =============================================================================
 #
-# Goal:
-#   Use the OLD scene / DataHall / PortFrame / QSFP module infrastructure,
-#   but use the NEW block_insert-style execution:
-#       1. pick
-#       2. measure hand->module offset after grasp
-#       3. carry to one port
-#       4. align lateral error
-#       5. crawl along the real port insert axis
-#       6. hold for inspection
+# Stable path strategy:
+#   1. Pick a QSFP module from the table.
+#   2. Measure the hand-to-module offset after grasp.
+#   3. Move to a far slide lane away from the ports.
+#   4. Match the final align X/Z first.
+#   5. Slide horizontally in Y at the far offset.
+#   6. Advance straight to the final align standoff.
+#   7. Use the insert servo to crawl along the true port insertion axis.
 #
-# This is intentionally one port / one module. Do not make this multi-job until
-# the single insertion is stable.
+# Keep this file as the baseline. Make experimental copies instead of editing this
+# motion logic directly.
 
 
 # =============================================================================
@@ -79,9 +77,7 @@ DATAHALL_USD = (
 )
 DATAHALL_SCALE = 2.0
 
-# Two sequential insert jobs.
-# Job 0 is the port that already worked.
-# Job 1 is the new port requested by the user.
+# Sequential insert jobs.
 INSERT_JOBS = [
     {
         "label": "port_0",
@@ -104,7 +100,7 @@ INSERT_JOBS = [
             "pcb003636_idf_01/Connector_Quad_04/Connector_Pair_01/"
             "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
-        # Starting value copied from the old two-port setup. Tune only if port 1 is visibly off.
+        # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
         "pick_xy": np.array([0.38, 0.15], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_1",
@@ -118,7 +114,7 @@ INSERT_JOBS = [
             "pcb003636_idf_01/Connector_Quad_03/Connector_Pair_01/"
             "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
-        # Starting value copied from the old two-port setup. Tune only if port 1 is visibly off.
+        # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
         "pick_xy": np.array([0.46, 0.15], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_2",
@@ -132,7 +128,7 @@ INSERT_JOBS = [
             "pcb003636_idf_01/Connector_Quad_03/Connector_Pair_03/"
             "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
-        # Starting value copied from the old two-port setup. Tune only if port 1 is visibly off.
+        # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
         "pick_xy": np.array([0.52, 0.15], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_3",
@@ -154,7 +150,6 @@ PICK_SURFACE_Z = TABLE_HEIGHT + QSFP_LENGTH_M / 2.0
 PHYSICS_DT = 1.0 / 120.0
 RENDERING_DT = 1.0 / 30
 POST_RESET_WARMUP_FRAMES = 20
-SETTLE_FRAMES_BEFORE_PICK = 20
 
 TOOL_OFFSET = grasp_tool_offset()
 
@@ -176,14 +171,8 @@ LINEUP_PORT_OFFSET_M = 0.2
 # After the Y slide, it moves straight forward to LINEUP_PORT_OFFSET_M.
 HORIZONTAL_SLIDE_PORT_OFFSET_M = 0.35
 
-# Internal approach distance behind the lineup point.
-# Usually leave this alone. It gives the robot a short straight-in path before insertion.
-PRE_LINEUP_BACKOFF_M = 0.055
-
 # Derived values used by the controller.
-TRANSIT_STANDOFF = LINEUP_PORT_OFFSET_M + PRE_LINEUP_BACKOFF_M
 ALIGN_STANDOFF = LINEUP_PORT_OFFSET_M
-PRE_ALIGN_STANDOFF = LINEUP_PORT_OFFSET_M + PRE_LINEUP_BACKOFF_M
 PRE_ALIGN_LINEAR_STEP = 0.0025
 
 # Table / carry-height clearance.
@@ -220,19 +209,17 @@ INSERT_MAX_IK_FAILS = 60
 # Keep the run open when done.
 HOLD_FOR_INSPECTION = True
 
-# v3: release the module after the insert servo stops.
-# No retreat yet. The arm stays where it is and only the fingers open.
+# Release the module after the insert servo stops.
 RELEASE_AFTER_INSERT = True
 RELEASE_GRIPPER_FRAMES = 70
 
-# v4: practical seat criteria.
-# The visual/physical port blocks the module before the aggressive geometric target.
-# Stop as soon as the leading tip is just past the port face and lateral error is acceptable.
+# Practical seat criteria.
+# Stop when the leading tip is past the port face and lateral error is acceptable.
 SEAT_SUCCESS_TIP_AXIAL_M = 0.005
 SEAT_SUCCESS_LATERAL_TOL_M = 0.003
 SEAT_SUCCESS_HOLD_FRAMES = 8
 
-# v5: after release, pull the open gripper straight back out along the port axis.
+# After release, pull the open gripper straight back out along the port axis.
 RETREAT_AFTER_RELEASE = True
 RETREAT_DISTANCE_M = 0.125
 RETREAT_LINEAR_STEP = 0.002
@@ -286,7 +273,7 @@ def hand_target_for_module_center(module_center: np.ndarray, orientation_wxyz: n
 
 
 def compute_grasp_offset_local():
-    module_pos, module_quat = get_module_pose()
+    module_pos, _ = get_module_pose()
     hand_pos, hand_rot = get_hand_pose()
     offset_world = module_pos - hand_pos
     offset_local = hand_rot.T @ offset_world
@@ -481,9 +468,9 @@ def queue_transit_phase(offset_local):
     module_pos, _ = get_module_pose()
     insert_ori = port_frame.insert_rot
 
-    # v26:
-    # Same path idea as v25, but the horizontal slide now happens farther away
-    # from the ports using HORIZONTAL_SLIDE_PORT_OFFSET_M.
+    # Stable path:
+    # The horizontal slide happens away from the ports using
+    # HORIZONTAL_SLIDE_PORT_OFFSET_M.
     #
     # Path:
     #   1. lift safely
@@ -1089,7 +1076,7 @@ controller = FrankaMotionController(
 
 print("\n" + sep("="))
 print("[READY] Press Play.")
-print("  v26 scope: adjustable far horizontal-slide offset, then straight advance to align.")
+print("  stable scope: far horizontal-slide alignment, then straight advance and insert.")
 print("  This uses measured hand->module offset after grasp and a slow axis servo for insertion.")
 print("  After each insert, it opens the gripper, retreats straight back, then starts the next job.")
 print(sep("="))
@@ -1101,12 +1088,9 @@ print(sep("="))
 
 phase = PHASE_WAITING
 warmup_frames = POST_RESET_WARMUP_FRAMES
-settle_frames = 0
 block_offset_local = None
 was_playing = False
-insert_finished = False
 
-timeline = omni.timeline.get_timeline_interface()
 
 while simulation_app.is_running():
     playing = my_world.is_playing()
@@ -1121,7 +1105,6 @@ while simulation_app.is_running():
         set_active_job(0)
         phase = PHASE_WARMUP
         warmup_frames = POST_RESET_WARMUP_FRAMES
-        settle_frames = 0
         was_playing = True
 
     if phase == PHASE_WARMUP:
