@@ -5,6 +5,7 @@ simulation_app = SimulationApp({"headless": False})
 
 import os
 import sys
+import builtins
 
 import carb
 import numpy as np
@@ -68,8 +69,15 @@ from qsfp_module import (
 # CONFIG
 # =============================================================================
 
-DEBUG = True
+DEBUG = False
 VIEWPORT_CAMERA = True
+VERBOSE_LOGS = False
+
+
+def log(*args, **kwargs):
+    if VERBOSE_LOGS:
+        builtins.print(*args, **kwargs)
+
 
 DATAHALL_USD = (
     "/home/aayush/isaacsim_assets/datacenter/Assets/DigitalTwin"
@@ -88,7 +96,7 @@ INSERT_JOBS = [
             "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
         "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
-        "pick_xy": np.array([0.30, 0.15], dtype=np.float64),
+        "pick_xy": np.array([0.30, 0.25], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_0",
         "module_name": "qsfp_module_0",
     },
@@ -102,7 +110,7 @@ INSERT_JOBS = [
         ),
         # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
-        "pick_xy": np.array([0.38, 0.15], dtype=np.float64),
+        "pick_xy": np.array([0.38, 0.25], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_1",
         "module_name": "qsfp_module_1",
     },
@@ -116,7 +124,7 @@ INSERT_JOBS = [
         ),
         # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
-        "pick_xy": np.array([0.46, 0.15], dtype=np.float64),
+        "pick_xy": np.array([0.46, 0.25], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_2",
         "module_name": "qsfp_module_2",
     },    
@@ -130,7 +138,7 @@ INSERT_JOBS = [
         ),
         # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
-        "pick_xy": np.array([0.52, 0.15], dtype=np.float64),
+        "pick_xy": np.array([0.54, 0.25], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_3",
         "module_name": "qsfp_module_3",
     },   
@@ -143,7 +151,7 @@ INSERT_LOCAL_AXIS = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 # Raise the table/robot base so the Franka keeps roughly the same vertical reach relationship.
 TABLE_HEIGHT = 3
 TABLE_THICKNESS = 0.05
-ROBOT_BASE_POS = np.array([0.55, -0.25, TABLE_HEIGHT], dtype=np.float64)
+ROBOT_BASE_POS = np.array([0.55, -0.15, TABLE_HEIGHT], dtype=np.float64)
 PICK_XY = INSERT_JOBS[0]["pick_xy"].copy()
 PICK_SURFACE_Z = TABLE_HEIGHT + QSFP_LENGTH_M / 2.0
 
@@ -196,7 +204,7 @@ INSERT_ALIGN_MAX_FRAMES = 240
 INSERT_ALIGN_PROCEED_TOL = 0.0040
 INSERT_STROKE_STEP = 0.0020
 # Allow more time because the physical module moves slower than the commanded crawl near contact.
-INSERT_STROKE_MAX_FRAMES = 3200
+INSERT_STROKE_MAX_FRAMES = 300
 # Let the commanded target get ahead of the measured module center. Without this,
 # the servo only asks for 1 mm past the current pose, so once contact/friction
 # resists motion it stalls instead of pushing through.
@@ -222,8 +230,14 @@ SEAT_SUCCESS_HOLD_FRAMES = 8
 # After release, pull the open gripper straight back out along the port axis.
 RETREAT_AFTER_RELEASE = True
 RETREAT_DISTANCE_M = 0.125
+
+# Extra straight pullback after insertion/release.
+# Increase this if the gripper still feels too close to the seated module/port.
+# Example: 0.025 = 2.5 cm extra, 0.050 = 5 cm extra.
+EXTRA_RETREAT_AFTER_INSERT_M = 0.125
+
 RETREAT_LINEAR_STEP = 0.002
-RETREAT_MAX_FRAMES = 220
+RETREAT_MAX_FRAMES = 260
 
 
 PHASE_WAITING = "waiting"
@@ -278,14 +292,14 @@ def compute_grasp_offset_local():
     offset_world = module_pos - hand_pos
     offset_local = hand_rot.T @ offset_world
 
-    print("\n" + sep())
-    print("[GRASP OFFSET - MEASURED]")
-    print(f"  module_world:  {np.round(module_pos, 5)}")
-    print(f"  hand_world:    {np.round(hand_pos, 5)}")
-    print(f"  offset_world:  {np.round(offset_world, 5)}")
-    print(f"  offset_local:  {np.round(offset_local, 5)}")
-    print(f"  magnitude_mm:  {np.linalg.norm(offset_local) * 1000.0:.2f}")
-    print(sep())
+    log("\n" + sep())
+    log("[GRASP OFFSET - MEASURED]")
+    log(f"  module_world:  {np.round(module_pos, 5)}")
+    log(f"  hand_world:    {np.round(hand_pos, 5)}")
+    log(f"  offset_world:  {np.round(offset_world, 5)}")
+    log(f"  offset_local:  {np.round(offset_local, 5)}")
+    log(f"  magnitude_mm:  {np.linalg.norm(offset_local) * 1000.0:.2f}")
+    log(sep())
 
     return offset_local
 
@@ -294,7 +308,7 @@ def check_grasp():
     fingers = my_franka.gripper.get_joint_positions()
     module_pos, _ = get_module_pose()
     if fingers is None:
-        print("[GRASP CHECK] Cannot read finger positions.")
+        log("[GRASP CHECK] Cannot read finger positions.")
         return False
     fingers = np.asarray(fingers, dtype=np.float64).flatten()
 
@@ -303,13 +317,13 @@ def check_grasp():
     total_gap_mm = float(np.sum(fingers) * 1000.0)
     ok = total_gap_mm > 2.2
 
-    print("\n" + sep())
-    print("[GRASP CHECK]")
-    print(f"  fingers_mm:      {np.round(fingers * 1000.0, 3)}")
-    print(f"  total_gap_mm:    {total_gap_mm:.3f}")
-    print(f"  module_center:   {np.round(module_pos, 5)}")
-    print("  RESULT:          " + ("OK - contact likely" if ok else "BAD - likely missed / too closed"))
-    print(sep())
+    log("\n" + sep())
+    log("[GRASP CHECK]")
+    log(f"  fingers_mm:      {np.round(fingers * 1000.0, 3)}")
+    log(f"  total_gap_mm:    {total_gap_mm:.3f}")
+    log(f"  module_center:   {np.round(module_pos, 5)}")
+    log("  RESULT:          " + ("OK - contact likely" if ok else "BAD - likely missed / too closed"))
+    log(sep())
     return ok
 
 
@@ -332,7 +346,7 @@ def build_work_table(world):
             visible=True,
         )
     )
-    print(f"[TABLE] center={np.round(position, 4)} scale={np.round(scale, 4)} top_z={TABLE_HEIGHT}")
+    log(f"[TABLE] center={np.round(position, 4)} scale={np.round(scale, 4)} top_z={TABLE_HEIGHT}")
 
 
 def build_port_frame(job_index):
@@ -352,14 +366,14 @@ def build_port_frame(job_index):
     if port is None:
         raise RuntimeError(f"Could not build PortFrame for job {job_index}: {prim_path}")
 
-    print("\n" + sep("="))
-    print(f"[PORT FRAME job={job_index}] {job['label']}")
-    print(f"  prim:          {prim_path}")
-    print(f"  insert_origin: {np.round(port.insert_origin, 5)}")
-    print(f"  insert_axis:   {np.round(port.insert_axis, 5)}")
-    print(f"  insert_rot:    {np.round(port.insert_rot, 5)}")
-    print(f"  lateral_offset:{np.round(lateral_offset, 5)}")
-    print(sep("="))
+    log("\n" + sep("="))
+    log(f"[PORT FRAME job={job_index}] {job['label']}")
+    log(f"  prim:          {prim_path}")
+    log(f"  insert_origin: {np.round(port.insert_origin, 5)}")
+    log(f"  insert_axis:   {np.round(port.insert_axis, 5)}")
+    log(f"  insert_rot:    {np.round(port.insert_rot, 5)}")
+    log(f"  lateral_offset:{np.round(lateral_offset, 5)}")
+    log(sep("="))
     return port
 
 
@@ -373,21 +387,21 @@ def set_active_job(job_index):
 
     block_offset_local = None
 
-    print("\n" + sep("#"))
-    print(f"[ACTIVE JOB] {active_job_index + 1}/{len(INSERT_JOBS)}: {INSERT_JOBS[active_job_index]['label']}")
-    print(f"  pick_xy:     {np.round(PICK_XY, 5)}")
-    print(f"  module_path: {INSERT_JOBS[active_job_index]['module_prim_path']}")
-    print(f"  port_origin: {np.round(port_frame.insert_origin, 5)}")
-    print(sep("#"))
+    log("\n" + sep("#"))
+    log(f"[ACTIVE JOB] {active_job_index + 1}/{len(INSERT_JOBS)}: {INSERT_JOBS[active_job_index]['label']}")
+    log(f"  pick_xy:     {np.round(PICK_XY, 5)}")
+    log(f"  module_path: {INSERT_JOBS[active_job_index]['module_prim_path']}")
+    log(f"  port_origin: {np.round(port_frame.insert_origin, 5)}")
+    log(sep("#"))
 
 
 def start_next_job_or_finish():
     next_index = active_job_index + 1
     if next_index >= len(INSERT_JOBS):
-        print("\n" + sep("="))
-        print("[ALL JOBS COMPLETE]")
-        print(f"  completed_jobs: {len(INSERT_JOBS)}")
-        print(sep("="))
+        log("\n" + sep("="))
+        log("[ALL JOBS COMPLETE]")
+        log(f"  completed_jobs: {len(INSERT_JOBS)}")
+        log(sep("="))
         return False
 
     set_active_job(next_index)
@@ -423,13 +437,13 @@ def queue_pick_phase():
     pick_grasp = np.array([PICK_XY[0], PICK_XY[1], pick_grasp_z], dtype=np.float64)
     pick_lift = np.array([PICK_XY[0], PICK_XY[1], pick_lift_z], dtype=np.float64)
 
-    print("\n" + sep("="))
-    print(f"[QUEUE PICK job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
-    print(f"  pick_hover: {np.round(pick_hover, 5)}")
-    print(f"  pick_grasp: {np.round(pick_grasp, 5)}")
-    print(f"  pick_lift:  {np.round(pick_lift, 5)}")
-    print(f"  down_ori:   {np.round(port_frame.pick_down_rot, 5)}")
-    print(sep("="))
+    log("\n" + sep("="))
+    log(f"[QUEUE PICK job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"  pick_hover: {np.round(pick_hover, 5)}")
+    log(f"  pick_grasp: {np.round(pick_grasp, 5)}")
+    log(f"  pick_lift:  {np.round(pick_lift, 5)}")
+    log(f"  down_ori:   {np.round(port_frame.pick_down_rot, 5)}")
+    log(sep("="))
 
     controller.add_cartesian_waypoint(
         position=pick_hover,
@@ -504,28 +518,28 @@ def queue_transit_phase(offset_local):
     slide_hand = hand_target_for_module_center(slide_center, insert_ori, offset_local)
     align_hand = hand_target_for_module_center(align_center, insert_ori, offset_local)
 
-    print("\n" + sep("="))
-    print(f"[QUEUE TRANSIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
-    print("  mode: far X/Z lineup, far horizontal Y slide, then straight advance to align")
-    print(f"  table_top_z:                  {TABLE_HEIGHT:.5f}")
-    print(f"  carry_height_above_table:     {CARRY_HEIGHT_ABOVE_TABLE_M:.5f}")
-    print(f"  safe_module_center_z:         {TABLE_SAFE_MODULE_CENTER_Z:.5f}")
-    print(f"  horizontal_slide_port_offset: {HORIZONTAL_SLIDE_PORT_OFFSET_M:.5f}")
-    print(f"  final_lineup_port_offset:     {LINEUP_PORT_OFFSET_M:.5f}")
-    print(f"  module_now:                   {np.round(module_pos, 5)}")
-    print(f"  safe_lift_center:             {np.round(safe_lift_center, 5)}")
-    print(f"  high_xz_lineup_center:        {np.round(high_xz_lineup_center, 5)}")
-    print(f"  xz_lineup_center:             {np.round(xz_lineup_center, 5)}")
-    print(f"  slide_center:                 {np.round(slide_center, 5)}")
-    print(f"  align_center:                 {np.round(align_center, 5)}")
-    print(f"  y_slide_distance_mm:          {(slide_center[1] - xz_lineup_center[1]) * 1000.0:.1f}")
-    print(f"  straight_advance_mm:          {abs(HORIZONTAL_SLIDE_PORT_OFFSET_M - LINEUP_PORT_OFFSET_M) * 1000.0:.1f}")
-    print(f"  safe_lift_hand:               {np.round(safe_lift_hand, 5)}")
-    print(f"  high_xz_lineup_hand:          {np.round(high_xz_lineup_hand, 5)}")
-    print(f"  xz_lineup_hand:               {np.round(xz_lineup_hand, 5)}")
-    print(f"  slide_hand:                   {np.round(slide_hand, 5)}")
-    print(f"  align_hand:                   {np.round(align_hand, 5)}")
-    print(sep("="))
+    log("\n" + sep("="))
+    log(f"[QUEUE TRANSIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log("  mode: far X/Z lineup, far horizontal Y slide, then straight advance to align")
+    log(f"  table_top_z:                  {TABLE_HEIGHT:.5f}")
+    log(f"  carry_height_above_table:     {CARRY_HEIGHT_ABOVE_TABLE_M:.5f}")
+    log(f"  safe_module_center_z:         {TABLE_SAFE_MODULE_CENTER_Z:.5f}")
+    log(f"  horizontal_slide_port_offset: {HORIZONTAL_SLIDE_PORT_OFFSET_M:.5f}")
+    log(f"  final_lineup_port_offset:     {LINEUP_PORT_OFFSET_M:.5f}")
+    log(f"  module_now:                   {np.round(module_pos, 5)}")
+    log(f"  safe_lift_center:             {np.round(safe_lift_center, 5)}")
+    log(f"  high_xz_lineup_center:        {np.round(high_xz_lineup_center, 5)}")
+    log(f"  xz_lineup_center:             {np.round(xz_lineup_center, 5)}")
+    log(f"  slide_center:                 {np.round(slide_center, 5)}")
+    log(f"  align_center:                 {np.round(align_center, 5)}")
+    log(f"  y_slide_distance_mm:          {(slide_center[1] - xz_lineup_center[1]) * 1000.0:.1f}")
+    log(f"  straight_advance_mm:          {abs(HORIZONTAL_SLIDE_PORT_OFFSET_M - LINEUP_PORT_OFFSET_M) * 1000.0:.1f}")
+    log(f"  safe_lift_hand:               {np.round(safe_lift_hand, 5)}")
+    log(f"  high_xz_lineup_hand:          {np.round(high_xz_lineup_hand, 5)}")
+    log(f"  xz_lineup_hand:               {np.round(xz_lineup_hand, 5)}")
+    log(f"  slide_hand:                   {np.round(slide_hand, 5)}")
+    log(f"  align_hand:                   {np.round(align_hand, 5)}")
+    log(sep("="))
 
     controller.add_cartesian_waypoint(
         position=safe_lift_hand,
@@ -591,11 +605,11 @@ def queue_transit_phase(offset_local):
 
 def queue_release_phase():
     controller.clear_queue()
-    print("\n" + sep("="))
-    print("[QUEUE RELEASE]")
-    print("  Opening gripper in-place after insertion.")
-    print("  Retreat will run after the fingers open.")
-    print(sep("="))
+    log("\n" + sep("="))
+    log("[QUEUE RELEASE]")
+    log("  Opening gripper in-place after insertion.")
+    log("  Retreat will run after the fingers open.")
+    log(sep("="))
     controller.add_gripper_command(action="open", wait_frames=RELEASE_GRIPPER_FRAMES)
 
 
@@ -607,16 +621,19 @@ def queue_retreat_phase():
     # port_frame.insert_axis points INTO the port.
     # Retreat moves opposite that axis, back toward the robot.
     retreat_dir = -normalize(port_frame.insert_axis)
-    retreat_hand = hand_pos + retreat_dir * RETREAT_DISTANCE_M
+    total_retreat_distance = RETREAT_DISTANCE_M + EXTRA_RETREAT_AFTER_INSERT_M
+    retreat_hand = hand_pos + retreat_dir * total_retreat_distance
 
-    print("\n" + sep("="))
-    print("[QUEUE RETREAT]")
-    print("  Pulling open gripper straight back along the port axis.")
-    print(f"  hand_start:     {np.round(hand_pos, 5)}")
-    print(f"  retreat_dir:    {np.round(retreat_dir, 5)}")
-    print(f"  retreat_hand:   {np.round(retreat_hand, 5)}")
-    print(f"  distance_mm:    {RETREAT_DISTANCE_M * 1000.0:.1f}")
-    print(sep("="))
+    log("\n" + sep("="))
+    log("[QUEUE RETREAT]")
+    log("  Pulling open gripper straight back along the port axis.")
+    log(f"  hand_start:       {np.round(hand_pos, 5)}")
+    log(f"  retreat_dir:      {np.round(retreat_dir, 5)}")
+    log(f"  retreat_hand:     {np.round(retreat_hand, 5)}")
+    log(f"  base_distance_mm: {RETREAT_DISTANCE_M * 1000.0:.1f}")
+    log(f"  extra_distance_mm:{EXTRA_RETREAT_AFTER_INSERT_M * 1000.0:.1f}")
+    log(f"  total_distance_mm:{total_retreat_distance * 1000.0:.1f}")
+    log(sep("="))
 
     controller.add_cartesian_waypoint(
         position=retreat_hand,
@@ -689,19 +706,19 @@ def init_insert_servo():
         "seat_hold_frames": 0,
     })
 
-    print("\n" + sep("="))
-    print(f"[INSERT SERVO INIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
-    print(f"  actual_module:      {np.round(module_pos, 5)}")
-    print(f"  port_origin:        {np.round(origin, 5)}")
-    print(f"  insert_axis:        {np.round(axis, 5)}")
-    print(f"  align_standoff:     {ALIGN_STANDOFF:.4f} m")
-    print(f"  insert_tip_depth:   {INSERT_TIP_DEPTH_M:.4f} m")
-    print(f"  target_center:      {np.round(insert_center_goal, 5)}")
-    print(f"  target_axial:       {target_axial:.5f}")
-    print(f"  command_lead_limit: {INSERT_COMMAND_LEAD_LIMIT * 1000.0:.1f} mm")
-    print(f"  success_tip_axial:  {SEAT_SUCCESS_TIP_AXIAL_M:.5f} m")
-    print(f"  success_lateral:    {SEAT_SUCCESS_LATERAL_TOL_M * 1000.0:.1f} mm")
-    print(sep("="))
+    log("\n" + sep("="))
+    log(f"[INSERT SERVO INIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"  actual_module:      {np.round(module_pos, 5)}")
+    log(f"  port_origin:        {np.round(origin, 5)}")
+    log(f"  insert_axis:        {np.round(axis, 5)}")
+    log(f"  align_standoff:     {ALIGN_STANDOFF:.4f} m")
+    log(f"  insert_tip_depth:   {INSERT_TIP_DEPTH_M:.4f} m")
+    log(f"  target_center:      {np.round(insert_center_goal, 5)}")
+    log(f"  target_axial:       {target_axial:.5f}")
+    log(f"  command_lead_limit: {INSERT_COMMAND_LEAD_LIMIT * 1000.0:.1f} mm")
+    log(f"  success_tip_axial:  {SEAT_SUCCESS_TIP_AXIAL_M:.5f} m")
+    log(f"  success_lateral:    {SEAT_SUCCESS_LATERAL_TOL_M * 1000.0:.1f} mm")
+    log(sep("="))
 
 
 def insert_servo_action(joint_pos, offset_local):
@@ -729,7 +746,7 @@ def insert_servo_action(joint_pos, offset_local):
             insert_servo["hold_frames"] = 0
 
         if insert_servo["frames"] % 120 == 0 or insert_servo["hold_frames"] == 1:
-            print(
+            log(
                 f"[INSERT ALIGN] frame={insert_servo['frames']} "
                 f"lateral_error_mm={lateral_error * 1000.0:.3f} "
                 f"hold={insert_servo['hold_frames']}/{INSERT_ALIGN_HOLD_FRAMES}"
@@ -739,29 +756,29 @@ def insert_servo_action(joint_pos, offset_local):
             insert_servo["mode"] = "stroke"
             insert_servo["stroke_frames"] = 0
             insert_servo["commanded_axial"] = current_axial
-            print("\n" + sep())
-            print("[INSERT SERVO] Alignment complete. Starting axial crawl.")
-            print(f"  start_axial:  {current_axial:.5f}")
-            print(f"  target_axial: {target_axial:.5f}")
-            print(sep())
+            log("\n" + sep())
+            log("[INSERT SERVO] Alignment complete. Starting axial crawl.")
+            log(f"  start_axial:  {current_axial:.5f}")
+            log(f"  target_axial: {target_axial:.5f}")
+            log(sep())
 
         if insert_servo["frames"] >= INSERT_ALIGN_MAX_FRAMES:
-            print("\n" + sep())
-            print("[INSERT SERVO] ALIGN MAX FRAMES REACHED")
-            print(f"  module_pos:          {np.round(module_pos, 5)}")
-            print(f"  lateral_error_mm:    {lateral_error * 1000.0:.3f}")
+            log("\n" + sep())
+            log("[INSERT SERVO] ALIGN MAX FRAMES REACHED")
+            log(f"  module_pos:          {np.round(module_pos, 5)}")
+            log(f"  lateral_error_mm:    {lateral_error * 1000.0:.3f}")
 
             if lateral_error <= INSERT_ALIGN_PROCEED_TOL:
                 insert_servo["mode"] = "stroke"
                 insert_servo["stroke_frames"] = 0
                 insert_servo["commanded_axial"] = current_axial
-                print("  RESULT: close enough; starting axial crawl instead of waiting forever.")
-                print(f"  start_axial:         {current_axial:.5f}")
-                print(f"  target_axial:        {target_axial:.5f}")
-                print(sep())
+                log("  RESULT: close enough; starting axial crawl instead of waiting forever.")
+                log(f"  start_axial:         {current_axial:.5f}")
+                log(f"  target_axial:        {target_axial:.5f}")
+                log(sep())
             else:
-                print("  RESULT: too far off; stopping for inspection.")
-                print(sep())
+                log("  RESULT: too far off; stopping for inspection.")
+                log(sep())
                 return None, True
 
     else:
@@ -794,7 +811,7 @@ def insert_servo_action(joint_pos, offset_local):
 
         if insert_servo["stroke_frames"] % 60 == 0:
             lead_mm = abs(commanded_axial - current_axial) * 1000.0
-            print(
+            log(
                 f"[INSERT STROKE] frame={insert_servo['stroke_frames']} "
                 f"actual_axial={current_axial:.5f}->{target_axial:.5f} "
                 f"cmd_axial={commanded_axial:.5f} "
@@ -815,42 +832,42 @@ def insert_servo_action(joint_pos, offset_local):
             insert_servo["seat_hold_frames"] = 0
 
         if insert_servo["stroke_frames"] % 60 == 0:
-            print(
+            log(
                 f"[SEAT CHECK] tip_axial={tip_axial:.5f}m "
                 f"tip_lateral_mm={tip_lateral_error * 1000.0:.3f} "
                 f"hold={insert_servo['seat_hold_frames']}/{SEAT_SUCCESS_HOLD_FRAMES}"
             )
 
         if insert_servo["seat_hold_frames"] >= SEAT_SUCCESS_HOLD_FRAMES:
-            print("\n" + sep())
-            print("[INSERT SERVO] Practical seat reached. Stopping before the gripper drags the module back out.")
-            print(f"  module_pos:          {np.round(module_pos, 5)}")
-            print(f"  center_axial:        {current_axial:.5f}")
-            print(f"  target_center_axial: {target_axial:.5f}  # diagnostic only, no longer the stop criterion")
-            print(f"  tip_axial:           {tip_axial:.5f}")
-            print(f"  tip_lateral_mm:      {tip_lateral_error * 1000.0:.3f}")
-            print(f"  tip_pos:             {np.round(tip_pos, 5)}")
-            print(sep())
+            log("\n" + sep())
+            log("[INSERT SERVO] Practical seat reached. Stopping before the gripper drags the module back out.")
+            log(f"  module_pos:          {np.round(module_pos, 5)}")
+            log(f"  center_axial:        {current_axial:.5f}")
+            log(f"  target_center_axial: {target_axial:.5f}  # diagnostic only, no longer the stop criterion")
+            log(f"  tip_axial:           {tip_axial:.5f}")
+            log(f"  tip_lateral_mm:      {tip_lateral_error * 1000.0:.3f}")
+            log(f"  tip_pos:             {np.round(tip_pos, 5)}")
+            log(sep())
             return None, True
 
         if remaining <= INSERT_STROKE_STEP and lateral_error <= INSERT_ALIGN_LATERAL_TOL * 2.0:
-            print("\n" + sep())
-            print("[INSERT SERVO] Geometric target reached.")
-            print(f"  module_pos:       {np.round(module_pos, 5)}")
-            print(f"  final_axial:      {current_axial:.5f}")
-            print(f"  target_axial:     {target_axial:.5f}")
-            print(f"  lateral_err_mm:   {lateral_error * 1000.0:.3f}")
-            print(sep())
+            log("\n" + sep())
+            log("[INSERT SERVO] Geometric target reached.")
+            log(f"  module_pos:       {np.round(module_pos, 5)}")
+            log(f"  final_axial:      {current_axial:.5f}")
+            log(f"  target_axial:     {target_axial:.5f}")
+            log(f"  lateral_err_mm:   {lateral_error * 1000.0:.3f}")
+            log(sep())
             return None, True
 
         if insert_servo["stroke_frames"] >= INSERT_STROKE_MAX_FRAMES:
-            print("\n" + sep())
-            print("[INSERT SERVO] STROKE TIMEOUT")
-            print(f"  module_pos:       {np.round(module_pos, 5)}")
-            print(f"  final_axial:      {current_axial:.5f}")
-            print(f"  target_axial:     {target_axial:.5f}")
-            print(f"  lateral_err_mm:   {lateral_error * 1000.0:.3f}")
-            print(sep())
+            log("\n" + sep())
+            log("[INSERT SERVO] STROKE TIMEOUT")
+            log(f"  module_pos:       {np.round(module_pos, 5)}")
+            log(f"  final_axial:      {current_axial:.5f}")
+            log(f"  target_axial:     {target_axial:.5f}")
+            log(f"  lateral_err_mm:   {lateral_error * 1000.0:.3f}")
+            log(sep())
             return None, True
 
     target_hand = hand_target_for_module_center(target_center, port_frame.insert_rot, offset_local)
@@ -864,12 +881,12 @@ def insert_servo_action(joint_pos, offset_local):
     if not success:
         insert_servo["ik_fail_count"] += 1
         if insert_servo["ik_fail_count"] == 1 or insert_servo["ik_fail_count"] % 30 == 0:
-            print(
+            log(
                 f"[INSERT SERVO] IK approximate/fail count={insert_servo['ik_fail_count']} "
                 f"target_hand={np.round(target_hand, 5)}"
             )
         if insert_servo["ik_fail_count"] >= INSERT_MAX_IK_FAILS:
-            print("[INSERT SERVO] Too many IK failures; stopping for inspection.")
+            log("[INSERT SERVO] Too many IK failures; stopping for inspection.")
             return None, True
 
     n_dof = int(np.asarray(joint_pos).reshape(-1).shape[0])
@@ -928,24 +945,24 @@ def print_insert_result():
         depth_fraction=1.0,
     )
 
-    print("\n" + sep("="))
-    print(f"[HYBRID RESULT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
-    print(f"  module_center:             {np.round(module_pos, 5)}")
-    print(f"  target_center:             {np.round(target_center, 5)}  # diagnostic target")
-    print(f"  center_error_mm:           {center_error * 1000.0:.2f}")
-    print(f"  center_axial:              {axial:.5f}")
-    print(f"  target_center_axial:       {target_axial:.5f}  # diagnostic target")
-    print(f"  center_axial_error_mm:     {(axial - target_axial) * 1000.0:.2f}")
-    print(f"  center_lateral_error_mm:   {lateral_error * 1000.0:.2f}")
-    print(f"  leading_tip_pos:           {np.round(tip_pos, 5)}")
-    print(f"  leading_tip_axial:         {tip_axial:.5f}")
-    print(f"  leading_tip_lateral_mm:    {tip_lateral_error * 1000.0:.2f}")
-    print(f"  practical_seat_passed:     {practical_passed}")
-    print(f"  practical_tip_threshold:   {SEAT_SUCCESS_TIP_AXIAL_M:.5f} m")
-    print(f"  practical_lateral_tol_mm:  {SEAT_SUCCESS_LATERAL_TOL_M * 1000.0:.2f}")
-    print(f"  strict_geometric_passed:   {strict_passed}  # diagnostic only")
-    print(f"  strict_geometric_metrics:  {strict_metrics}")
-    print(sep("="))
+    log("\n" + sep("="))
+    log(f"[HYBRID RESULT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"  module_center:             {np.round(module_pos, 5)}")
+    log(f"  target_center:             {np.round(target_center, 5)}  # diagnostic target")
+    log(f"  center_error_mm:           {center_error * 1000.0:.2f}")
+    log(f"  center_axial:              {axial:.5f}")
+    log(f"  target_center_axial:       {target_axial:.5f}  # diagnostic target")
+    log(f"  center_axial_error_mm:     {(axial - target_axial) * 1000.0:.2f}")
+    log(f"  center_lateral_error_mm:   {lateral_error * 1000.0:.2f}")
+    log(f"  leading_tip_pos:           {np.round(tip_pos, 5)}")
+    log(f"  leading_tip_axial:         {tip_axial:.5f}")
+    log(f"  leading_tip_lateral_mm:    {tip_lateral_error * 1000.0:.2f}")
+    log(f"  practical_seat_passed:     {practical_passed}")
+    log(f"  practical_tip_threshold:   {SEAT_SUCCESS_TIP_AXIAL_M:.5f} m")
+    log(f"  practical_lateral_tol_mm:  {SEAT_SUCCESS_LATERAL_TOL_M * 1000.0:.2f}")
+    log(f"  strict_geometric_passed:   {strict_passed}  # diagnostic only")
+    log(f"  strict_geometric_metrics:  {strict_metrics}")
+    log(sep("="))
 
 
 # =============================================================================
@@ -967,12 +984,12 @@ except Exception:
 
 stage = omni.usd.get_context().get_stage()
 
-print("[SCENE] Loading DataHall...")
+log("[SCENE] Loading DataHall...")
 add_reference_to_stage(usd_path=DATAHALL_USD, prim_path="/World/DataHall")
 apply_datahall_scale("/World/DataHall", DATAHALL_SCALE)
 
 switch_collider_count = enable_static_collisions("/World/DataHall/Network_Switches", "none")
-print(f"[SCENE] Static switch colliders enabled: {switch_collider_count}")
+log(f"[SCENE] Static switch colliders enabled: {switch_collider_count}")
 
 add_reference_to_stage(
     usd_path=assets_root_path + "/Isaac/Environments/Grid/default_environment.usd",
@@ -1028,7 +1045,7 @@ for i, job in enumerate(INSERT_JOBS):
         port_index=None,
     )
     modules.append(mod)
-    print(f"[MODULE job={i}] spawned at pick_xy={pick_xy.tolist()} center_z={PICK_SURFACE_Z:.5f}")
+    log(f"[MODULE job={i}] spawned at pick_xy={pick_xy.tolist()} center_z={PICK_SURFACE_Z:.5f}")
 
 active_job_index = 0
 port_frame = port_frames[0]
@@ -1074,12 +1091,12 @@ controller = FrankaMotionController(
     debug=DEBUG,
 )
 
-print("\n" + sep("="))
-print("[READY] Press Play.")
-print("  stable scope: far horizontal-slide alignment, then straight advance and insert.")
-print("  This uses measured hand->module offset after grasp and a slow axis servo for insertion.")
-print("  After each insert, it opens the gripper, retreats straight back, then starts the next job.")
-print(sep("="))
+log("\n" + sep("="))
+log("[READY] Press Play.")
+log("  quiet stable scope: far horizontal-slide alignment, then straight advance and insert.")
+log("  This uses measured hand->module offset after grasp and a slow axis servo for insertion.")
+log("  After each insert, it opens the gripper, retreats straight back, then starts the next job.")
+log(sep("="))
 
 
 # =============================================================================
@@ -1101,7 +1118,7 @@ while simulation_app.is_running():
         continue
 
     if playing and not was_playing:
-        print("[RUN] Play detected. Starting warmup.")
+        log("[RUN] Play detected. Starting warmup.")
         set_active_job(0)
         phase = PHASE_WARMUP
         warmup_frames = POST_RESET_WARMUP_FRAMES
@@ -1126,7 +1143,7 @@ while simulation_app.is_running():
     if phase == PHASE_PICK:
         if controller.is_done():
             if not check_grasp():
-                print("[STOP] Grasp check failed. Leaving scene open.")
+                log("[STOP] Grasp check failed. Leaving scene open.")
                 phase = PHASE_DONE
             else:
                 block_offset_local = compute_grasp_offset_local()
@@ -1138,7 +1155,7 @@ while simulation_app.is_running():
 
     elif phase == PHASE_TRANSIT:
         if controller.is_done():
-            print("\n[PHASE] Transit complete -> insertion servo.")
+            log("\n[PHASE] Transit complete -> insertion servo.")
             init_insert_servo()
             phase = PHASE_INSERT_SERVO
         else:
@@ -1159,10 +1176,10 @@ while simulation_app.is_running():
 
     elif phase == PHASE_RELEASE:
         if controller.is_done():
-            print("\n" + sep("="))
-            print("[RELEASE COMPLETE]")
-            print("  Gripper opened.")
-            print(sep("="))
+            log("\n" + sep("="))
+            log("[RELEASE COMPLETE]")
+            log("  Gripper opened.")
+            log(sep("="))
             if RETREAT_AFTER_RELEASE:
                 queue_retreat_phase()
                 phase = PHASE_RETREAT
@@ -1174,10 +1191,10 @@ while simulation_app.is_running():
 
     elif phase == PHASE_RETREAT:
         if controller.is_done():
-            print("\n" + sep("="))
-            print("[RETREAT COMPLETE]")
-            print("  Open gripper pulled back.")
-            print(sep("="))
+            log("\n" + sep("="))
+            log("[RETREAT COMPLETE]")
+            log("  Open gripper pulled back.")
+            log(sep("="))
             if start_next_job_or_finish():
                 phase = PHASE_PICK
             else:

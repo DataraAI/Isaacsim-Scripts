@@ -27,7 +27,7 @@ SEAT_SETTLE_FRAMES = 60
 # Fallback only when callers omit insert_tip_depth_m (tune depth in insert_at_prim_lula UI).
 INSERT_TIP_DEPTH_M = 0.048
 INSERT_FORCE_STOP_THRESHOLD = 18.0
-TRANSIT_STANDOFF = 0.30
+TRANSIT_STANDOFF = 0.6
 
 GRIPPER_CLOSE_FRAMES = 60
 # One frame to command open; retreat starts immediately on the next frame.
@@ -46,9 +46,9 @@ ALIGN_SETTLE_FRAMES = 2
 INSERT_SETTLE_FRAMES = 1
 RETREAT_STEP = 0.008
 RETREAT_CLEAR_STEP = 0.05
-RETREAT_MAX_FRAMES = 300
+RETREAT_MAX_FRAMES = 600
 # Slow straight pull-back immediately after release (keeps fingers off the module).
-RETREAT_STANDOFF = 0.125
+RETREAT_STANDOFF = 0.2
 # Full clear distance along the insert axis before the next pick job starts.
 POST_RETREAT_CLEAR_STANDOFF = TRANSIT_STANDOFF
 
