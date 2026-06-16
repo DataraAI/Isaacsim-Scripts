@@ -152,6 +152,81 @@ INSERT_LOCAL_AXIS = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 TABLE_HEIGHT = 3
 TABLE_THICKNESS = 0.05
 ROBOT_BASE_POS = np.array([0.55, -0.15, TABLE_HEIGHT], dtype=np.float64)
+
+# Passive second robot / block row for the two-robot workspace layout test.
+# Robot 2 is spawned now, but it is not driven by the current state machine yet.
+SECOND_ROBOT_BASE_POS = np.array([0.55, -1.20, TABLE_HEIGHT], dtype=np.float64)
+SECOND_PICK_ROW_Y = -0.8
+SECOND_ROBOT_BLOCK_COUNT = 3
+SECOND_ROBOT_PRIM_PATH = "/World/Franka_2"
+
+# Robot 2 target ports. Robot 2 is still passive in this layout script,
+# but these are the jobs/ports it will use when the second state machine is added.
+SECOND_INSERT_JOBS = [
+    {
+        "label": "robot2_port_0",
+        "port_prim_path": (
+            "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
+            "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
+            "pcb003636_idf_01/Connector_Quad_02/Connector_Pair_04/"
+            "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
+        ),
+        "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
+        "pick_xy": np.array([0.30, SECOND_PICK_ROW_Y], dtype=np.float64),
+        "module_prim_path": "/World/QSFP_Robot2_Module_0",
+        "module_name": "qsfp_robot2_module_0",
+    },
+    {
+        "label": "robot2_port_1",
+        "port_prim_path": (
+            "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
+            "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
+            "pcb003636_idf_01/Connector_Quad_02/Connector_Pair_01/"
+            "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
+        ),
+        "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
+        "pick_xy": np.array([0.38, SECOND_PICK_ROW_Y], dtype=np.float64),
+        "module_prim_path": "/World/QSFP_Robot2_Module_1",
+        "module_name": "qsfp_robot2_module_1",
+    },
+    {
+        "label": "robot2_port_2",
+        "port_prim_path": (
+            "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
+            "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
+            "pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/"
+            "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
+        ),
+        "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
+        "pick_xy": np.array([0.46, SECOND_PICK_ROW_Y], dtype=np.float64),
+        "module_prim_path": "/World/QSFP_Robot2_Module_2",
+        "module_name": "qsfp_robot2_module_2",
+    },
+    {
+        "label": "robot2_port_3",
+        "port_prim_path": (
+            "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
+            "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
+            "pcb003636_idf_01/Connector_Quad_01/Connector_Pair_04/"
+            "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
+        ),
+        "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
+        "pick_xy": np.array([0.54, SECOND_PICK_ROW_Y], dtype=np.float64),
+        "module_prim_path": "/World/QSFP_Robot2_Module_3",
+        "module_name": "qsfp_robot2_module_3",
+    },
+]
+
+# Runtime-selected job list. The same motion functions are reused by swapping
+# this to INSERT_JOBS or SECOND_INSERT_JOBS through the robot runtime context.
+active_jobs = INSERT_JOBS
+active_robot_label = "robot1"
+
+# Start robot 2 shortly after robot 1 so both are active in the same run,
+# but their first pickups do not start on the exact same frame. Set to 0 if
+# you want both robots to begin immediately.
+ROBOT_2_START_DELAY_FRAMES = 0
+
 PICK_XY = INSERT_JOBS[0]["pick_xy"].copy()
 PICK_SURFACE_Z = TABLE_HEIGHT + QSFP_LENGTH_M / 2.0
 
@@ -329,11 +404,18 @@ def check_grasp():
 
 def build_work_table(world):
     margin = 0.35
-    center_xy = (ROBOT_BASE_POS[:2] + PICK_XY) / 2.0
-    half_x = abs(ROBOT_BASE_POS[0] - PICK_XY[0]) * 0.5 + margin
-    half_y = abs(ROBOT_BASE_POS[1] - PICK_XY[1]) * 0.5 + margin
+    table_points = [ROBOT_BASE_POS[:2], SECOND_ROBOT_BASE_POS[:2]]
+    table_points.extend(job["pick_xy"] for job in INSERT_JOBS)
+    table_points.extend(job["pick_xy"] for job in SECOND_INSERT_JOBS)
+    table_points = np.asarray(table_points, dtype=np.float64)
+
+    min_xy = np.min(table_points, axis=0)
+    max_xy = np.max(table_points, axis=0)
+    center_xy = (min_xy + max_xy) / 2.0
+    half_xy = (max_xy - min_xy) / 2.0 + margin
+
     position = np.array([center_xy[0], center_xy[1], TABLE_HEIGHT - TABLE_THICKNESS / 2.0], dtype=np.float64)
-    scale = np.array([2.0 * half_x, 2.0 * half_y, TABLE_THICKNESS], dtype=np.float64)
+    scale = np.array([2.0 * half_xy[0], 2.0 * half_xy[1], TABLE_THICKNESS], dtype=np.float64)
 
     world.scene.add(
         FixedCuboid(
@@ -347,27 +429,33 @@ def build_work_table(world):
         )
     )
     log(f"[TABLE] center={np.round(position, 4)} scale={np.round(scale, 4)} top_z={TABLE_HEIGHT}")
+    log(f"[TABLE] covers x={np.round([min_xy[0], max_xy[0]], 4)} y={np.round([min_xy[1], max_xy[1]], 4)} plus margin={margin}")
 
 
-def build_port_frame(job_index):
-    job = INSERT_JOBS[job_index]
+def build_port_frame(job_index, jobs=None, robot_position=None, robot_label="robot"):
+    if jobs is None:
+        jobs = active_jobs
+    if robot_position is None:
+        robot_position = ROBOT_BASE_POS
+
+    job = jobs[job_index]
     prim_path = job["port_prim_path"]
     lateral_offset = job["lateral_offset"]
 
     if not stage.GetPrimAtPath(prim_path).IsValid():
-        raise RuntimeError(f"Insert port prim not found for job {job_index}: {prim_path}")
+        raise RuntimeError(f"Insert port prim not found for {robot_label} job {job_index}: {prim_path}")
 
     port = PortFrame.from_prim_path(
         prim_path,
         local_insert_axis=INSERT_LOCAL_AXIS,
         lateral_offset=lateral_offset,
-        robot_position=ROBOT_BASE_POS,
+        robot_position=robot_position,
     )
     if port is None:
-        raise RuntimeError(f"Could not build PortFrame for job {job_index}: {prim_path}")
+        raise RuntimeError(f"Could not build PortFrame for {robot_label} job {job_index}: {prim_path}")
 
     log("\n" + sep("="))
-    log(f"[PORT FRAME job={job_index}] {job['label']}")
+    log(f"[PORT FRAME {robot_label} job={job_index}] {job['label']}")
     log(f"  prim:          {prim_path}")
     log(f"  insert_origin: {np.round(port.insert_origin, 5)}")
     log(f"  insert_axis:   {np.round(port.insert_axis, 5)}")
@@ -382,25 +470,25 @@ def set_active_job(job_index):
 
     active_job_index = int(job_index)
     port_frame = port_frames[active_job_index]
-    PICK_XY = INSERT_JOBS[active_job_index]["pick_xy"].copy()
+    PICK_XY = active_jobs[active_job_index]["pick_xy"].copy()
     module = modules[active_job_index]
 
     block_offset_local = None
 
     log("\n" + sep("#"))
-    log(f"[ACTIVE JOB] {active_job_index + 1}/{len(INSERT_JOBS)}: {INSERT_JOBS[active_job_index]['label']}")
+    log(f"[ACTIVE JOB {active_robot_label}] {active_job_index + 1}/{len(active_jobs)}: {active_jobs[active_job_index]['label']}")
     log(f"  pick_xy:     {np.round(PICK_XY, 5)}")
-    log(f"  module_path: {INSERT_JOBS[active_job_index]['module_prim_path']}")
+    log(f"  module_path: {active_jobs[active_job_index]['module_prim_path']}")
     log(f"  port_origin: {np.round(port_frame.insert_origin, 5)}")
     log(sep("#"))
 
 
 def start_next_job_or_finish():
     next_index = active_job_index + 1
-    if next_index >= len(INSERT_JOBS):
+    if next_index >= len(active_jobs):
         log("\n" + sep("="))
         log("[ALL JOBS COMPLETE]")
-        log(f"  completed_jobs: {len(INSERT_JOBS)}")
+        log(f"  completed_jobs: {len(active_jobs)}")
         log(sep("="))
         return False
 
@@ -438,7 +526,7 @@ def queue_pick_phase():
     pick_lift = np.array([PICK_XY[0], PICK_XY[1], pick_lift_z], dtype=np.float64)
 
     log("\n" + sep("="))
-    log(f"[QUEUE PICK job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"[QUEUE PICK {active_robot_label} job={active_job_index}] {active_jobs[active_job_index]['label']}")
     log(f"  pick_hover: {np.round(pick_hover, 5)}")
     log(f"  pick_grasp: {np.round(pick_grasp, 5)}")
     log(f"  pick_lift:  {np.round(pick_lift, 5)}")
@@ -519,7 +607,7 @@ def queue_transit_phase(offset_local):
     align_hand = hand_target_for_module_center(align_center, insert_ori, offset_local)
 
     log("\n" + sep("="))
-    log(f"[QUEUE TRANSIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"[QUEUE TRANSIT {active_robot_label} job={active_job_index}] {active_jobs[active_job_index]['label']}")
     log("  mode: far X/Z lineup, far horizontal Y slide, then straight advance to align")
     log(f"  table_top_z:                  {TABLE_HEIGHT:.5f}")
     log(f"  carry_height_above_table:     {CARRY_HEIGHT_ABOVE_TABLE_M:.5f}")
@@ -647,20 +735,24 @@ def queue_retreat_phase():
     )
 
 
-insert_servo = {
-    "mode": "align",
-    "frames": 0,
-    "hold_frames": 0,
-    "stroke_frames": 0,
-    "ik_fail_count": 0,
-    "target_center": None,
-    "target_axial": None,
-    "origin": None,
-    "axis": None,
-    "locked_lateral": None,
-    "commanded_axial": None,
-    "seat_hold_frames": 0,
-}
+def default_insert_servo_state():
+    return {
+        "mode": "align",
+        "frames": 0,
+        "hold_frames": 0,
+        "stroke_frames": 0,
+        "ik_fail_count": 0,
+        "target_center": None,
+        "target_axial": None,
+        "origin": None,
+        "axis": None,
+        "locked_lateral": None,
+        "commanded_axial": None,
+        "seat_hold_frames": 0,
+    }
+
+
+insert_servo = default_insert_servo_state()
 
 
 def lateral_vec(position, origin, axis):
@@ -707,7 +799,7 @@ def init_insert_servo():
     })
 
     log("\n" + sep("="))
-    log(f"[INSERT SERVO INIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"[INSERT SERVO INIT {active_robot_label} job={active_job_index}] {active_jobs[active_job_index]['label']}")
     log(f"  actual_module:      {np.round(module_pos, 5)}")
     log(f"  port_origin:        {np.round(origin, 5)}")
     log(f"  insert_axis:        {np.round(axis, 5)}")
@@ -722,6 +814,14 @@ def init_insert_servo():
 
 
 def insert_servo_action(joint_pos, offset_local):
+    if offset_local is None:
+        log("[INSERT SERVO] ERROR: missing block_offset_local; stopping this robot instead of crashing.")
+        return None, True
+    offset_local = np.asarray(offset_local, dtype=np.float64).reshape(-1)
+    if offset_local.shape[0] != 3:
+        log(f"[INSERT SERVO] ERROR: bad block_offset_local shape={offset_local.shape}; stopping this robot instead of crashing.")
+        return None, True
+
     module_pos, _ = get_module_pose()
     origin = insert_servo["origin"]
     axis = insert_servo["axis"]
@@ -946,7 +1046,7 @@ def print_insert_result():
     )
 
     log("\n" + sep("="))
-    log(f"[HYBRID RESULT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
+    log(f"[HYBRID RESULT {active_robot_label} job={active_job_index}] {active_jobs[active_job_index]['label']}")
     log(f"  module_center:             {np.round(module_pos, 5)}")
     log(f"  target_center:             {np.round(target_center, 5)}  # diagnostic target")
     log(f"  center_error_mm:           {center_error * 1000.0:.2f}")
@@ -1014,6 +1114,22 @@ if variant_names:
 
 enable_articulation_collisions("/World/Franka")
 
+robot_2 = add_reference_to_stage(
+    usd_path=assets_root_path + "/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd",
+    prim_path=SECOND_ROBOT_PRIM_PATH,
+)
+robot_2.GetVariantSet("Gripper").SetVariantSelection("AlternateFinger")
+try:
+    robot_2.GetVariantSet("Mesh").SetVariantSelection("Quality")
+except Exception:
+    pass
+physics_variant_2 = robot_2.GetVariantSet("Physics")
+variant_names_2 = list(physics_variant_2.GetVariantNames())
+if variant_names_2:
+    physics_variant_2.SetVariantSelection(next((n for n in variant_names_2 if n.lower() == "physx"), variant_names_2[0]))
+
+enable_articulation_collisions(SECOND_ROBOT_PRIM_PATH)
+
 gripper = ParallelGripper(
     end_effector_prim_path="/World/Franka/panda_rightfinger",
     joint_prim_names=["panda_finger_joint1", "panda_finger_joint2"],
@@ -1032,7 +1148,37 @@ my_franka = my_world.scene.add(
     )
 )
 
-port_frames = [build_port_frame(i) for i in range(len(INSERT_JOBS))]
+gripper_2 = ParallelGripper(
+    end_effector_prim_path=f"{SECOND_ROBOT_PRIM_PATH}/panda_rightfinger",
+    joint_prim_names=["panda_finger_joint1", "panda_finger_joint2"],
+    joint_opened_positions=np.array([0.05, 0.05], dtype=np.float64),
+    joint_closed_positions=gripper_closed_positions(),
+    action_deltas=np.array([0.02, 0.02], dtype=np.float64),
+)
+
+my_franka_2 = my_world.scene.add(
+    SingleManipulator(
+        prim_path=SECOND_ROBOT_PRIM_PATH,
+        name="my_franka_2",
+        end_effector_prim_path=f"{SECOND_ROBOT_PRIM_PATH}/panda_rightfinger",
+        gripper=gripper_2,
+        position=SECOND_ROBOT_BASE_POS,
+    )
+)
+
+port_frames = [
+    build_port_frame(i, jobs=INSERT_JOBS, robot_position=ROBOT_BASE_POS, robot_label="robot1")
+    for i in range(len(INSERT_JOBS))
+]
+secondary_port_frames = [
+    build_port_frame(
+        i,
+        jobs=SECOND_INSERT_JOBS,
+        robot_position=SECOND_ROBOT_BASE_POS,
+        robot_label="robot2",
+    )
+    for i in range(len(SECOND_INSERT_JOBS))
+]
 
 modules = []
 for i, job in enumerate(INSERT_JOBS):
@@ -1047,12 +1193,29 @@ for i, job in enumerate(INSERT_JOBS):
     modules.append(mod)
     log(f"[MODULE job={i}] spawned at pick_xy={pick_xy.tolist()} center_z={PICK_SURFACE_Z:.5f}")
 
+secondary_modules = []
+for i, job in enumerate(SECOND_INSERT_JOBS):
+    pick_xy = job["pick_xy"]
+    mod = create_qsfp_module(
+        my_world,
+        prim_path=job["module_prim_path"],
+        name=job["module_name"],
+        position=np.array([pick_xy[0], pick_xy[1], PICK_SURFACE_Z], dtype=np.float64),
+        port_index=None,
+    )
+    secondary_modules.append(mod)
+    log(
+        f"[ROBOT 2 MODULE job={i}] spawned at pick_xy={pick_xy.tolist()} "
+        f"center_z={PICK_SURFACE_Z:.5f} placeholder_port={job['label']}"
+    )
+
 active_job_index = 0
 port_frame = port_frames[0]
 module = modules[0]
 PICK_XY = INSERT_JOBS[0]["pick_xy"].copy()
 
 my_franka.gripper.set_default_state(my_franka.gripper.joint_opened_positions)
+my_franka_2.gripper.set_default_state(my_franka_2.gripper.joint_opened_positions)
 
 my_world.reset()
 simulation_app.update()
@@ -1060,7 +1223,9 @@ simulation_app.update()
 try:
     if hasattr(my_franka, "post_reset"):
         my_franka.post_reset()
-    for mod in modules:
+    if hasattr(my_franka_2, "post_reset"):
+        my_franka_2.post_reset()
+    for mod in modules + secondary_modules:
         if hasattr(mod, "post_reset"):
             mod.post_reset()
 except Exception:
@@ -1079,7 +1244,7 @@ kinematics_solver.set_robot_base_pose(base_pos, base_ori)
 articulation_controller = my_franka.get_articulation_controller()
 
 controller = FrankaMotionController(
-    name="hybrid_one_port_controller",
+    name="hybrid_robot1_controller",
     robot_articulation=my_franka,
     task_traj_gen=task_traj_gen,
     art_kinematics=art_kinematics,
@@ -1091,11 +1256,242 @@ controller = FrankaMotionController(
     debug=DEBUG,
 )
 
+# Robot 2 gets its own Lula solver, task generator, kinematics wrapper,
+# articulation controller, and motion queue. Sharing these between robots is
+# exactly how you get base-pose cross-talk and impossible-to-debug IK jumps.
+lula_config_2 = interface_config_loader.load_supported_lula_kinematics_solver_config("Franka")
+kinematics_solver_2 = LulaKinematicsSolver(**lula_config_2)
+task_traj_gen_2 = LulaTaskSpaceTrajectoryGenerator(**lula_config_2)
+art_kinematics_2 = ArticulationKinematicsSolver(my_franka_2, kinematics_solver_2, "panda_hand")
+
+base_pos_2, base_ori_2 = my_franka_2.get_world_pose()
+kinematics_solver_2.set_robot_base_pose(base_pos_2, base_ori_2)
+articulation_controller_2 = my_franka_2.get_articulation_controller()
+
+controller_2 = FrankaMotionController(
+    name="hybrid_robot2_controller",
+    robot_articulation=my_franka_2,
+    task_traj_gen=task_traj_gen_2,
+    art_kinematics=art_kinematics_2,
+    gripper=my_franka_2.gripper,
+    tool_offset=TOOL_OFFSET,
+    physics_dt=PHYSICS_DT,
+    position_tolerance=0.005,
+    orientation_tolerance=0.02,
+    debug=DEBUG,
+)
+
+
+def make_robot_runtime(
+    *,
+    label,
+    franka,
+    art_kin,
+    art_controller,
+    motion_controller,
+    jobs,
+    frames,
+    owned_modules,
+    start_delay_frames=0,
+):
+    return {
+        "label": label,
+        "franka": franka,
+        "art_kinematics": art_kin,
+        "articulation_controller": art_controller,
+        "controller": motion_controller,
+        "jobs": jobs,
+        "port_frames": frames,
+        "modules": owned_modules,
+        "active_job_index": 0,
+        "port_frame": frames[0],
+        "module": owned_modules[0],
+        "pick_xy": jobs[0]["pick_xy"].copy(),
+        "block_offset_local": None,
+        "insert_servo": default_insert_servo_state(),
+        "phase": PHASE_WAITING,
+        "warmup_frames": POST_RESET_WARMUP_FRAMES + int(start_delay_frames),
+        "start_delay_frames": int(start_delay_frames),
+    }
+
+
+def activate_robot_context(ctx):
+    global my_franka, art_kinematics, articulation_controller, controller
+    global active_jobs, active_robot_label
+    global port_frames, modules, active_job_index, port_frame, module
+    global PICK_XY, block_offset_local, insert_servo
+
+    my_franka = ctx["franka"]
+    art_kinematics = ctx["art_kinematics"]
+    articulation_controller = ctx["articulation_controller"]
+    controller = ctx["controller"]
+    active_jobs = ctx["jobs"]
+    active_robot_label = ctx["label"]
+    port_frames = ctx["port_frames"]
+    modules = ctx["modules"]
+    active_job_index = ctx["active_job_index"]
+    port_frame = ctx["port_frame"]
+    module = ctx["module"]
+    PICK_XY = ctx["pick_xy"].copy()
+    block_offset_local = ctx["block_offset_local"]
+    insert_servo = ctx["insert_servo"]
+
+
+def sync_robot_context(ctx):
+    ctx["active_job_index"] = active_job_index
+    ctx["port_frame"] = port_frame
+    ctx["module"] = module
+    ctx["pick_xy"] = PICK_XY.copy()
+    ctx["block_offset_local"] = block_offset_local
+    ctx["insert_servo"] = insert_servo
+
+
+def joint_positions_np(franka):
+    joint_pos = franka.get_joint_positions()
+    if joint_pos is None:
+        return None
+    if hasattr(joint_pos, "cpu"):
+        joint_pos = joint_pos.cpu().numpy()
+    return np.asarray(joint_pos, dtype=np.float64)
+
+
+def reset_robot_runtime(ctx):
+    activate_robot_context(ctx)
+    set_active_job(0)
+    controller.clear_queue()
+    my_franka.gripper.set_default_state(my_franka.gripper.joint_opened_positions)
+    ctx["phase"] = PHASE_WARMUP
+    ctx["warmup_frames"] = POST_RESET_WARMUP_FRAMES + ctx["start_delay_frames"]
+    sync_robot_context(ctx)
+
+
+def step_robot_runtime(ctx):
+    global block_offset_local
+
+    activate_robot_context(ctx)
+    phase = ctx["phase"]
+
+    if phase == PHASE_WARMUP:
+        ctx["warmup_frames"] -= 1
+        if ctx["warmup_frames"] <= 0:
+            queue_pick_phase()
+            phase = PHASE_PICK
+
+    elif phase == PHASE_PICK:
+        joint_pos = joint_positions_np(my_franka)
+        if joint_pos is not None:
+            if controller.is_done():
+                if not check_grasp():
+                    log(f"[STOP {active_robot_label}] Grasp check failed. Leaving scene open.")
+                    phase = PHASE_DONE
+                else:
+                    block_offset = compute_grasp_offset_local()
+                    block_offset_local = block_offset
+                    ctx["block_offset_local"] = block_offset
+                    queue_transit_phase(block_offset)
+                    phase = PHASE_TRANSIT
+            else:
+                action = controller.forward(joint_pos)
+                articulation_controller.apply_action(action)
+
+    elif phase == PHASE_TRANSIT:
+        joint_pos = joint_positions_np(my_franka)
+        if joint_pos is not None:
+            if controller.is_done():
+                log(f"\n[PHASE {active_robot_label}] Transit complete -> insertion servo.")
+                init_insert_servo()
+                phase = PHASE_INSERT_SERVO
+            else:
+                action = controller.forward(joint_pos)
+                articulation_controller.apply_action(action)
+
+    elif phase == PHASE_INSERT_SERVO:
+        joint_pos = joint_positions_np(my_franka)
+        if joint_pos is not None:
+            action, done = insert_servo_action(joint_pos, ctx["block_offset_local"])
+            if action is not None:
+                articulation_controller.apply_action(action)
+            if done:
+                print_insert_result()
+                if RELEASE_AFTER_INSERT:
+                    queue_release_phase()
+                    phase = PHASE_RELEASE
+                else:
+                    phase = PHASE_DONE
+
+    elif phase == PHASE_RELEASE:
+        joint_pos = joint_positions_np(my_franka)
+        if joint_pos is not None:
+            if controller.is_done():
+                log("\n" + sep("="))
+                log(f"[RELEASE COMPLETE {active_robot_label}]")
+                log("  Gripper opened.")
+                log(sep("="))
+                if RETREAT_AFTER_RELEASE:
+                    queue_retreat_phase()
+                    phase = PHASE_RETREAT
+                else:
+                    phase = PHASE_DONE
+            else:
+                action = controller.forward(joint_pos)
+                articulation_controller.apply_action(action)
+
+    elif phase == PHASE_RETREAT:
+        joint_pos = joint_positions_np(my_franka)
+        if joint_pos is not None:
+            if controller.is_done():
+                log("\n" + sep("="))
+                log(f"[RETREAT COMPLETE {active_robot_label}]")
+                log("  Open gripper pulled back.")
+                log(sep("="))
+                if start_next_job_or_finish():
+                    phase = PHASE_PICK
+                else:
+                    phase = PHASE_DONE
+            else:
+                action = controller.forward(joint_pos)
+                articulation_controller.apply_action(action)
+
+    elif phase == PHASE_DONE:
+        if HOLD_FOR_INSPECTION:
+            pass
+
+    ctx["phase"] = phase
+    sync_robot_context(ctx)
+
+
+robot_runtimes = [
+    make_robot_runtime(
+        label="robot1",
+        franka=my_franka,
+        art_kin=art_kinematics,
+        art_controller=articulation_controller,
+        motion_controller=controller,
+        jobs=INSERT_JOBS,
+        frames=port_frames,
+        owned_modules=modules,
+        start_delay_frames=0,
+    ),
+    make_robot_runtime(
+        label="robot2",
+        franka=my_franka_2,
+        art_kin=art_kinematics_2,
+        art_controller=articulation_controller_2,
+        motion_controller=controller_2,
+        jobs=SECOND_INSERT_JOBS,
+        frames=secondary_port_frames,
+        owned_modules=secondary_modules,
+        start_delay_frames=ROBOT_2_START_DELAY_FRAMES,
+    ),
+]
+
+
 log("\n" + sep("="))
 log("[READY] Press Play.")
 log("  quiet stable scope: far horizontal-slide alignment, then straight advance and insert.")
 log("  This uses measured hand->module offset after grasp and a slow axis servo for insertion.")
-log("  After each insert, it opens the gripper, retreats straight back, then starts the next job.")
+log("  Both robots use separate controllers, Lula solvers, state machines, and insert servos.")
+log("  Robot 2 starts immediately with robot 1, then runs its three assigned ports.")
 log(sep("="))
 
 
@@ -1103,9 +1499,6 @@ log(sep("="))
 # MAIN LOOP
 # =============================================================================
 
-phase = PHASE_WAITING
-warmup_frames = POST_RESET_WARMUP_FRAMES
-block_offset_local = None
 was_playing = False
 
 
@@ -1118,95 +1511,13 @@ while simulation_app.is_running():
         continue
 
     if playing and not was_playing:
-        log("[RUN] Play detected. Starting warmup.")
-        set_active_job(0)
-        phase = PHASE_WARMUP
-        warmup_frames = POST_RESET_WARMUP_FRAMES
+        log("[RUN] Play detected. Starting dual-robot warmup.")
+        for runtime in robot_runtimes:
+            reset_robot_runtime(runtime)
         was_playing = True
 
-    if phase == PHASE_WARMUP:
-        my_world.step(render=True)
-        warmup_frames -= 1
-        if warmup_frames <= 0:
-            queue_pick_phase()
-            phase = PHASE_PICK
-        continue
-
-    joint_pos = my_franka.get_joint_positions()
-    if joint_pos is None:
-        my_world.step(render=True)
-        continue
-    if hasattr(joint_pos, "cpu"):
-        joint_pos = joint_pos.cpu().numpy()
-    joint_pos = np.asarray(joint_pos, dtype=np.float64)
-
-    if phase == PHASE_PICK:
-        if controller.is_done():
-            if not check_grasp():
-                log("[STOP] Grasp check failed. Leaving scene open.")
-                phase = PHASE_DONE
-            else:
-                block_offset_local = compute_grasp_offset_local()
-                queue_transit_phase(block_offset_local)
-                phase = PHASE_TRANSIT
-        else:
-            action = controller.forward(joint_pos)
-            articulation_controller.apply_action(action)
-
-    elif phase == PHASE_TRANSIT:
-        if controller.is_done():
-            log("\n[PHASE] Transit complete -> insertion servo.")
-            init_insert_servo()
-            phase = PHASE_INSERT_SERVO
-        else:
-            action = controller.forward(joint_pos)
-            articulation_controller.apply_action(action)
-
-    elif phase == PHASE_INSERT_SERVO:
-        action, done = insert_servo_action(joint_pos, block_offset_local)
-        if action is not None:
-            articulation_controller.apply_action(action)
-        if done:
-            print_insert_result()
-            if RELEASE_AFTER_INSERT:
-                queue_release_phase()
-                phase = PHASE_RELEASE
-            else:
-                phase = PHASE_DONE
-
-    elif phase == PHASE_RELEASE:
-        if controller.is_done():
-            log("\n" + sep("="))
-            log("[RELEASE COMPLETE]")
-            log("  Gripper opened.")
-            log(sep("="))
-            if RETREAT_AFTER_RELEASE:
-                queue_retreat_phase()
-                phase = PHASE_RETREAT
-            else:
-                phase = PHASE_DONE
-        else:
-            action = controller.forward(joint_pos)
-            articulation_controller.apply_action(action)
-
-    elif phase == PHASE_RETREAT:
-        if controller.is_done():
-            log("\n" + sep("="))
-            log("[RETREAT COMPLETE]")
-            log("  Open gripper pulled back.")
-            log(sep("="))
-            if start_next_job_or_finish():
-                phase = PHASE_PICK
-            else:
-                phase = PHASE_DONE
-        else:
-            action = controller.forward(joint_pos)
-            articulation_controller.apply_action(action)
-
-    elif phase == PHASE_DONE:
-        if HOLD_FOR_INSPECTION:
-            # Do not close the app. Leave the sim open.
-            pass
+    for runtime in robot_runtimes:
+        step_robot_runtime(runtime)
 
     my_world.step(render=True)
 
