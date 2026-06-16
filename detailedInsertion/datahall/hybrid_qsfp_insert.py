@@ -84,7 +84,7 @@ DATAHALL_SCALE = 2.0
 # Job 1 is the new port requested by the user.
 INSERT_JOBS = [
     {
-        "label": "port_0_connector_quad_04_pair_04",
+        "label": "port_0",
         "port_prim_path": (
             "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
             "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
@@ -97,11 +97,11 @@ INSERT_JOBS = [
         "module_name": "qsfp_module_0",
     },
     {
-        "label": "port_1_connector_quad_02_pair_01",
+        "label": "port_1",
         "port_prim_path": (
             "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
             "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
-            "pcb003636_idf_01/Connector_Quad_03/Connector_Pair_01/"
+            "pcb003636_idf_01/Connector_Quad_04/Connector_Pair_01/"
             "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
         # Starting value copied from the old two-port setup. Tune only if port 1 is visibly off.
@@ -110,6 +110,34 @@ INSERT_JOBS = [
         "module_prim_path": "/World/QSFP_Module_1",
         "module_name": "qsfp_module_1",
     },
+    {
+        "label": "port_2",
+        "port_prim_path": (
+            "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
+            "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
+            "pcb003636_idf_01/Connector_Quad_03/Connector_Pair_01/"
+            "QSFP_DD_Connector_A_01/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
+        ),
+        # Starting value copied from the old two-port setup. Tune only if port 1 is visibly off.
+        "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
+        "pick_xy": np.array([0.46, 0.15], dtype=np.float64),
+        "module_prim_path": "/World/QSFP_Module_2",
+        "module_name": "qsfp_module_2",
+    },    
+    {
+        "label": "port_3",
+        "port_prim_path": (
+            "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
+            "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
+            "pcb003636_idf_01/Connector_Quad_03/Connector_Pair_03/"
+            "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
+        ),
+        # Starting value copied from the old two-port setup. Tune only if port 1 is visibly off.
+        "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
+        "pick_xy": np.array([0.52, 0.15], dtype=np.float64),
+        "module_prim_path": "/World/QSFP_Module_3",
+        "module_name": "qsfp_module_3",
+    },   
 ]
 
 # This local +Z convention comes from the old setup.
@@ -137,23 +165,36 @@ PICK_GRASP_CLEARANCE = 0.015
 PICK_POS_TOL = 0.003
 
 # Port-side staging.
-# Keep lineup closer to the DataHall. The previous high/pre-align path stood too far
-# away from the rack and forced the arm to fold over itself.
-TRANSIT_STANDOFF = 0.24
-ALIGN_STANDOFF = 0.13
+# ONLY TUNE THIS:
+# Distance from the port face before insertion starts.
+# Bigger = line up farther away from the DataHall/port.
+# Smaller = line up closer to the port.
+LINEUP_PORT_OFFSET_M = 0.2
 
-# Go to a point only slightly behind the final lineup point, then move straight in.
-# This gives enough clearance to avoid diagonal clipping without standing far away.
-PRE_ALIGN_EXTRA_STANDOFF = 0.055
-PRE_ALIGN_STANDOFF = ALIGN_STANDOFF + PRE_ALIGN_EXTRA_STANDOFF
+# Separate knob for the horizontal slide distance from the port.
+# Bigger = the robot does the sideways/horizontal Y slide farther away from the ports.
+# After the Y slide, it moves straight forward to LINEUP_PORT_OFFSET_M.
+HORIZONTAL_SLIDE_PORT_OFFSET_M = 0.35
+
+# Internal approach distance behind the lineup point.
+# Usually leave this alone. It gives the robot a short straight-in path before insertion.
+PRE_LINEUP_BACKOFF_M = 0.055
+
+# Derived values used by the controller.
+TRANSIT_STANDOFF = LINEUP_PORT_OFFSET_M + PRE_LINEUP_BACKOFF_M
+ALIGN_STANDOFF = LINEUP_PORT_OFFSET_M
+PRE_ALIGN_STANDOFF = LINEUP_PORT_OFFSET_M + PRE_LINEUP_BACKOFF_M
 PRE_ALIGN_LINEAR_STEP = 0.0025
 
-# Table clearance for the carried 2x module.
-# This is not meant to be a big overhead arc. It only keeps the module safely off
-# the table while moving to the compact pre-align waypoint.
-TABLE_CLEARANCE_ABOVE_TOP_M = 0.42
-TABLE_SAFE_MODULE_CENTER_Z = TABLE_HEIGHT + TABLE_CLEARANCE_ABOVE_TOP_M
+# Table / carry-height clearance.
+# ONLY TUNE THIS if the held block hits the table:
+# Bigger = robot carries the block higher above the table during transit.
+# Smaller = lower/faster, but more likely to hit the table.
+CARRY_HEIGHT_ABOVE_TABLE_M = 0.65
+
+TABLE_SAFE_MODULE_CENTER_Z = TABLE_HEIGHT + CARRY_HEIGHT_ABOVE_TABLE_M
 TABLE_CLEAR_LINEAR_STEP = 0.003
+HIGH_TRANSIT_LINEAR_STEP = 0.004
 
 # Final insertion.
 # Slightly deeper than v1. If it over-inserts, bring this back to 0.055 or 0.048.
@@ -438,81 +479,93 @@ def queue_transit_phase(offset_local):
     controller.clear_queue()
 
     module_pos, _ = get_module_pose()
-    down_ori = port_frame.pick_down_rot
     insert_ori = port_frame.insert_rot
 
-    # Start from the actual module position after pick. That removes the old
-    # hardcoded assumption that the module stayed exactly at the nominal pick pose.
+    # v26:
+    # Same path idea as v25, but the horizontal slide now happens farther away
+    # from the ports using HORIZONTAL_SLIDE_PORT_OFFSET_M.
     #
-    # The previous high-lane version went too far from the rack and made the arm
-    # fold over itself. This version uses one compact pre-align waypoint, close to
-    # the DataHall, then a straight port-axis move into lineup.
-    current_lift_center = module_pos.copy()
-    current_lift_center[2] = max(
-        current_lift_center[2],
+    # Path:
+    #   1. lift safely
+    #   2. move to the far slide lane's X/Z while staying at pickup-side Y
+    #   3. drop to the far slide lane Z
+    #   4. slide horizontally in Y at the FAR offset from the ports
+    #   5. move straight forward along the port axis to the real align point
+    #   6. start normal insert servo
+    safe_lift_center = module_pos.copy()
+    safe_lift_center[2] = max(
+        safe_lift_center[2],
         PICK_SURFACE_Z + PICK_HOVER_CLEARANCE,
         TABLE_SAFE_MODULE_CENTER_Z,
     )
 
-    rotate_hand = hand_target_for_module_center(current_lift_center, insert_ori, offset_local)
-
-    pre_align_center = port_frame.approach_position(PRE_ALIGN_STANDOFF)
+    slide_center = port_frame.approach_position(HORIZONTAL_SLIDE_PORT_OFFSET_M)
     align_center = port_frame.approach_position(ALIGN_STANDOFF)
 
-    # Only lift the compact pre-align point enough to clear the table.
-    # Do not add a separate far transport waypoint.
-    high_pre_align_center = pre_align_center.copy()
-    high_pre_align_center[2] = max(high_pre_align_center[2], TABLE_SAFE_MODULE_CENTER_Z)
+    # Same X/Z as the far slide lane, but stay at pickup-side Y first.
+    xz_lineup_center = np.array(
+        [slide_center[0], module_pos[1], slide_center[2]],
+        dtype=np.float64,
+    )
 
-    high_pre_align_hand = hand_target_for_module_center(high_pre_align_center, insert_ori, offset_local)
-    pre_align_hand = hand_target_for_module_center(pre_align_center, insert_ori, offset_local)
+    high_xz_lineup_center = xz_lineup_center.copy()
+    high_xz_lineup_center[2] = max(high_xz_lineup_center[2], TABLE_SAFE_MODULE_CENTER_Z)
+
+    safe_lift_hand = hand_target_for_module_center(safe_lift_center, insert_ori, offset_local)
+    high_xz_lineup_hand = hand_target_for_module_center(high_xz_lineup_center, insert_ori, offset_local)
+    xz_lineup_hand = hand_target_for_module_center(xz_lineup_center, insert_ori, offset_local)
+    slide_hand = hand_target_for_module_center(slide_center, insert_ori, offset_local)
     align_hand = hand_target_for_module_center(align_center, insert_ori, offset_local)
 
     print("\n" + sep("="))
     print(f"[QUEUE TRANSIT job={active_job_index}] {INSERT_JOBS[active_job_index]['label']}")
-    print(f"  table_top_z:           {TABLE_HEIGHT:.5f}")
-    print(f"  safe_module_center_z:  {TABLE_SAFE_MODULE_CENTER_Z:.5f}")
-    print(f"  align_standoff:        {ALIGN_STANDOFF:.5f}")
-    print(f"  pre_align_standoff:    {PRE_ALIGN_STANDOFF:.5f}")
-    print(f"  current_lift_center:   {np.round(current_lift_center, 5)}")
-    print(f"  high_pre_align_center: {np.round(high_pre_align_center, 5)}")
-    print(f"  pre_align_center:      {np.round(pre_align_center, 5)}")
-    print(f"  align_center:          {np.round(align_center, 5)}")
-    print(f"  rotate_hand:           {np.round(rotate_hand, 5)}")
-    print(f"  high_pre_align_hand:   {np.round(high_pre_align_hand, 5)}")
-    print(f"  pre_align_hand:        {np.round(pre_align_hand, 5)}")
-    print(f"  align_hand:            {np.round(align_hand, 5)}")
+    print("  mode: far X/Z lineup, far horizontal Y slide, then straight advance to align")
+    print(f"  table_top_z:                  {TABLE_HEIGHT:.5f}")
+    print(f"  carry_height_above_table:     {CARRY_HEIGHT_ABOVE_TABLE_M:.5f}")
+    print(f"  safe_module_center_z:         {TABLE_SAFE_MODULE_CENTER_Z:.5f}")
+    print(f"  horizontal_slide_port_offset: {HORIZONTAL_SLIDE_PORT_OFFSET_M:.5f}")
+    print(f"  final_lineup_port_offset:     {LINEUP_PORT_OFFSET_M:.5f}")
+    print(f"  module_now:                   {np.round(module_pos, 5)}")
+    print(f"  safe_lift_center:             {np.round(safe_lift_center, 5)}")
+    print(f"  high_xz_lineup_center:        {np.round(high_xz_lineup_center, 5)}")
+    print(f"  xz_lineup_center:             {np.round(xz_lineup_center, 5)}")
+    print(f"  slide_center:                 {np.round(slide_center, 5)}")
+    print(f"  align_center:                 {np.round(align_center, 5)}")
+    print(f"  y_slide_distance_mm:          {(slide_center[1] - xz_lineup_center[1]) * 1000.0:.1f}")
+    print(f"  straight_advance_mm:          {abs(HORIZONTAL_SLIDE_PORT_OFFSET_M - LINEUP_PORT_OFFSET_M) * 1000.0:.1f}")
+    print(f"  safe_lift_hand:               {np.round(safe_lift_hand, 5)}")
+    print(f"  high_xz_lineup_hand:          {np.round(high_xz_lineup_hand, 5)}")
+    print(f"  xz_lineup_hand:               {np.round(xz_lineup_hand, 5)}")
+    print(f"  slide_hand:                   {np.round(slide_hand, 5)}")
+    print(f"  align_hand:                   {np.round(align_hand, 5)}")
     print(sep("="))
 
-    # Compact approach path:
-    #   1. rotate/carry above table
-    #   2. move to high compact pre-align, not far away from the rack
-    #   3. linearly drop to the pre-align point
-    #   4. linearly move straight into final align standoff
     controller.add_cartesian_waypoint(
-        position=rotate_hand,
+        position=safe_lift_hand,
         orientation=insert_ori,
         target_is_hand=True,
-        joint_interp=True,
-        joint_steps=220,
-        max_frames=480,
-        pos_tolerance=0.020,
+        linear=True,
+        linear_step=HIGH_TRANSIT_LINEAR_STEP,
+        max_frames=520,
+        pos_tolerance=0.006,
         hold_gripper=True,
-        label="rotate_compact_clear_table",
+        label="linear_lift_to_safe_carry_height",
     )
+
     controller.add_cartesian_waypoint(
-        position=high_pre_align_hand,
+        position=high_xz_lineup_hand,
         orientation=insert_ori,
         target_is_hand=True,
-        joint_interp=True,
-        joint_steps=300,
-        max_frames=620,
-        pos_tolerance=0.020,
+        linear=True,
+        linear_step=HIGH_TRANSIT_LINEAR_STEP,
+        max_frames=760,
+        pos_tolerance=0.008,
         hold_gripper=True,
-        label="high_compact_pre_align",
+        label="linear_high_move_to_far_slide_x_pick_y",
     )
+
     controller.add_cartesian_waypoint(
-        position=pre_align_hand,
+        position=xz_lineup_hand,
         orientation=insert_ori,
         target_is_hand=True,
         linear=True,
@@ -520,20 +573,34 @@ def queue_transit_phase(offset_local):
         max_frames=500,
         pos_tolerance=0.004,
         hold_gripper=True,
-        label="linear_drop_to_compact_pre_align",
+        label="linear_drop_to_far_slide_xz_pick_y",
     )
+
+    # Horizontal Y slide happens here, far from the ports.
+    controller.add_cartesian_waypoint(
+        position=slide_hand,
+        orientation=insert_ori,
+        target_is_hand=True,
+        linear=True,
+        linear_step=PRE_ALIGN_LINEAR_STEP,
+        max_frames=900,
+        pos_tolerance=0.004,
+        hold_gripper=True,
+        label="linear_far_horizontal_y_slide",
+    )
+
+    # Then move straight forward/back along the port insertion axis to the final align standoff.
     controller.add_cartesian_waypoint(
         position=align_hand,
         orientation=insert_ori,
         target_is_hand=True,
         linear=True,
         linear_step=PRE_ALIGN_LINEAR_STEP,
-        max_frames=420,
+        max_frames=500,
         pos_tolerance=0.003,
         hold_gripper=True,
-        label="straight_compact_move_to_align",
+        label="linear_straight_advance_to_final_align",
     )
-
 
 def queue_release_phase():
     controller.clear_queue()
@@ -1022,7 +1089,7 @@ controller = FrankaMotionController(
 
 print("\n" + sep("="))
 print("[READY] Press Play.")
-print("  v12 scope: faster insert; 3 mm practical align gate instead of waiting on fake 1.5 mm precision.")
+print("  v26 scope: adjustable far horizontal-slide offset, then straight advance to align.")
 print("  This uses measured hand->module offset after grasp and a slow axis servo for insertion.")
 print("  After each insert, it opens the gripper, retreats straight back, then starts the next job.")
 print(sep("="))
