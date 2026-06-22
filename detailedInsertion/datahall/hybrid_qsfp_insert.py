@@ -96,7 +96,7 @@ INSERT_JOBS = [
             "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
         "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
-        "pick_xy": np.array([0.30, 0.25], dtype=np.float64),
+        "pick_xy": np.array([0.30, -0.525], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_0",
         "module_name": "qsfp_module_0",
     },
@@ -110,7 +110,7 @@ INSERT_JOBS = [
         ),
         # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
-        "pick_xy": np.array([0.38, 0.25], dtype=np.float64),
+        "pick_xy": np.array([0.38, -0.525], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_1",
         "module_name": "qsfp_module_1",
     },
@@ -124,7 +124,7 @@ INSERT_JOBS = [
         ),
         # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.009], dtype=np.float64),
-        "pick_xy": np.array([0.46, 0.25], dtype=np.float64),
+        "pick_xy": np.array([0.46, -0.525], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_2",
         "module_name": "qsfp_module_2",
     },    
@@ -138,7 +138,7 @@ INSERT_JOBS = [
         ),
         # Tune only if this port is visibly off.
         "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
-        "pick_xy": np.array([0.54, 0.25], dtype=np.float64),
+        "pick_xy": np.array([0.54, -0.525], dtype=np.float64),
         "module_prim_path": "/World/QSFP_Module_3",
         "module_name": "qsfp_module_3",
     },   
@@ -156,7 +156,7 @@ ROBOT_BASE_POS = np.array([0.55, -0.15, TABLE_HEIGHT], dtype=np.float64)
 # Passive second robot / block row for the two-robot workspace layout test.
 # Robot 2 is spawned now, but it is not driven by the current state machine yet.
 SECOND_ROBOT_BASE_POS = np.array([0.55, -1.20, TABLE_HEIGHT], dtype=np.float64)
-SECOND_PICK_ROW_Y = -0.8
+SECOND_PICK_ROW_Y = -0.825
 SECOND_ROBOT_BLOCK_COUNT = 3
 SECOND_ROBOT_PRIM_PATH = "/World/Franka_2"
 

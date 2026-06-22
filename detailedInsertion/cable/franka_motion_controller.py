@@ -135,6 +135,11 @@ class FrankaMotionController(BaseController):
 
             if cmd.get("linear"):
                 cmd["frames_spent"] += 1
+                if self._segment_failed:
+                    # A failed linear IK step means the commanded straight line is not currently
+                    # executable. Do not silently advance to the next command and close the
+                    # gripper in empty space. Freeze so the failure is obvious.
+                    return self._hold_action(n_dof)
                 goal_reached = self._linear_progress >= self._linear_length and self._segment_goal_reached(cmd)
                 timed_out = cmd["frames_spent"] >= cmd["max_frames"]
                 if goal_reached or timed_out:
@@ -188,6 +193,7 @@ class FrankaMotionController(BaseController):
         self._linear_length = 0.0
         self._linear_progress = 0.0
         self._linear_ik_warned = False
+        self._segment_failed = False
         self._joint_interp_start = None
         self._joint_interp_goal = None
         self._joint_interp_step = 0
@@ -309,8 +315,8 @@ class FrankaMotionController(BaseController):
         self._linear_ik_warned = False
 
     def _linear_ik_action(self, cmd: dict, n_dof: int) -> ArticulationAction:
-        self._linear_progress = min(self._linear_progress + cmd["linear_step"], self._linear_length)
-        target = self._linear_start + self._linear_dir * self._linear_progress
+        next_progress = min(self._linear_progress + cmd["linear_step"], self._linear_length)
+        target = self._linear_start + self._linear_dir * next_progress
         action, success = self._art_kinematics.compute_inverse_kinematics(
             target_position=target,
             target_orientation=cmd["ori"],
@@ -319,9 +325,18 @@ class FrankaMotionController(BaseController):
         )
         if not success:
             if not self._linear_ik_warned:
-                carb.log_warn(f"Linear IK failed at {np.round(target, 4)}; holding.")
+                carb.log_warn(
+                    f"Linear IK failed at {np.round(target, 4)}; halting command queue "
+                    f"{self._debug_tag(cmd)}."
+                )
                 self._linear_ik_warned = True
+            self._segment_failed = True
             return self._hold_action(n_dof)
+
+        # Only advance the virtual path after IK succeeds. The previous version
+        # advanced progress before solving, so one failed step could make the
+        # target run away while the robot stayed frozen.
+        self._linear_progress = next_progress
         return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
 
     def _init_joint_interp_segment(self, cmd: dict, current_joint_positions: np.ndarray, n_dof: int) -> None:
