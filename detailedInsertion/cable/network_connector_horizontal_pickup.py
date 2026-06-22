@@ -10,7 +10,9 @@ import numpy as np
 import omni.usd
 
 from isaacsim.core.api import World
+from isaacsim.core.utils.numpy.rotations import quats_to_rot_matrices, rot_matrices_to_quats
 from isaacsim.core.utils.stage import add_reference_to_stage
+from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.robot.manipulators import SingleManipulator
 from isaacsim.robot.manipulators.grippers import ParallelGripper
 from isaacsim.robot_motion.motion_generation import (
@@ -84,8 +86,39 @@ GRIP_RESTITUTION = 0.0
 GRIP_MATERIAL_PATH = "/World/Looks/HighGripPhysicsMaterial"
 
 # Small contact offsets help tiny mesh contacts resolve before visible penetration.
+
 GRIP_CONTACT_OFFSET = 0.003
 GRIP_REST_OFFSET = 0.0
+
+# Closed-loop plug pose servo. This is the cable version of the block insertion
+# feedback loop: it reads /World/NetworkCable/E_crystal_head1_45 every frame and
+# corrects the robot until the plug position AND orientation are inside tolerance.
+# Position uses the tracked plug bbox center because deformable/root xforms can be
+# misleading; orientation uses the tracked plug xform quaternion.
+ENABLE_PLUG_POSE_SERVO = True
+PLUG_TARGET_POSITION = np.array([-0.642, 0.00, 0.325], dtype=np.float64)
+
+# The plug's long dimension is local +X in the USD. This target is a 180-degree
+# yaw around world Z, so local +X points along world -X and the connector stays
+# horizontal for insertion.
+PLUG_TARGET_ORI_WXYZ = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+PLUG_INSERT_AXIS_WORLD = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
+
+PLUG_POSITION_TOL = 0.0010          # 1.0 mm total XYZ error
+PLUG_ORIENTATION_TOL_DEG = 1.00     # full quaternion angular error
+PLUG_HOLD_FRAMES = 18               # require stable pose for this many frames
+PLUG_SERVO_MAX_FRAMES = 3600
+PLUG_SERVO_DEBUG_EVERY = 120
+
+# Per-frame correction limits. These are intentionally small so the correction
+# behaves like a servo, not a teleporting IK target.
+PLUG_SERVO_POS_KP = 0.65
+PLUG_SERVO_MAX_POS_STEP = 0.0010    # 1.0 mm/frame
+PLUG_SERVO_MAX_ORI_STEP_DEG = 0.45  # deg/frame
+PLUG_SERVO_IK_POS_TOL = 0.0002
+PLUG_SERVO_IK_ORI_TOL = 0.020       # radians-ish tolerance used by Lula IK
+PLUG_LOCAL_DRIFT_WARN_POS = 0.0040  # if exceeded, plug is moving in fingers
+PLUG_LOCAL_DRIFT_WARN_ORI_DEG = 5.0
 
 
 # =============================================================================
@@ -124,7 +157,7 @@ def queue_user_waypoints(controller: FrankaMotionController) -> None:
     controller.add_gripper_command(action="close", wait_frames=GRIP_CLOSE_WAIT_FRAMES)
 
     controller.add_cartesian_waypoint(
-        position=np.array([0.642, 0.00, 0.2], dtype=np.float64),
+        position=np.array([0.642, 0.00, 0.325], dtype=np.float64),
         orientation=DIAGONAL_DOWN_ORI,
         max_frames=600,
         pos_tolerance=0.001,
@@ -135,7 +168,18 @@ def queue_user_waypoints(controller: FrankaMotionController) -> None:
     )
 
     controller.add_cartesian_waypoint(
-        position=np.array([-0.642, 0.00, 0.2], dtype=np.float64),
+        position=np.array([0, 0.5, 0.325], dtype=np.float64),
+        orientation=DIAGONAL_INSERT_ORI,
+        max_frames=600,
+        pos_tolerance=0.001,
+        joint_interp=True,
+        joint_steps=240,
+        hold_gripper=True,
+        label="diagonal_insert_no_wrist_flip",
+    )
+
+    controller.add_cartesian_waypoint(
+        position=np.array([-0.642, 0.00, 0.325], dtype=np.float64),
         orientation=DIAGONAL_INSERT_ORI,
         max_frames=600,
         pos_tolerance=0.001,
@@ -718,8 +762,414 @@ def build_scene_and_controller():
     return world, franka, controller, kinematics_solver, art_kinematics
 
 
+
 # =============================================================================
-# 7. OPTIONAL PER-FRAME HOOK
+# 7. CLOSED-LOOP PLUG POSE SERVO
+# =============================================================================
+
+PHASE_COARSE_WAYPOINTS = 0
+PHASE_PLUG_POSE_SERVO = 1
+PHASE_DONE = 2
+
+plug_pose_servo: dict = {}
+plug_pose_samples: typing.List[dict] = []
+
+
+def normalize_quat_wxyz(quat: np.ndarray) -> np.ndarray:
+    q = np.asarray(quat, dtype=np.float64).flatten()
+    norm = float(np.linalg.norm(q))
+    if norm < 1e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    return q / norm
+
+
+def quat_to_rot_wxyz(quat: np.ndarray) -> np.ndarray:
+    return quats_to_rot_matrices(normalize_quat_wxyz(quat).reshape(1, 4))[0]
+
+
+def rot_to_quat_wxyz(rot: np.ndarray) -> np.ndarray:
+    quat = rot_matrices_to_quats(np.asarray(rot, dtype=np.float64).reshape(1, 3, 3))
+    if quat.ndim > 1:
+        quat = quat[0]
+    return normalize_quat_wxyz(quat)
+
+
+def quat_angle_error_deg(actual: np.ndarray, target: np.ndarray) -> float:
+    a = normalize_quat_wxyz(actual)
+    b = normalize_quat_wxyz(target)
+    dot = float(np.clip(abs(np.dot(a, b)), 0.0, 1.0))
+    return float(np.degrees(2.0 * np.arccos(dot)))
+
+
+def quat_slerp_shortest(q0: np.ndarray, q1: np.ndarray, fraction: float) -> np.ndarray:
+    q0 = normalize_quat_wxyz(q0)
+    q1 = normalize_quat_wxyz(q1)
+    t = float(np.clip(fraction, 0.0, 1.0))
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = float(np.clip(dot, -1.0, 1.0))
+    if dot > 0.9995:
+        return normalize_quat_wxyz(q0 + t * (q1 - q0))
+    theta_0 = np.arccos(dot)
+    sin_theta_0 = np.sin(theta_0)
+    theta = theta_0 * t
+    s0 = np.sin(theta_0 - theta) / sin_theta_0
+    s1 = np.sin(theta) / sin_theta_0
+    return normalize_quat_wxyz(s0 * q0 + s1 * q1)
+
+
+def rotation_angle_error_deg(actual_rot: np.ndarray, target_rot: np.ndarray) -> float:
+    rel = np.asarray(target_rot, dtype=np.float64).T @ np.asarray(actual_rot, dtype=np.float64)
+    trace_value = float(np.trace(rel))
+    cos_angle = np.clip((trace_value - 1.0) * 0.5, -1.0, 1.0)
+    return float(np.degrees(np.arccos(cos_angle)))
+
+
+def get_hand_pose_matrix() -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    hand_pos, hand_rot = art_kinematics.compute_end_effector_pose()
+    hand_pos = np.asarray(hand_pos, dtype=np.float64).flatten()
+    hand_rot = np.asarray(hand_rot, dtype=np.float64)
+    if hand_rot.ndim == 3:
+        hand_rot = hand_rot[0]
+    hand_quat = rot_to_quat_wxyz(hand_rot)
+    return hand_pos, hand_rot, hand_quat
+
+
+def get_tracked_plug_pose_matrix() -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return plug position, rotation matrix, quaternion, and xform position.
+
+    Position is the bbox center of E_crystal_head1_45, because that is the number
+    that moved correctly in your logs. Orientation comes from the prim xform.
+    """
+
+    xform_pos, quat = get_prim_world_pose(TRACKED_PLUG_PRIM_PATH)
+    if xform_pos is None or quat is None:
+        raise RuntimeError(f"Could not read tracked plug pose: {TRACKED_PLUG_PRIM_PATH}")
+    _, _, bbox_center, _ = get_bbox(TRACKED_PLUG_PRIM_PATH)
+    quat = normalize_quat_wxyz(quat)
+    rot = quat_to_rot_wxyz(quat)
+    return bbox_center, rot, quat, np.asarray(xform_pos, dtype=np.float64)
+
+
+def plug_long_axis_world(plug_rot: np.ndarray) -> np.ndarray:
+    axis = np.asarray(plug_rot, dtype=np.float64) @ np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    norm = float(np.linalg.norm(axis))
+    return axis / norm if norm > 1e-12 else axis
+
+
+def plug_axis_angle_to_insert_deg(plug_rot: np.ndarray) -> float:
+    axis = plug_long_axis_world(plug_rot)
+    target_axis = PLUG_INSERT_AXIS_WORLD / np.linalg.norm(PLUG_INSERT_AXIS_WORLD)
+    dot = float(np.clip(np.dot(axis, target_axis), -1.0, 1.0))
+    return float(np.degrees(np.arccos(dot)))
+
+
+def plug_tilt_out_of_horizontal_deg(plug_rot: np.ndarray) -> float:
+    axis = plug_long_axis_world(plug_rot)
+    return float(np.degrees(np.arcsin(np.clip(abs(axis[2]), 0.0, 1.0))))
+
+
+def compute_plug_hand_offsets() -> typing.Tuple[np.ndarray, np.ndarray]:
+    plug_pos, plug_rot, _, _ = get_tracked_plug_pose_matrix()
+    hand_pos, hand_rot, _ = get_hand_pose_matrix()
+    plug_offset_local = hand_rot.T @ (plug_pos - hand_pos)
+    plug_rot_local = hand_rot.T @ plug_rot
+    return plug_offset_local, plug_rot_local
+
+
+def hand_pose_for_plug_pose(
+    target_plug_pos: np.ndarray,
+    target_plug_quat: np.ndarray,
+    plug_offset_local: np.ndarray,
+    plug_rot_local: np.ndarray,
+) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    target_plug_rot = quat_to_rot_wxyz(target_plug_quat)
+    target_hand_rot = target_plug_rot @ np.asarray(plug_rot_local, dtype=np.float64).T
+    target_hand_pos = np.asarray(target_plug_pos, dtype=np.float64) - target_hand_rot @ np.asarray(plug_offset_local, dtype=np.float64)
+    target_hand_quat = rot_to_quat_wxyz(target_hand_rot)
+    return target_hand_pos, target_hand_rot, target_hand_quat
+
+
+def closed_gripper_hold_action(n_dof: int) -> ArticulationAction:
+    return controller._with_closed_gripper(controller._hold_action(n_dof), n_dof)
+
+
+def print_plug_pose_error(tag: str) -> typing.Tuple[float, float]:
+    plug_pos, plug_rot, plug_quat, plug_xform_pos = get_tracked_plug_pose_matrix()
+    target_quat = normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ)
+    pos_err = plug_pos - PLUG_TARGET_POSITION
+    pos_norm = float(np.linalg.norm(pos_err))
+    ori_err = quat_angle_error_deg(plug_quat, target_quat)
+    long_axis = plug_long_axis_world(plug_rot)
+    axis_angle = plug_axis_angle_to_insert_deg(plug_rot)
+    tilt = plug_tilt_out_of_horizontal_deg(plug_rot)
+
+    print("=" * 88)
+    print(f"[PLUG POSE CHECK] {tag}")
+    print(f"  target_pos:             {fmt_vec(PLUG_TARGET_POSITION)}")
+    print(f"  actual_bbox_center:     {fmt_vec(plug_pos)}")
+    print(f"  actual_xform_pos:       {fmt_vec(plug_xform_pos)}")
+    print(f"  position_error_xyz_mm:  {fmt_vec(pos_err * 1000.0, 3)}")
+    print(f"  position_error_norm_mm: {pos_norm * 1000.0:.3f}  limit={PLUG_POSITION_TOL * 1000.0:.3f}")
+    print(f"  target_ori_wxyz:        {fmt_vec(target_quat)}")
+    print(f"  actual_ori_wxyz:        {fmt_vec(plug_quat)}")
+    print(f"  orientation_error_deg:  {ori_err:.3f}  limit={PLUG_ORIENTATION_TOL_DEG:.3f}")
+    print(f"  plug_long_axis_world:   {fmt_vec(long_axis)}")
+    print(f"  axis_angle_to_-X_deg:   {axis_angle:.3f}")
+    print(f"  tilt_out_horizontal_deg:{tilt:.3f}")
+    print("=" * 88)
+    return pos_norm, ori_err
+
+
+def print_plug_hand_offset_debug(tag: str) -> None:
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    hand_pos, hand_rot, hand_quat = get_hand_pose_matrix()
+    offset_local = hand_rot.T @ (plug_pos - hand_pos)
+    rot_local = hand_rot.T @ plug_rot
+
+    ref_offset = plug_pose_servo.get("plug_offset_local")
+    ref_rot = plug_pose_servo.get("plug_rot_local")
+    offset_drift = float(np.linalg.norm(offset_local - ref_offset)) if ref_offset is not None else 0.0
+    rot_drift = rotation_angle_error_deg(rot_local, ref_rot) if ref_rot is not None else 0.0
+
+    print("-" * 88)
+    print(f"[PLUG/HAND OFFSET DEBUG] {tag}")
+    print(f"  hand_pos:              {fmt_vec(hand_pos)}")
+    print(f"  hand_ori_wxyz:         {fmt_vec(hand_quat)}")
+    print(f"  plug_bbox_center:      {fmt_vec(plug_pos)}")
+    print(f"  plug_ori_wxyz:         {fmt_vec(plug_quat)}")
+    print(f"  plug_offset_local:     {fmt_vec(offset_local)}")
+    print(f"  plug_offset_drift_mm:  {offset_drift * 1000.0:.3f}")
+    print(f"  plug_rot_local_drift:  {rot_drift:.3f} deg")
+    if offset_drift > PLUG_LOCAL_DRIFT_WARN_POS or rot_drift > PLUG_LOCAL_DRIFT_WARN_ORI_DEG:
+        print("  WARNING: plug is moving relative to the hand; this is grip/slip, not IK error.")
+    print("-" * 88)
+
+
+def init_plug_pose_servo() -> None:
+    plug_pose_servo.clear()
+    plug_pose_samples.clear()
+
+    plug_offset_local, plug_rot_local = compute_plug_hand_offsets()
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    hand_pos, hand_rot, hand_quat = get_hand_pose_matrix()
+    pos_err_norm, ori_err_deg = print_plug_pose_error("BEFORE closed-loop plug pose servo")
+
+    target_hand_pos, _, target_hand_quat = hand_pose_for_plug_pose(
+        PLUG_TARGET_POSITION,
+        PLUG_TARGET_ORI_WXYZ,
+        plug_offset_local,
+        plug_rot_local,
+    )
+
+    plug_pose_servo.update({
+        "frames": 0,
+        "stable_frames": 0,
+        "ik_fail_count": 0,
+        "warned_ik": False,
+        "plug_offset_local": plug_offset_local,
+        "plug_rot_local": plug_rot_local,
+        "initial_plug_pos": plug_pos.copy(),
+        "initial_plug_quat": plug_quat.copy(),
+        "initial_hand_pos": hand_pos.copy(),
+        "initial_hand_quat": hand_quat.copy(),
+        "target_hand_pos": target_hand_pos.copy(),
+        "target_hand_quat": target_hand_quat.copy(),
+        "max_position_error": pos_err_norm,
+        "max_orientation_error_deg": ori_err_deg,
+        "max_offset_drift": 0.0,
+        "max_rot_local_drift_deg": 0.0,
+    })
+
+    print("=" * 88)
+    print("[PLUG POSE SERVO INIT]")
+    print("  control_object:          /World/NetworkCable/E_crystal_head1_45")
+    print("  position_source:         bbox center of tracked plug")
+    print("  orientation_source:      tracked plug xform quaternion")
+    print(f"  plug_offset_local:       {fmt_vec(plug_offset_local)}")
+    print(f"  target_plug_pos:         {fmt_vec(PLUG_TARGET_POSITION)}")
+    print(f"  target_plug_ori_wxyz:    {fmt_vec(normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ))}")
+    print(f"  target_hand_pos:         {fmt_vec(target_hand_pos)}")
+    print(f"  target_hand_ori_wxyz:    {fmt_vec(target_hand_quat)}")
+    print(f"  position_tolerance:      {PLUG_POSITION_TOL * 1000.0:.3f} mm")
+    print(f"  orientation_tolerance:   {PLUG_ORIENTATION_TOL_DEG:.3f} deg")
+    print(f"  stable_hold_frames:      {PLUG_HOLD_FRAMES}")
+    print(f"  max_pos_step:            {PLUG_SERVO_MAX_POS_STEP * 1000.0:.3f} mm/frame")
+    print(f"  max_ori_step:            {PLUG_SERVO_MAX_ORI_STEP_DEG:.3f} deg/frame")
+    print("=" * 88)
+    print_plug_hand_offset_debug("SERVO INIT local plug-to-hand relationship")
+
+
+def sample_plug_pose_servo_path(pos_err_norm: float, ori_err_deg: float) -> None:
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    hand_pos, hand_rot, _ = get_hand_pose_matrix()
+    ref_offset = plug_pose_servo.get("plug_offset_local")
+    ref_rot = plug_pose_servo.get("plug_rot_local")
+    current_offset = hand_rot.T @ (plug_pos - hand_pos)
+    current_rot_local = hand_rot.T @ plug_rot
+    offset_drift = float(np.linalg.norm(current_offset - ref_offset)) if ref_offset is not None else 0.0
+    rot_drift = rotation_angle_error_deg(current_rot_local, ref_rot) if ref_rot is not None else 0.0
+
+    plug_pose_servo["max_position_error"] = max(float(plug_pose_servo.get("max_position_error", 0.0)), float(pos_err_norm))
+    plug_pose_servo["max_orientation_error_deg"] = max(float(plug_pose_servo.get("max_orientation_error_deg", 0.0)), float(ori_err_deg))
+    plug_pose_servo["max_offset_drift"] = max(float(plug_pose_servo.get("max_offset_drift", 0.0)), offset_drift)
+    plug_pose_servo["max_rot_local_drift_deg"] = max(float(plug_pose_servo.get("max_rot_local_drift_deg", 0.0)), rot_drift)
+
+    plug_pose_samples.append({
+        "pos": plug_pos.copy(),
+        "quat": plug_quat.copy(),
+        "long_axis": plug_long_axis_world(plug_rot).copy(),
+        "pos_err_norm": float(pos_err_norm),
+        "ori_err_deg": float(ori_err_deg),
+        "axis_angle_deg": plug_axis_angle_to_insert_deg(plug_rot),
+        "tilt_deg": plug_tilt_out_of_horizontal_deg(plug_rot),
+        "offset_drift": offset_drift,
+        "rot_drift_deg": rot_drift,
+    })
+
+
+def update_plug_pose_servo_state() -> bool:
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    pos_err = PLUG_TARGET_POSITION - plug_pos
+    pos_err_norm = float(np.linalg.norm(pos_err))
+    ori_err_deg = quat_angle_error_deg(plug_quat, PLUG_TARGET_ORI_WXYZ)
+    sample_plug_pose_servo_path(pos_err_norm, ori_err_deg)
+
+    plug_pose_servo["frames"] += 1
+    inside = pos_err_norm <= PLUG_POSITION_TOL and ori_err_deg <= PLUG_ORIENTATION_TOL_DEG
+    if inside:
+        plug_pose_servo["stable_frames"] += 1
+    else:
+        plug_pose_servo["stable_frames"] = 0
+
+    if plug_pose_servo["frames"] == 1 or plug_pose_servo["frames"] % PLUG_SERVO_DEBUG_EVERY == 0 or inside:
+        axis_angle = plug_axis_angle_to_insert_deg(plug_rot)
+        tilt = plug_tilt_out_of_horizontal_deg(plug_rot)
+        print(
+            f"[PLUG POSE SERVO] frame={plug_pose_servo['frames']} "
+            f"pos_err={pos_err_norm * 1000.0:.3f}mm "
+            f"xyz_err_mm={np.round(pos_err * 1000.0, 3)} "
+            f"ori_err={ori_err_deg:.3f}deg "
+            f"axis_to_-X={axis_angle:.3f}deg "
+            f"tilt={tilt:.3f}deg "
+            f"stable={plug_pose_servo['stable_frames']}/{PLUG_HOLD_FRAMES}"
+        )
+
+    if plug_pose_servo["stable_frames"] >= PLUG_HOLD_FRAMES:
+        print("\n" + "=" * 88)
+        print("[PLUG POSE SERVO] target pose held inside tolerance")
+        print(f"  frames:               {plug_pose_servo['frames']}")
+        print(f"  final_pos_error_mm:   {pos_err_norm * 1000.0:.3f}")
+        print(f"  final_ori_error_deg:  {ori_err_deg:.3f}")
+        print("=" * 88)
+        return True
+
+    if plug_pose_servo["frames"] >= PLUG_SERVO_MAX_FRAMES:
+        print("\n" + "=" * 88)
+        print("[PLUG POSE SERVO] FAILED: timed out before pose was inside tolerance")
+        print(f"  final_pos_error_mm:   {pos_err_norm * 1000.0:.3f}")
+        print(f"  final_ori_error_deg:  {ori_err_deg:.3f}")
+        print(f"  stable_frames:        {plug_pose_servo['stable_frames']}/{PLUG_HOLD_FRAMES}")
+        print("=" * 88)
+        return True
+
+    return False
+
+
+def plug_pose_servo_action(joint_pos: np.ndarray) -> ArticulationAction:
+    n_dof = int(joint_pos.shape[0])
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    target_quat = normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ)
+
+    # Small position step toward the desired plug center.
+    err = PLUG_TARGET_POSITION - plug_pos
+    raw_step = PLUG_SERVO_POS_KP * err
+    raw_step_norm = float(np.linalg.norm(raw_step))
+    if raw_step_norm > PLUG_SERVO_MAX_POS_STEP:
+        raw_step *= PLUG_SERVO_MAX_POS_STEP / raw_step_norm
+    command_plug_pos = plug_pos + raw_step
+
+    # Small orientation step toward the desired plug orientation.
+    ori_err_deg = quat_angle_error_deg(plug_quat, target_quat)
+    if ori_err_deg <= 1e-9:
+        command_plug_quat = target_quat
+    else:
+        frac = min(1.0, PLUG_SERVO_MAX_ORI_STEP_DEG / ori_err_deg)
+        command_plug_quat = quat_slerp_shortest(plug_quat, target_quat, frac)
+
+    target_hand_pos, _, target_hand_quat = hand_pose_for_plug_pose(
+        command_plug_pos,
+        command_plug_quat,
+        plug_pose_servo["plug_offset_local"],
+        plug_pose_servo["plug_rot_local"],
+    )
+
+    action, success = art_kinematics.compute_inverse_kinematics(
+        target_position=target_hand_pos,
+        target_orientation=target_hand_quat,
+        position_tolerance=PLUG_SERVO_IK_POS_TOL,
+        orientation_tolerance=PLUG_SERVO_IK_ORI_TOL,
+    )
+
+    if not success:
+        plug_pose_servo["ik_fail_count"] = int(plug_pose_servo.get("ik_fail_count", 0)) + 1
+        if not plug_pose_servo.get("warned_ik", False) or plug_pose_servo["ik_fail_count"] % 120 == 0:
+            print("[PLUG POSE SERVO] IK failed; holding closed gripper")
+            print(f"  command_plug_pos:      {fmt_vec(command_plug_pos)}")
+            print(f"  command_plug_quat:     {fmt_vec(command_plug_quat)}")
+            print(f"  target_hand_pos:       {fmt_vec(target_hand_pos)}")
+            print(f"  target_hand_quat:      {fmt_vec(target_hand_quat)}")
+            print(f"  ik_fail_count:         {plug_pose_servo['ik_fail_count']}")
+            plug_pose_servo["warned_ik"] = True
+        return closed_gripper_hold_action(n_dof)
+
+    return controller._with_closed_gripper(action, n_dof)
+
+
+def measure_plug_pose_servo_result() -> bool:
+    pos_norm, ori_err = print_plug_pose_error("FINAL closed-loop plug pose result")
+    print_plug_hand_offset_debug("FINAL local plug-to-hand relationship")
+
+    if len(plug_pose_samples) >= 2:
+        positions = np.asarray([s["pos"] for s in plug_pose_samples], dtype=np.float64)
+        pos_errs = np.asarray([s["pos_err_norm"] for s in plug_pose_samples], dtype=np.float64)
+        ori_errs = np.asarray([s["ori_err_deg"] for s in plug_pose_samples], dtype=np.float64)
+        axis_angles = np.asarray([s["axis_angle_deg"] for s in plug_pose_samples], dtype=np.float64)
+        tilts = np.asarray([s["tilt_deg"] for s in plug_pose_samples], dtype=np.float64)
+        offset_drifts = np.asarray([s["offset_drift"] for s in plug_pose_samples], dtype=np.float64)
+        rot_drifts = np.asarray([s["rot_drift_deg"] for s in plug_pose_samples], dtype=np.float64)
+
+        dx = np.diff(positions[:, 0])
+        max_positive_x_backtrack = float(np.max(np.maximum(0.0, dx))) if len(dx) else 0.0
+
+        print("=" * 88)
+        print("[PLUG POSE SERVO PATH SUMMARY]")
+        print(f"  samples:                    {len(plug_pose_samples)}")
+        print(f"  start_plug_pos:             {fmt_vec(positions[0])}")
+        print(f"  end_plug_pos:               {fmt_vec(positions[-1])}")
+        print(f"  max_position_error_mm:      {float(np.max(pos_errs)) * 1000.0:.3f}")
+        print(f"  final_position_error_mm:    {pos_norm * 1000.0:.3f}")
+        print(f"  max_orientation_error_deg:  {float(np.max(ori_errs)):.3f}")
+        print(f"  final_orientation_error_deg:{ori_err:.3f}")
+        print(f"  max_axis_angle_to_-X_deg:   {float(np.max(axis_angles)):.3f}")
+        print(f"  final_axis_angle_to_-X_deg: {float(axis_angles[-1]):.3f}")
+        print(f"  max_tilt_horizontal_deg:    {float(np.max(tilts)):.3f}")
+        print(f"  final_tilt_horizontal_deg:  {float(tilts[-1]):.3f}")
+        print(f"  max_plug_offset_drift_mm:   {float(np.max(offset_drifts)) * 1000.0:.3f}")
+        print(f"  max_plug_rot_drift_deg:     {float(np.max(rot_drifts)):.3f}")
+        print(f"  max_positive_x_backtrack:   {max_positive_x_backtrack * 1000.0:.3f} mm")
+        print(f"  ik_fail_count:              {int(plug_pose_servo.get('ik_fail_count', 0))}")
+        print("=" * 88)
+
+    ok = pos_norm <= PLUG_POSITION_TOL and ori_err <= PLUG_ORIENTATION_TOL_DEG
+    print("[PLUG POSE RESULT] ✓ plug position and orientation are inside tolerance" if ok else "[PLUG POSE RESULT] ✗ plug pose is outside tolerance")
+    return ok
+
+
+# =============================================================================
+# 8. OPTIONAL PER-FRAME HOOK
 # =============================================================================
 
 def user_robot_step(
@@ -738,18 +1188,19 @@ def user_robot_step(
 
 
 # =============================================================================
-# 8. MAIN LOOP
+# 9. MAIN LOOP
 # =============================================================================
 
 world, franka, controller, kinematics_solver, art_kinematics = build_scene_and_controller()
 waypoints_queued = False
 active_command_info = None
-all_done_logged = False
+phase = PHASE_COARSE_WAYPOINTS
+final_result_logged = False
 
-print("[READY - CONTROLLER BASE V11 SAFE]")
+print("[READY - CABLE POSE FEEDBACK]")
 print("  Spawned: Franka robot, pickup block, two slot posts, and network cable.")
-print("  Controller/IK/Lula setup is complete. Safe default waypoint is active.")
-print("  Replace the safe default waypoint inside queue_user_waypoints() when ready.")
+print("  Coarse waypoints run first. Then a closed-loop plug pose servo reads")
+print(f"  {TRACKED_PLUG_PRIM_PATH} every frame and corrects position + orientation.")
 print("  Press Play.")
 
 while simulation_app.is_running():
@@ -761,22 +1212,51 @@ while simulation_app.is_running():
     if not waypoints_queued:
         queue_user_waypoints(controller)
         print_queued_commands(controller)
+        print_plug_pose_error("AFTER queue_user_waypoints / BEFORE first command")
         log_cable_pose("AFTER queue_user_waypoints / BEFORE first command")
         waypoints_queued = True
 
     user_robot_step(world, franka, controller, art_kinematics)
 
-    if controller.is_done():
-        if not all_done_logged:
-            if active_command_info is not None:
-                log_command_boundary("AFTER", active_command_info)
-                active_command_info = None
-            log_cable_pose("ALL CONTROLLER COMMANDS DONE")
-            all_done_logged = True
-        continue
-
     joint_pos = franka.get_joint_positions()
     if joint_pos is None:
+        continue
+
+    if phase == PHASE_PLUG_POSE_SERVO:
+        if update_plug_pose_servo_state():
+            print("\n[PHASE] CLOSED-LOOP PLUG POSE SERVO complete")
+            measure_plug_pose_servo_result()
+            phase = PHASE_DONE
+            print("\n[PHASE] DONE — gripper remains closed for inspection. Press Stop to reset/rerun.")
+        else:
+            franka.get_articulation_controller().apply_action(plug_pose_servo_action(joint_pos))
+        continue
+
+    if phase == PHASE_DONE:
+        if not final_result_logged:
+            log_cable_pose("FINAL HOLD / ALL PHASES DONE")
+            final_result_logged = True
+        continue
+
+    # PHASE_COARSE_WAYPOINTS: execute your existing waypoint sequence with the
+    # same before/after command debug you already had.
+    if controller.is_done():
+        if active_command_info is not None:
+            log_command_boundary("AFTER", active_command_info)
+            active_command_info = None
+
+        print("\n[PHASE] COARSE WAYPOINTS complete")
+        print_plug_pose_error("AFTER coarse waypoints / BEFORE closed-loop correction")
+        log_cable_pose("AFTER coarse waypoints / BEFORE closed-loop correction")
+
+        if ENABLE_PLUG_POSE_SERVO:
+            print("[PHASE] → CLOSED-LOOP PLUG POSE SERVO")
+            controller.clear_queue()
+            init_plug_pose_servo()
+            phase = PHASE_PLUG_POSE_SERVO
+        else:
+            print("[PHASE] Plug pose servo disabled. Holding final coarse pose.")
+            phase = PHASE_DONE
         continue
 
     current_info = get_current_command_info(controller)
@@ -789,8 +1269,10 @@ while simulation_app.is_running():
             # The previous command completed between frames. Print its after-pose,
             # then immediately print the before-pose for the new command.
             log_command_boundary("AFTER", active_command_info)
+            print_plug_pose_error(f"AFTER command {active_command_info['index']} / {active_command_info['label']}")
             active_command_info = current_info
             log_command_boundary("BEFORE", active_command_info)
+            print_plug_pose_error(f"BEFORE command {active_command_info['index']} / {active_command_info['label']}")
 
     previous_info = active_command_info
     action = controller.forward(joint_pos)
@@ -803,6 +1285,7 @@ while simulation_app.is_running():
     if previous_info is not None:
         if next_info is None or next_info["index"] != previous_info["index"]:
             log_command_boundary("AFTER", previous_info)
+            print_plug_pose_error(f"AFTER command {previous_info['index']} / {previous_info['label']}")
             active_command_info = None
 
 simulation_app.close()
