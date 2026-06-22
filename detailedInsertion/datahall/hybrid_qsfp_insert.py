@@ -9,6 +9,7 @@ import builtins
 
 import carb
 import numpy as np
+import omni.ui as ui
 import omni.usd
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import FixedCuboid
@@ -73,6 +74,19 @@ DEBUG = False
 VIEWPORT_CAMERA = True
 VERBOSE_LOGS = False
 
+# Keep the Isaac UI clean. Only the live viewport stays visible.
+VIEWPORT_ONLY_LAYOUT = True
+VIEWPORT_KEEP_TITLES = ("Viewport", "Viewport 1")
+VIEWPORT_HIDE_TOKENS = ("Sensors Output",)
+VIEWPORT_LAYOUT_REAPPLY_FRAMES = 120
+
+# Startup viewport camera.
+# After pressing Play, move the viewport camera where you want it.
+# The script logs replacement values for these constants after CAMERA_POSE_LOG_SECONDS.
+STARTUP_CAMERA_EYE = [1.75, 1, 4.25]
+STARTUP_CAMERA_TARGET = [-0.25, -0.75, 2.75]
+CAMERA_POSE_LOG_SECONDS = 10.0
+
 
 def log(*args, **kwargs):
     if VERBOSE_LOGS:
@@ -92,7 +106,7 @@ INSERT_JOBS = [
         "port_prim_path": (
             "/World/DataHall/Network_Switches/SN4600C_CS2FC_01/msn4600_cs2fc_01/"
             "SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/"
-            "pcb003636_idf_01/Connector_Quad_04/Connector_Pair_04/"
+            "pcb003636_idf_01/Connector_Quad_04/Connector_Pair_03/"
             "QSFP_DD_Connector_A_02/QSFP_DD_Connector_01/con002228_13_15/con002228_13"
         ),
         "lateral_offset": np.array([0.0, 0.0, -0.02], dtype=np.float64),
@@ -499,13 +513,67 @@ def start_next_job_or_finish():
     return True
 
 
+def _should_keep_viewport_window(title: str) -> bool:
+    if any(token in title for token in VIEWPORT_HIDE_TOKENS):
+        return False
+    return title in VIEWPORT_KEEP_TITLES
+
+
+def configure_viewport_only_layout() -> None:
+    """Hide dock windows while keeping the live viewport window alive."""
+    if not VIEWPORT_ONLY_LAYOUT:
+        return
+
+    try:
+        for window in ui.Workspace.get_windows():
+            title = getattr(window, "title", str(window))
+            ui.Workspace.show_window(title, _should_keep_viewport_window(title))
+
+        for viewport_title in VIEWPORT_KEEP_TITLES:
+            viewport = ui.Workspace.get_window(viewport_title)
+            if viewport is not None:
+                ui.Workspace.show_window(viewport_title, True)
+    except Exception as exc:
+        carb.log_warn(f"Could not apply viewport-only layout: {exc}")
+
+
+def read_viewport_camera_pose() -> tuple[np.ndarray | None, np.ndarray | None]:
+    try:
+        from omni.kit.viewport.utility import get_active_viewport
+        from omni.kit.viewport.utility.camera_state import ViewportCameraState
+
+        viewport_api = get_active_viewport()
+        if viewport_api is None:
+            return None, None
+        camera_path = viewport_api.get_active_camera()
+        state = ViewportCameraState(camera_path, viewport_api)
+        return (
+            np.asarray(state.position_world, dtype=np.float64),
+            np.asarray(state.target_world, dtype=np.float64),
+        )
+    except Exception as exc:
+        carb.log_warn(f"Could not read viewport camera pose: {exc}")
+        return None, None
+
+
+def log_viewport_camera_for_config() -> None:
+    eye, target = read_viewport_camera_pose()
+    if eye is None or target is None:
+        return
+    msg = (
+        "Copy these into hybrid_qsfp_insert.py:\n"
+        f"STARTUP_CAMERA_EYE = {eye.tolist()}\n"
+        f"STARTUP_CAMERA_TARGET = {target.tolist()}"
+    )
+    carb.log_info(msg)
+    print(msg, flush=True)
+
+
 def apply_startup_camera_view():
     if not VIEWPORT_CAMERA or set_camera_view is None:
         return
-    eye = [2.65, 2.15, 4.60]
-    target = [-0.35, -0.45, 2.55]
     try:
-        set_camera_view(eye=eye, target=target)
+        set_camera_view(eye=STARTUP_CAMERA_EYE, target=STARTUP_CAMERA_TARGET)
     except Exception as exc:
         carb.log_warn(f"Could not set startup camera: {exc}")
 
@@ -1231,8 +1299,10 @@ try:
 except Exception:
     pass
 
+configure_viewport_only_layout()
 apply_startup_camera_view()
 simulation_app.update()
+configure_viewport_only_layout()
 
 lula_config = interface_config_loader.load_supported_lula_kinematics_solver_config("Franka")
 kinematics_solver = LulaKinematicsSolver(**lula_config)
@@ -1500,6 +1570,9 @@ log(sep("="))
 # =============================================================================
 
 was_playing = False
+play_frame_count = 0
+camera_pose_logged = False
+viewport_layout_frames = 0
 
 
 while simulation_app.is_running():
@@ -1507,6 +1580,10 @@ while simulation_app.is_running():
 
     if not playing:
         was_playing = False
+        play_frame_count = 0
+        camera_pose_logged = False
+        if VIEWPORT_ONLY_LAYOUT:
+            configure_viewport_only_layout()
         my_world.step(render=True)
         continue
 
@@ -1515,10 +1592,26 @@ while simulation_app.is_running():
         for runtime in robot_runtimes:
             reset_robot_runtime(runtime)
         was_playing = True
+        play_frame_count = 0
+        camera_pose_logged = False
+        viewport_layout_frames = 0
+
+    if VIEWPORT_ONLY_LAYOUT and viewport_layout_frames < VIEWPORT_LAYOUT_REAPPLY_FRAMES:
+        configure_viewport_only_layout()
+        viewport_layout_frames += 1
+
+    if (
+        VIEWPORT_CAMERA
+        and not camera_pose_logged
+        and play_frame_count * PHYSICS_DT >= CAMERA_POSE_LOG_SECONDS
+    ):
+        log_viewport_camera_for_config()
+        camera_pose_logged = True
 
     for runtime in robot_runtimes:
         step_robot_runtime(runtime)
 
     my_world.step(render=True)
+    play_frame_count += 1
 
 simulation_app.close()
