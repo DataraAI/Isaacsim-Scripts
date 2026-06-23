@@ -80,8 +80,8 @@ GRIP_CLOSE_WAIT_FRAMES = 240
 # High-friction physics material for the finger pads and connector plug.
 # If the plug still slips, raise both friction values together. If the plug sticks
 # unnaturally to everything, lower them together.
-GRIP_STATIC_FRICTION = 8.0
-GRIP_DYNAMIC_FRICTION = 8.0
+GRIP_STATIC_FRICTION = 10.0
+GRIP_DYNAMIC_FRICTION = 10.0
 GRIP_RESTITUTION = 0.0
 GRIP_MATERIAL_PATH = "/World/Looks/HighGripPhysicsMaterial"
 
@@ -93,32 +93,93 @@ GRIP_REST_OFFSET = 0.0
 # Closed-loop plug pose servo. This is the cable version of the block insertion
 # feedback loop: it reads /World/NetworkCable/E_crystal_head1_45 every frame and
 # corrects the robot until the plug position AND orientation are inside tolerance.
-# Position uses the tracked plug bbox center because deformable/root xforms can be
-# misleading; orientation uses the tracked plug xform quaternion.
+# Position uses the tracked plug XFORM TRANSLATE because that is the value shown
+# in the Isaac Sim Transform panel. Bbox center is still printed as secondary
+# debug, but it is not the controlled target in this version.
 ENABLE_PLUG_POSE_SERVO = True
-PLUG_TARGET_POSITION = np.array([-0.642, 0.00, 0.325], dtype=np.float64)
+
+# =============================================================================
+# USER-SELECTED CABLE / PORT TARGET
+# =============================================================================
+# Change ONLY this position when you want the cable/plug to end somewhere else.
+# This is the desired world-space TRANSLATE value shown in the Transform panel
+# for /World/NetworkCable/E_crystal_head1_45. It is not the robot hand target
+# and it is not the bbox center.
+USER_SELECTED_CABLE_TARGET_POSITION = np.array([-0.55, 0.00, 0.275], dtype=np.float64)
 
 # The plug's long dimension is local +X in the USD. This target is a 180-degree
 # yaw around world Z, so local +X points along world -X and the connector stays
-# horizontal for insertion.
-PLUG_TARGET_ORI_WXYZ = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+# horizontal for later insertion.
+USER_SELECTED_CABLE_TARGET_ORI_WXYZ = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+
+# Internal names used by the servo. Do not edit these; edit USER_SELECTED_* above.
+PLUG_TARGET_POSITION = USER_SELECTED_CABLE_TARGET_POSITION.copy()
+PLUG_TARGET_ORI_WXYZ = USER_SELECTED_CABLE_TARGET_ORI_WXYZ.copy()
 PLUG_INSERT_AXIS_WORLD = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
 
-PLUG_POSITION_TOL = 0.0010          # 1.0 mm total XYZ error
+# Coarse routing is still hand/tool motion, but the last coarse waypoint is now
+# derived from the cable target above. The final measured position is corrected
+# by the plug feedback servo, not by trusting the hand waypoint.
+COARSE_TRANSFER_LANE_Y = -0.50
+COARSE_TRANSFER_Z = max(0.325, float(PLUG_TARGET_POSITION[2]) + 0.125)
+COARSE_TRANSFER_POSITION = np.array([0.0, COARSE_TRANSFER_LANE_Y, COARSE_TRANSFER_Z], dtype=np.float64)
+COARSE_NEAR_TARGET_POSITION = PLUG_TARGET_POSITION.copy()
+
+# Visual marker for the desired plug target. It has no collision and will not
+# affect physics. Disable if it annoys you.
+SHOW_USER_TARGET_MARKER = True
+USER_TARGET_MARKER_PATH = "/World/UserSelectedCableTarget"
+USER_TARGET_MARKER_SIZE = 0.008
+
+# Final plug-position alignment tolerances.
+# For now this is NOT insertion. The goal is to put the tracked plug transform
+# translate at the user-selected port/alignment point with <= 0.5 mm total Y/Z
+# offset, matching the Transform panel value.
+PLUG_POSITION_TOL = 0.0010          # legacy total XYZ print limit
+PLUG_X_TOL = 0.0010                 # 1.0 mm X tolerance for staging/alignment
+PLUG_YZ_TOTAL_TOL = 0.00050         # 0.5 mm radial Y/Z tolerance — main metric
 PLUG_ORIENTATION_TOL_DEG = 1.00     # full quaternion angular error
-PLUG_HOLD_FRAMES = 18               # require stable pose for this many frames
-PLUG_SERVO_MAX_FRAMES = 3600
-PLUG_SERVO_DEBUG_EVERY = 120
+PLUG_HOLD_FRAMES = 4                # faster settle; still avoids one-frame false positives
+PLUG_SERVO_MAX_FRAMES = 500
+PLUG_SERVO_DEBUG_EVERY = 15
 
 # Per-frame correction limits. These are intentionally small so the correction
 # behaves like a servo, not a teleporting IK target.
-PLUG_SERVO_POS_KP = 0.65
-PLUG_SERVO_MAX_POS_STEP = 0.0010    # 1.0 mm/frame
-PLUG_SERVO_MAX_ORI_STEP_DEG = 0.45  # deg/frame
+PLUG_SERVO_POS_KP = 0.65           # legacy fallback value; adaptive gains below are used
+# Fast/fine position servo inspired by the block insert: move aggressively while
+# far from target, then slow down only near the 0.5 mm Y/Z gate.
+PLUG_FAST_MODE_DISTANCE = 0.0060     # >6 mm error: fast catch-up
+PLUG_MID_MODE_DISTANCE = 0.0020      # 2-6 mm error: medium catch-up
+PLUG_FAST_POS_KP = 1.00
+PLUG_MID_POS_KP = 0.85
+PLUG_FINE_POS_KP = 0.95
+PLUG_FAST_MAX_POS_STEP = 0.0040      # 4.0 mm/frame while far
+PLUG_MID_MAX_POS_STEP = 0.0025       # 2.5 mm/frame while medium
+PLUG_FINE_MAX_POS_STEP = 0.0020      # 2.0 mm/frame while settling
+PLUG_SERVO_MAX_POS_STEP = PLUG_FAST_MAX_POS_STEP
+PLUG_FAST_ORI_STEP_DEG = 1.20
+PLUG_FINE_ORI_STEP_DEG = 0.65
+PLUG_SERVO_MAX_ORI_STEP_DEG = PLUG_FAST_ORI_STEP_DEG
 PLUG_SERVO_IK_POS_TOL = 0.0002
 PLUG_SERVO_IK_ORI_TOL = 0.020       # radians-ish tolerance used by Lula IK
 PLUG_LOCAL_DRIFT_WARN_POS = 0.0040  # if exceeded, plug is moving in fingers
 PLUG_LOCAL_DRIFT_WARN_ORI_DEG = 5.0
+
+# The uploaded baseline consistently plateaued around +1.2 mm Z error at the
+# final pose. This Y/Z overdrive is the missing block-servo idea: if the measured
+# plug sits low/right, command the hand slightly high/left until the measured
+# plug itself is on the target line. This only runs near the target so it does
+# not yank the cable during the long approach.
+PLUG_YZ_OVERDRIVE_ENABLE_RADIUS = 0.012  # activate earlier; final bias was previously starving
+PLUG_YZ_OVERDRIVE_X_ENABLE = 0.0100      # allow final Y/Z bias as soon as X is reasonably close
+# Gentler than v3. The old 4 mm overdrive was accurate but could oscillate for
+# hundreds of frames. This is closer to the block servo idea: enough bias to beat
+# steady-state cable sag, not enough to throw the plug past the target line.
+PLUG_YZ_OVERDRIVE_KP = 1.65
+PLUG_YZ_OVERDRIVE_KI = 0.0025
+PLUG_YZ_INTEGRAL_LEAK = 0.995
+PLUG_YZ_INTEGRAL_LIMIT = 0.40
+PLUG_YZ_MAX_OVERDRIVE = 0.0030      # max 3.0 mm Y/Z target bias; enough to beat cable sag quickly
 
 
 # =============================================================================
@@ -160,33 +221,34 @@ def queue_user_waypoints(controller: FrankaMotionController) -> None:
         position=np.array([0.642, 0.00, 0.325], dtype=np.float64),
         orientation=DIAGONAL_DOWN_ORI,
         max_frames=600,
-        pos_tolerance=0.001,
+        pos_tolerance=0.025,
         linear=True,
-        linear_step=0.001,
+        linear_step=0.025,
         hold_gripper=True,
         label="diagonal_lift_after_grasp",
     )
 
     controller.add_cartesian_waypoint(
-        position=np.array([0, 0.5, 0.325], dtype=np.float64),
+        position=COARSE_TRANSFER_POSITION.copy(),
         orientation=DIAGONAL_INSERT_ORI,
         max_frames=600,
-        pos_tolerance=0.001,
-        joint_interp=True,
-        joint_steps=240,
+        pos_tolerance=0.025,
+        # Keep this as the same normal Cartesian/IK style that worked in your
+        # baseline. Do not make this an insertion stroke yet.
         hold_gripper=True,
-        label="diagonal_insert_no_wrist_flip",
+        label="coarse_transfer_lane_from_cable_target",
     )
 
     controller.add_cartesian_waypoint(
-        position=np.array([-0.642, 0.00, 0.325], dtype=np.float64),
+        # This is a coarse robot waypoint derived from the desired cable target.
+        # It is NOT trusted as the final cable position. The closed-loop servo
+        # below measures E_crystal_head1_45 and finishes the plug position.
+        position=COARSE_NEAR_TARGET_POSITION.copy(),
         orientation=DIAGONAL_INSERT_ORI,
-        max_frames=600,
+        max_frames=800,
         pos_tolerance=0.001,
-        joint_interp=True,
-        joint_steps=240,
         hold_gripper=True,
-        label="diagonal_insert_no_wrist_flip",
+        label="coarse_move_near_user_cable_target",
     )
 
     # controller.add_cartesian_waypoint(
@@ -430,6 +492,31 @@ def make_static_box(prim_path: str, center: np.ndarray, size: np.ndarray, color=
     xform.AddScaleOp().Set(Gf.Vec3f(float(size[0]), float(size[1]), float(size[2])))
 
     UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+
+
+
+def spawn_user_target_marker() -> None:
+    """Spawn a small no-collision visual marker at the selected plug target."""
+
+    if not SHOW_USER_TARGET_MARKER:
+        return
+
+    stage = omni.usd.get_context().get_stage()
+    remove_prim_if_exists(USER_TARGET_MARKER_PATH)
+
+    cube = UsdGeom.Cube.Define(stage, Sdf.Path(USER_TARGET_MARKER_PATH))
+    cube.CreateSizeAttr(float(USER_TARGET_MARKER_SIZE))
+    cube.CreateDisplayColorAttr([Gf.Vec3f(0.0, 1.0, 0.0)])
+
+    xform = UsdGeom.Xformable(cube.GetPrim())
+    target = PLUG_TARGET_POSITION
+    xform.AddTranslateOp().Set(Gf.Vec3d(float(target[0]), float(target[1]), float(target[2])))
+
+    print("[USER CABLE TARGET MARKER]")
+    print(f"  marker_path={USER_TARGET_MARKER_PATH}")
+    print(f"  target_plug_transform_translate={fmt_vec(PLUG_TARGET_POSITION)}")
+    print("  collision=disabled")
 
 
 def _set_schema_attr(api, create_attr_name: str, value) -> bool:
@@ -724,7 +811,7 @@ def build_controller(franka: SingleManipulator):
     kinematics_solver.set_robot_base_pose(base_position, base_orientation)
 
     controller = FrankaMotionController(
-        name="network_connector_controller_base_v10",
+        name="network_connector_controller_fast_v5",
         robot_articulation=franka,
         task_traj_gen=task_traj_gen,
         art_kinematics=art_kinematics,
@@ -751,6 +838,7 @@ def build_scene_and_controller():
     franka = spawn_robot(world)
     block_top_z = spawn_block_and_posts()
     spawn_cable_on_block(block_top_z)
+    spawn_user_target_marker()
     apply_high_grip_setup()
     enable_gpu_dynamics()
 
@@ -838,10 +926,11 @@ def get_hand_pose_matrix() -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def get_tracked_plug_pose_matrix() -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return plug position, rotation matrix, quaternion, and xform position.
+    """Return controlled plug position, rotation matrix, quaternion, and bbox center.
 
-    Position is the bbox center of E_crystal_head1_45, because that is the number
-    that moved correctly in your logs. Orientation comes from the prim xform.
+    Controlled position is the xform/world translate of E_crystal_head1_45 — the
+    same value shown in the Isaac Sim Transform panel. The bbox center is returned
+    only for debug so we can see how far visual geometry differs from the xform.
     """
 
     xform_pos, quat = get_prim_world_pose(TRACKED_PLUG_PRIM_PATH)
@@ -850,7 +939,7 @@ def get_tracked_plug_pose_matrix() -> typing.Tuple[np.ndarray, np.ndarray, np.nd
     _, _, bbox_center, _ = get_bbox(TRACKED_PLUG_PRIM_PATH)
     quat = normalize_quat_wxyz(quat)
     rot = quat_to_rot_wxyz(quat)
-    return bbox_center, rot, quat, np.asarray(xform_pos, dtype=np.float64)
+    return np.asarray(xform_pos, dtype=np.float64), rot, quat, np.asarray(bbox_center, dtype=np.float64)
 
 
 def plug_long_axis_world(plug_rot: np.ndarray) -> np.ndarray:
@@ -897,10 +986,11 @@ def closed_gripper_hold_action(n_dof: int) -> ArticulationAction:
 
 
 def print_plug_pose_error(tag: str) -> typing.Tuple[float, float]:
-    plug_pos, plug_rot, plug_quat, plug_xform_pos = get_tracked_plug_pose_matrix()
+    plug_pos, plug_rot, plug_quat, plug_bbox_center = get_tracked_plug_pose_matrix()
     target_quat = normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ)
     pos_err = plug_pos - PLUG_TARGET_POSITION
     pos_norm = float(np.linalg.norm(pos_err))
+    yz_total = float(np.linalg.norm(pos_err[1:3]))
     ori_err = quat_angle_error_deg(plug_quat, target_quat)
     long_axis = plug_long_axis_world(plug_rot)
     axis_angle = plug_axis_angle_to_insert_deg(plug_rot)
@@ -908,11 +998,15 @@ def print_plug_pose_error(tag: str) -> typing.Tuple[float, float]:
 
     print("=" * 88)
     print(f"[PLUG POSE CHECK] {tag}")
-    print(f"  target_pos:             {fmt_vec(PLUG_TARGET_POSITION)}")
-    print(f"  actual_bbox_center:     {fmt_vec(plug_pos)}")
-    print(f"  actual_xform_pos:       {fmt_vec(plug_xform_pos)}")
+    bbox_minus_xform = plug_bbox_center - plug_pos
+    print(f"  target_transform_pos:   {fmt_vec(PLUG_TARGET_POSITION)}")
+    print(f"  actual_xform_translate: {fmt_vec(plug_pos)}  ← controlled value / Transform panel")
+    print(f"  actual_bbox_center:     {fmt_vec(plug_bbox_center)}  secondary debug")
+    print(f"  bbox_minus_xform_mm:    {fmt_vec(bbox_minus_xform * 1000.0, 3)}")
     print(f"  position_error_xyz_mm:  {fmt_vec(pos_err * 1000.0, 3)}")
-    print(f"  position_error_norm_mm: {pos_norm * 1000.0:.3f}  limit={PLUG_POSITION_TOL * 1000.0:.3f}")
+    print(f"  position_error_norm_mm: {pos_norm * 1000.0:.3f}  legacy_limit={PLUG_POSITION_TOL * 1000.0:.3f}")
+    print(f"  yz_total_error_mm:      {yz_total * 1000.0:.3f}  main_limit={PLUG_YZ_TOTAL_TOL * 1000.0:.3f}")
+    print(f"  x_error_mm:             {pos_err[0] * 1000.0:.3f}  limit={PLUG_X_TOL * 1000.0:.3f}")
     print(f"  target_ori_wxyz:        {fmt_vec(target_quat)}")
     print(f"  actual_ori_wxyz:        {fmt_vec(plug_quat)}")
     print(f"  orientation_error_deg:  {ori_err:.3f}  limit={PLUG_ORIENTATION_TOL_DEG:.3f}")
@@ -938,7 +1032,9 @@ def print_plug_hand_offset_debug(tag: str) -> None:
     print(f"[PLUG/HAND OFFSET DEBUG] {tag}")
     print(f"  hand_pos:              {fmt_vec(hand_pos)}")
     print(f"  hand_ori_wxyz:         {fmt_vec(hand_quat)}")
-    print(f"  plug_bbox_center:      {fmt_vec(plug_pos)}")
+    _, _, bbox_center, _ = get_bbox(TRACKED_PLUG_PRIM_PATH)
+    print(f"  plug_xform_translate:  {fmt_vec(plug_pos)}")
+    print(f"  plug_bbox_center:      {fmt_vec(bbox_center)}")
     print(f"  plug_ori_wxyz:         {fmt_vec(plug_quat)}")
     print(f"  plug_offset_local:     {fmt_vec(offset_local)}")
     print(f"  plug_offset_drift_mm:  {offset_drift * 1000.0:.3f}")
@@ -981,23 +1077,32 @@ def init_plug_pose_servo() -> None:
         "max_orientation_error_deg": ori_err_deg,
         "max_offset_drift": 0.0,
         "max_rot_local_drift_deg": 0.0,
+        "yz_integral": np.zeros(2, dtype=np.float64),
+        "last_yz_overdrive": np.zeros(2, dtype=np.float64),
+        "last_command_plug_pos": plug_pos.copy(),
+        "last_target_hand_pos": target_hand_pos.copy(),
+        "last_servo_mode": "init",
+        "last_pos_step_mm": 0.0,
     })
 
     print("=" * 88)
     print("[PLUG POSE SERVO INIT]")
     print("  control_object:          /World/NetworkCable/E_crystal_head1_45")
-    print("  position_source:         bbox center of tracked plug")
+    print("  position_source:         tracked plug xform translate / Transform panel value")
     print("  orientation_source:      tracked plug xform quaternion")
     print(f"  plug_offset_local:       {fmt_vec(plug_offset_local)}")
-    print(f"  target_plug_pos:         {fmt_vec(PLUG_TARGET_POSITION)}")
+    print(f"  target_transform_pos:    {fmt_vec(PLUG_TARGET_POSITION)}")
     print(f"  target_plug_ori_wxyz:    {fmt_vec(normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ))}")
     print(f"  target_hand_pos:         {fmt_vec(target_hand_pos)}")
     print(f"  target_hand_ori_wxyz:    {fmt_vec(target_hand_quat)}")
-    print(f"  position_tolerance:      {PLUG_POSITION_TOL * 1000.0:.3f} mm")
+    print(f"  x_tolerance:             {PLUG_X_TOL * 1000.0:.3f} mm")
+    print(f"  yz_total_tolerance:      {PLUG_YZ_TOTAL_TOL * 1000.0:.3f} mm  ← main port-position metric")
     print(f"  orientation_tolerance:   {PLUG_ORIENTATION_TOL_DEG:.3f} deg")
     print(f"  stable_hold_frames:      {PLUG_HOLD_FRAMES}")
-    print(f"  max_pos_step:            {PLUG_SERVO_MAX_POS_STEP * 1000.0:.3f} mm/frame")
-    print(f"  max_ori_step:            {PLUG_SERVO_MAX_ORI_STEP_DEG:.3f} deg/frame")
+    print(f"  fast/mid/fine pos step:  {PLUG_FAST_MAX_POS_STEP * 1000.0:.1f} / {PLUG_MID_MAX_POS_STEP * 1000.0:.1f} / {PLUG_FINE_MAX_POS_STEP * 1000.0:.1f} mm/frame")
+    print(f"  fast/fine ori step:      {PLUG_FAST_ORI_STEP_DEG:.2f} / {PLUG_FINE_ORI_STEP_DEG:.2f} deg/frame")
+    print(f"  yz_overdrive_kp/ki:      {PLUG_YZ_OVERDRIVE_KP:.3f} / {PLUG_YZ_OVERDRIVE_KI:.4f}")
+    print(f"  yz_overdrive_limit:      {PLUG_YZ_MAX_OVERDRIVE * 1000.0:.3f} mm")
     print("=" * 88)
     print_plug_hand_offset_debug("SERVO INIT local plug-to-hand relationship")
 
@@ -1034,11 +1139,17 @@ def update_plug_pose_servo_state() -> bool:
     plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
     pos_err = PLUG_TARGET_POSITION - plug_pos
     pos_err_norm = float(np.linalg.norm(pos_err))
+    x_err = float(pos_err[0])
+    yz_err = np.asarray(pos_err[1:3], dtype=np.float64)
+    yz_total = float(np.linalg.norm(yz_err))
     ori_err_deg = quat_angle_error_deg(plug_quat, PLUG_TARGET_ORI_WXYZ)
     sample_plug_pose_servo_path(pos_err_norm, ori_err_deg)
 
     plug_pose_servo["frames"] += 1
-    inside = pos_err_norm <= PLUG_POSITION_TOL and ori_err_deg <= PLUG_ORIENTATION_TOL_DEG
+    inside_x = abs(x_err) <= PLUG_X_TOL
+    inside_yz = yz_total <= PLUG_YZ_TOTAL_TOL
+    inside_ori = ori_err_deg <= PLUG_ORIENTATION_TOL_DEG
+    inside = inside_x and inside_yz and inside_ori
     if inside:
         plug_pose_servo["stable_frames"] += 1
     else:
@@ -1047,29 +1158,47 @@ def update_plug_pose_servo_state() -> bool:
     if plug_pose_servo["frames"] == 1 or plug_pose_servo["frames"] % PLUG_SERVO_DEBUG_EVERY == 0 or inside:
         axis_angle = plug_axis_angle_to_insert_deg(plug_rot)
         tilt = plug_tilt_out_of_horizontal_deg(plug_rot)
+        yz_overdrive = np.asarray(plug_pose_servo.get("last_yz_overdrive", np.zeros(2)), dtype=np.float64)
+        command_plug_pos = np.asarray(plug_pose_servo.get("last_command_plug_pos", plug_pos), dtype=np.float64)
+        servo_mode = str(plug_pose_servo.get("last_servo_mode", "?"))
+        pos_step_mm = float(plug_pose_servo.get("last_pos_step_mm", 0.0))
         print(
-            f"[PLUG POSE SERVO] frame={plug_pose_servo['frames']} "
+            f"[PLUG PORT ALIGN SERVO] frame={plug_pose_servo['frames']} "
             f"pos_err={pos_err_norm * 1000.0:.3f}mm "
-            f"xyz_err_mm={np.round(pos_err * 1000.0, 3)} "
+            f"x_err={x_err * 1000.0:.3f}mm "
+            f"y_err={yz_err[0] * 1000.0:.3f}mm "
+            f"z_err={yz_err[1] * 1000.0:.3f}mm "
+            f"yz_total={yz_total * 1000.0:.3f}mm "
             f"ori_err={ori_err_deg:.3f}deg "
             f"axis_to_-X={axis_angle:.3f}deg "
             f"tilt={tilt:.3f}deg "
+            f"mode={servo_mode} "
+            f"pos_step={pos_step_mm:.3f}mm "
+            f"yz_overdrive_mm={np.round(yz_overdrive * 1000.0, 3)} "
+            f"command_plug={fmt_vec(command_plug_pos)} "
+            f"inside_x={inside_x} inside_yz={inside_yz} inside_ori={inside_ori} "
             f"stable={plug_pose_servo['stable_frames']}/{PLUG_HOLD_FRAMES}"
         )
 
     if plug_pose_servo["stable_frames"] >= PLUG_HOLD_FRAMES:
         print("\n" + "=" * 88)
-        print("[PLUG POSE SERVO] target pose held inside tolerance")
+        print("[PLUG PORT ALIGN SERVO] target port/alignment pose held inside tolerance")
         print(f"  frames:               {plug_pose_servo['frames']}")
-        print(f"  final_pos_error_mm:   {pos_err_norm * 1000.0:.3f}")
+        print(f"  final_x_error_mm:     {x_err * 1000.0:.3f}")
+        print(f"  final_y_error_mm:     {yz_err[0] * 1000.0:.3f}")
+        print(f"  final_z_error_mm:     {yz_err[1] * 1000.0:.3f}")
+        print(f"  final_yz_total_mm:    {yz_total * 1000.0:.3f}  limit={PLUG_YZ_TOTAL_TOL * 1000.0:.3f}")
         print(f"  final_ori_error_deg:  {ori_err_deg:.3f}")
         print("=" * 88)
         return True
 
     if plug_pose_servo["frames"] >= PLUG_SERVO_MAX_FRAMES:
         print("\n" + "=" * 88)
-        print("[PLUG POSE SERVO] FAILED: timed out before pose was inside tolerance")
-        print(f"  final_pos_error_mm:   {pos_err_norm * 1000.0:.3f}")
+        print("[PLUG PORT ALIGN SERVO] FAILED: timed out before Y/Z port tolerance was met")
+        print(f"  final_x_error_mm:     {x_err * 1000.0:.3f}")
+        print(f"  final_y_error_mm:     {yz_err[0] * 1000.0:.3f}")
+        print(f"  final_z_error_mm:     {yz_err[1] * 1000.0:.3f}")
+        print(f"  final_yz_total_mm:    {yz_total * 1000.0:.3f}  limit={PLUG_YZ_TOTAL_TOL * 1000.0:.3f}")
         print(f"  final_ori_error_deg:  {ori_err_deg:.3f}")
         print(f"  stable_frames:        {plug_pose_servo['stable_frames']}/{PLUG_HOLD_FRAMES}")
         print("=" * 88)
@@ -1077,26 +1206,82 @@ def update_plug_pose_servo_state() -> bool:
 
     return False
 
-
 def plug_pose_servo_action(joint_pos: np.ndarray) -> ArticulationAction:
     n_dof = int(joint_pos.shape[0])
     plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
     target_quat = normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ)
 
-    # Small position step toward the desired plug center.
-    err = PLUG_TARGET_POSITION - plug_pos
-    raw_step = PLUG_SERVO_POS_KP * err
-    raw_step_norm = float(np.linalg.norm(raw_step))
-    if raw_step_norm > PLUG_SERVO_MAX_POS_STEP:
-        raw_step *= PLUG_SERVO_MAX_POS_STEP / raw_step_norm
-    command_plug_pos = plug_pos + raw_step
+    # Measured error from actual tracked plug xform translate to the user-selected
+    # Transform-panel target.
+    measured_err = PLUG_TARGET_POSITION - plug_pos
 
-    # Small orientation step toward the desired plug orientation.
+    pos_err_norm = float(np.linalg.norm(measured_err))
+    yz_total = float(np.linalg.norm(measured_err[1:3]))
+
+    # Fast/fine mode split, copied from the lesson of the block insert: get close
+    # quickly first, then use a smaller correction only for the final sub-mm settle.
+    if pos_err_norm > PLUG_FAST_MODE_DISTANCE:
+        servo_mode = "fast"
+        pos_kp = PLUG_FAST_POS_KP
+        max_pos_step = PLUG_FAST_MAX_POS_STEP
+    elif pos_err_norm > PLUG_MID_MODE_DISTANCE:
+        servo_mode = "mid"
+        pos_kp = PLUG_MID_POS_KP
+        max_pos_step = PLUG_MID_MAX_POS_STEP
+    else:
+        servo_mode = "fine"
+        pos_kp = PLUG_FINE_POS_KP
+        max_pos_step = PLUG_FINE_MAX_POS_STEP
+
+    # Y/Z overdrive only in fine/mid close range. v3 enabled a 4 mm overdrive too
+    # early, so it often overshot and spent hundreds of frames unwinding.
+    overdrive_allowed = (
+        abs(float(measured_err[0])) <= PLUG_YZ_OVERDRIVE_X_ENABLE
+        and yz_total <= PLUG_YZ_OVERDRIVE_ENABLE_RADIUS
+    )
+    if overdrive_allowed:
+        yz_integral = np.asarray(plug_pose_servo.get("yz_integral", np.zeros(2)), dtype=np.float64)
+        yz_integral = PLUG_YZ_INTEGRAL_LEAK * yz_integral + measured_err[1:3]
+        yz_integral = np.clip(yz_integral, -PLUG_YZ_INTEGRAL_LIMIT, PLUG_YZ_INTEGRAL_LIMIT)
+        plug_pose_servo["yz_integral"] = yz_integral
+        yz_overdrive = PLUG_YZ_OVERDRIVE_KP * measured_err[1:3] + PLUG_YZ_OVERDRIVE_KI * yz_integral
+
+        # Deadband kick: the previous fast version parked forever at ~0.56 mm
+        # Y/Z error because the bias was barely smaller than the cable/contact
+        # restoring force. When we are just outside the pass band, add a small
+        # push in the measured-error direction so it crosses 0.5 mm quickly.
+        if yz_total > PLUG_YZ_TOTAL_TOL:
+            yz_dir = measured_err[1:3] / max(yz_total, 1e-9)
+            kick_mag = min(0.0010, max(0.00020, yz_total - PLUG_YZ_TOTAL_TOL + 0.00030))
+            yz_overdrive = yz_overdrive + yz_dir * kick_mag
+
+        yz_overdrive = np.clip(yz_overdrive, -PLUG_YZ_MAX_OVERDRIVE, PLUG_YZ_MAX_OVERDRIVE)
+    else:
+        plug_pose_servo["yz_integral"] = np.zeros(2, dtype=np.float64)
+        yz_overdrive = np.zeros(2, dtype=np.float64)
+
+    servo_goal = PLUG_TARGET_POSITION.copy()
+    servo_goal[1:3] += yz_overdrive
+    plug_pose_servo["last_yz_overdrive"] = yz_overdrive.copy()
+    plug_pose_servo["last_servo_mode"] = servo_mode
+
+    err = servo_goal - plug_pos
+    raw_step = pos_kp * err
+    raw_step_norm = float(np.linalg.norm(raw_step))
+    if raw_step_norm > max_pos_step:
+        raw_step *= max_pos_step / raw_step_norm
+    command_plug_pos = plug_pos + raw_step
+    plug_pose_servo["last_command_plug_pos"] = command_plug_pos.copy()
+    plug_pose_servo["last_pos_step_mm"] = float(np.linalg.norm(raw_step) * 1000.0)
+
+    # Orientation also uses a fast/fine split. Big rotations are allowed to close
+    # quickly, then we slow down near the target to avoid twisting the plug.
     ori_err_deg = quat_angle_error_deg(plug_quat, target_quat)
+    max_ori_step = PLUG_FAST_ORI_STEP_DEG if ori_err_deg > 2.0 else PLUG_FINE_ORI_STEP_DEG
     if ori_err_deg <= 1e-9:
         command_plug_quat = target_quat
     else:
-        frac = min(1.0, PLUG_SERVO_MAX_ORI_STEP_DEG / ori_err_deg)
+        frac = min(1.0, max_ori_step / ori_err_deg)
         command_plug_quat = quat_slerp_shortest(plug_quat, target_quat, frac)
 
     target_hand_pos, _, target_hand_quat = hand_pose_for_plug_pose(
@@ -1105,6 +1290,7 @@ def plug_pose_servo_action(joint_pos: np.ndarray) -> ArticulationAction:
         plug_pose_servo["plug_offset_local"],
         plug_pose_servo["plug_rot_local"],
     )
+    plug_pose_servo["last_target_hand_pos"] = target_hand_pos.copy()
 
     action, success = art_kinematics.compute_inverse_kinematics(
         target_position=target_hand_pos,
@@ -1116,21 +1302,27 @@ def plug_pose_servo_action(joint_pos: np.ndarray) -> ArticulationAction:
     if not success:
         plug_pose_servo["ik_fail_count"] = int(plug_pose_servo.get("ik_fail_count", 0)) + 1
         if not plug_pose_servo.get("warned_ik", False) or plug_pose_servo["ik_fail_count"] % 120 == 0:
-            print("[PLUG POSE SERVO] IK failed; holding closed gripper")
-            print(f"  command_plug_pos:      {fmt_vec(command_plug_pos)}")
-            print(f"  command_plug_quat:     {fmt_vec(command_plug_quat)}")
-            print(f"  target_hand_pos:       {fmt_vec(target_hand_pos)}")
-            print(f"  target_hand_quat:      {fmt_vec(target_hand_quat)}")
-            print(f"  ik_fail_count:         {plug_pose_servo['ik_fail_count']}")
+            print("[PLUG PORT ALIGN SERVO] IK failed; holding closed gripper")
+            print(f"  measured_err_mm:      {fmt_vec(measured_err * 1000.0, 3)}")
+            print(f"  yz_overdrive_mm:      {fmt_vec(yz_overdrive * 1000.0, 3)}")
+            print(f"  command_plug_pos:     {fmt_vec(command_plug_pos)}")
+            print(f"  command_plug_quat:    {fmt_vec(command_plug_quat)}")
+            print(f"  target_hand_pos:      {fmt_vec(target_hand_pos)}")
+            print(f"  target_hand_quat:     {fmt_vec(target_hand_quat)}")
+            print(f"  ik_fail_count:        {plug_pose_servo['ik_fail_count']}")
             plug_pose_servo["warned_ik"] = True
         return closed_gripper_hold_action(n_dof)
 
     return controller._with_closed_gripper(action, n_dof)
 
-
 def measure_plug_pose_servo_result() -> bool:
     pos_norm, ori_err = print_plug_pose_error("FINAL closed-loop plug pose result")
     print_plug_hand_offset_debug("FINAL local plug-to-hand relationship")
+
+    plug_pos, _, _, _ = get_tracked_plug_pose_matrix()
+    final_err = PLUG_TARGET_POSITION - plug_pos
+    final_x_abs = abs(float(final_err[0]))
+    final_yz_total = float(np.linalg.norm(final_err[1:3]))
 
     if len(plug_pose_samples) >= 2:
         positions = np.asarray([s["pos"] for s in plug_pose_samples], dtype=np.float64)
@@ -1140,17 +1332,21 @@ def measure_plug_pose_servo_result() -> bool:
         tilts = np.asarray([s["tilt_deg"] for s in plug_pose_samples], dtype=np.float64)
         offset_drifts = np.asarray([s["offset_drift"] for s in plug_pose_samples], dtype=np.float64)
         rot_drifts = np.asarray([s["rot_drift_deg"] for s in plug_pose_samples], dtype=np.float64)
+        yz_errs = np.linalg.norm(PLUG_TARGET_POSITION[1:3].reshape(1, 2) - positions[:, 1:3], axis=1)
 
         dx = np.diff(positions[:, 0])
         max_positive_x_backtrack = float(np.max(np.maximum(0.0, dx))) if len(dx) else 0.0
 
         print("=" * 88)
-        print("[PLUG POSE SERVO PATH SUMMARY]")
+        print("[PLUG TRANSFORM TARGET ALIGN PATH SUMMARY]")
         print(f"  samples:                    {len(plug_pose_samples)}")
         print(f"  start_plug_pos:             {fmt_vec(positions[0])}")
         print(f"  end_plug_pos:               {fmt_vec(positions[-1])}")
         print(f"  max_position_error_mm:      {float(np.max(pos_errs)) * 1000.0:.3f}")
         print(f"  final_position_error_mm:    {pos_norm * 1000.0:.3f}")
+        print(f"  max_yz_total_error_mm:      {float(np.max(yz_errs)) * 1000.0:.3f}")
+        print(f"  final_yz_total_error_mm:    {final_yz_total * 1000.0:.3f}  limit={PLUG_YZ_TOTAL_TOL * 1000.0:.3f}")
+        print(f"  final_x_abs_error_mm:       {final_x_abs * 1000.0:.3f}  limit={PLUG_X_TOL * 1000.0:.3f}")
         print(f"  max_orientation_error_deg:  {float(np.max(ori_errs)):.3f}")
         print(f"  final_orientation_error_deg:{ori_err:.3f}")
         print(f"  max_axis_angle_to_-X_deg:   {float(np.max(axis_angles)):.3f}")
@@ -1163,8 +1359,8 @@ def measure_plug_pose_servo_result() -> bool:
         print(f"  ik_fail_count:              {int(plug_pose_servo.get('ik_fail_count', 0))}")
         print("=" * 88)
 
-    ok = pos_norm <= PLUG_POSITION_TOL and ori_err <= PLUG_ORIENTATION_TOL_DEG
-    print("[PLUG POSE RESULT] ✓ plug position and orientation are inside tolerance" if ok else "[PLUG POSE RESULT] ✗ plug pose is outside tolerance")
+    ok = final_x_abs <= PLUG_X_TOL and final_yz_total <= PLUG_YZ_TOTAL_TOL and ori_err <= PLUG_ORIENTATION_TOL_DEG
+    print("[PLUG TRANSFORM TARGET ALIGN RESULT] ✓ plug xform translate is within requested port-position tolerance" if ok else "[PLUG TRANSFORM TARGET ALIGN RESULT] ✗ plug xform translate is outside requested port-position tolerance")
     return ok
 
 
@@ -1197,10 +1393,15 @@ active_command_info = None
 phase = PHASE_COARSE_WAYPOINTS
 final_result_logged = False
 
-print("[READY - CABLE POSE FEEDBACK]")
+print("[READY - USER-SELECTED CABLE TRANSFORM TARGET ALIGNMENT FAST V5]")
 print("  Spawned: Franka robot, pickup block, two slot posts, and network cable.")
-print("  Coarse waypoints run first. Then a closed-loop plug pose servo reads")
-print(f"  {TRACKED_PLUG_PRIM_PATH} every frame and corrects position + orientation.")
+print("  You choose the final cable/plug target; the robot hand is only used as a carrier.")
+print(f"  tracked plug: {TRACKED_PLUG_PRIM_PATH}")
+print(f"  selected plug target xform translate: {fmt_vec(PLUG_TARGET_POSITION)}")
+print(f"  selected plug target orientation: {fmt_vec(PLUG_TARGET_ORI_WXYZ)}")
+print(f"  coarse transfer waypoint derived from target: {fmt_vec(COARSE_TRANSFER_POSITION)}")
+print(f"  coarse near-target waypoint derived from target: {fmt_vec(COARSE_NEAR_TARGET_POSITION)}")
+print("  Final pass metric: tracked plug Y/Z radial offset <= 0.5 mm.")
 print("  Press Play.")
 
 while simulation_app.is_running():
