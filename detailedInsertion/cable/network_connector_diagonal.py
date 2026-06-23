@@ -105,7 +105,7 @@ ENABLE_PLUG_POSE_SERVO = True
 # This is the desired world-space TRANSLATE value shown in the Transform panel
 # for /World/NetworkCable/E_crystal_head1_45. It is not the robot hand target
 # and it is not the bbox center.
-USER_SELECTED_CABLE_TARGET_POSITION = np.array([-0.55, 0.00, 0.275], dtype=np.float64)
+USER_SELECTED_CABLE_TARGET_POSITION = np.array([-0.55, 0.00, 0.325], dtype=np.float64)
 
 # The plug's long dimension is local +X in the USD. This target is a 180-degree
 # yaw around world Z, so local +X points along world -X and the connector stays
@@ -121,9 +121,26 @@ PLUG_INSERT_AXIS_WORLD = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
 # derived from the cable target above. The final measured position is corrected
 # by the plug feedback servo, not by trusting the hand waypoint.
 COARSE_TRANSFER_LANE_Y = -0.50
-COARSE_TRANSFER_Z = max(0.325, float(PLUG_TARGET_POSITION[2]) + 0.125)
+
+# Do NOT add a huge fixed +125 mm height above every target.
+# That was the slip bug for higher targets: z=0.325 produced a 0.450 m carry lane,
+# then the next waypoint yanked the plug back down while the cable tail was loaded.
+# Keep only a small clearance above the selected target, with the old 0.325 m
+# floor preserved for low targets.
+COARSE_TARGET_CLEARANCE_Z = 0.025
+COARSE_TRANSFER_Z = max(0.325, float(PLUG_TARGET_POSITION[2]) + COARSE_TARGET_CLEARANCE_Z)
+
 COARSE_TRANSFER_POSITION = np.array([0.0, COARSE_TRANSFER_LANE_Y, COARSE_TRANSFER_Z], dtype=np.float64)
+COARSE_APPROACH_TARGET_POSITION = np.array(
+    [float(PLUG_TARGET_POSITION[0]), float(PLUG_TARGET_POSITION[1]), COARSE_TRANSFER_Z],
+    dtype=np.float64,
+)
 COARSE_NEAR_TARGET_POSITION = PLUG_TARGET_POSITION.copy()
+
+# If the plug is nowhere near the target after coarse motion, do not let the servo
+# pretend it can recover. That means the cable has already slipped out.
+PRE_SERVO_MAX_POSITION_ERROR = 0.080
+PRE_SERVO_MAX_TILT_DEG = 35.0
 
 # Visual marker for the desired plug target. It has no collision and will not
 # affect physics. Disable if it annoys you.
@@ -218,37 +235,66 @@ def queue_user_waypoints(controller: FrankaMotionController) -> None:
     controller.add_gripper_command(action="close", wait_frames=GRIP_CLOSE_WAIT_FRAMES)
 
     controller.add_cartesian_waypoint(
-        position=np.array([0.642, 0.00, 0.325], dtype=np.float64),
+        # Lift only to the carry lane needed for the selected target. For the
+        # higher target case this is 0.350 m, not the old 0.450 m detour.
+        position=np.array([0.642, 0.00, COARSE_TRANSFER_Z], dtype=np.float64),
         orientation=DIAGONAL_DOWN_ORI,
         max_frames=600,
         pos_tolerance=0.025,
         linear=True,
-        linear_step=0.025,
+        linear_step=0.010,
         hold_gripper=True,
         label="diagonal_lift_after_grasp",
     )
 
     controller.add_cartesian_waypoint(
+        # Reorient before the long carry. Doing this separately avoids combining
+        # lift + rotate + sideways translation into one cable-twisting move.
+        position=np.array([0.642, 0.00, COARSE_TRANSFER_Z], dtype=np.float64),
+        orientation=DIAGONAL_INSERT_ORI,
+        max_frames=500,
+        pos_tolerance=0.025,
+        joint_interp=True,
+        joint_steps=240,
+        hold_gripper=True,
+        label="reorient_in_place_before_transfer",
+    )
+
+    controller.add_cartesian_waypoint(
         position=COARSE_TRANSFER_POSITION.copy(),
         orientation=DIAGONAL_INSERT_ORI,
-        max_frames=600,
+        max_frames=700,
         pos_tolerance=0.025,
-        # Keep this as the same normal Cartesian/IK style that worked in your
-        # baseline. Do not make this an insertion stroke yet.
+        joint_interp=True,
+        joint_steps=320,
         hold_gripper=True,
         label="coarse_transfer_lane_from_cable_target",
     )
 
     controller.add_cartesian_waypoint(
-        # This is a coarse robot waypoint derived from the desired cable target.
-        # It is NOT trusted as the final cable position. The closed-loop servo
-        # below measures E_crystal_head1_45 and finishes the plug position.
+        # Move above the final target first, staying at the same safe carry height.
+        # This removes the big diagonal downward yank that made the plug slip out.
+        position=COARSE_APPROACH_TARGET_POSITION.copy(),
+        orientation=DIAGONAL_INSERT_ORI,
+        max_frames=700,
+        pos_tolerance=0.012,
+        joint_interp=True,
+        joint_steps=320,
+        hold_gripper=True,
+        label="coarse_approach_above_user_cable_target",
+    )
+
+    controller.add_cartesian_waypoint(
+        # Final coarse descent is short and linear. The closed-loop servo still
+        # finishes the exact Transform-panel target.
         position=COARSE_NEAR_TARGET_POSITION.copy(),
         orientation=DIAGONAL_INSERT_ORI,
-        max_frames=800,
-        pos_tolerance=0.001,
+        max_frames=500,
+        pos_tolerance=0.006,
+        linear=True,
+        linear_step=0.0015,
         hold_gripper=True,
-        label="coarse_move_near_user_cable_target",
+        label="coarse_descend_near_user_cable_target",
     )
 
     # controller.add_cartesian_waypoint(
@@ -811,7 +857,7 @@ def build_controller(franka: SingleManipulator):
     kinematics_solver.set_robot_base_pose(base_position, base_orientation)
 
     controller = FrankaMotionController(
-        name="network_connector_controller_fast_v5",
+        name="network_connector_controller_high_target_v6",
         robot_articulation=franka,
         task_traj_gen=task_traj_gen,
         art_kinematics=art_kinematics,
@@ -1364,6 +1410,31 @@ def measure_plug_pose_servo_result() -> bool:
     return ok
 
 
+
+def pre_servo_grasp_sanity_ok(tag: str) -> bool:
+    """Return False when the plug clearly slipped before the feedback servo starts."""
+
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    pos_err = PLUG_TARGET_POSITION - plug_pos
+    pos_err_norm = float(np.linalg.norm(pos_err))
+    yz_total = float(np.linalg.norm(pos_err[1:3]))
+    ori_err = quat_angle_error_deg(plug_quat, PLUG_TARGET_ORI_WXYZ)
+    axis_angle = plug_axis_angle_to_insert_deg(plug_rot)
+    tilt = plug_tilt_out_of_horizontal_deg(plug_rot)
+    ok = pos_err_norm <= PRE_SERVO_MAX_POSITION_ERROR and tilt <= PRE_SERVO_MAX_TILT_DEG
+
+    print("=" * 88)
+    print(f"[PRE-SERVO GRASP SANITY] {tag}")
+    print(f"  pos_error_mm:       {pos_err_norm * 1000.0:.3f}  limit={PRE_SERVO_MAX_POSITION_ERROR * 1000.0:.1f}")
+    print(f"  yz_total_mm:        {yz_total * 1000.0:.3f}")
+    print(f"  orientation_deg:    {ori_err:.3f}")
+    print(f"  axis_to_-X_deg:     {axis_angle:.3f}")
+    print(f"  tilt_deg:           {tilt:.3f}  limit={PRE_SERVO_MAX_TILT_DEG:.1f}")
+    print("  RESULT: ✓ safe to start fine servo" if ok else "  RESULT: ✗ plug already slipped/rotated; skipping servo")
+    print("=" * 88)
+    return ok
+
+
 # =============================================================================
 # 8. OPTIONAL PER-FRAME HOOK
 # =============================================================================
@@ -1393,13 +1464,14 @@ active_command_info = None
 phase = PHASE_COARSE_WAYPOINTS
 final_result_logged = False
 
-print("[READY - USER-SELECTED CABLE TRANSFORM TARGET ALIGNMENT FAST V5]")
+print("[READY - USER-SELECTED CABLE TRANSFORM TARGET ALIGNMENT HIGH-TARGET SAFE V6]")
 print("  Spawned: Franka robot, pickup block, two slot posts, and network cable.")
 print("  You choose the final cable/plug target; the robot hand is only used as a carrier.")
 print(f"  tracked plug: {TRACKED_PLUG_PRIM_PATH}")
 print(f"  selected plug target xform translate: {fmt_vec(PLUG_TARGET_POSITION)}")
 print(f"  selected plug target orientation: {fmt_vec(PLUG_TARGET_ORI_WXYZ)}")
 print(f"  coarse transfer waypoint derived from target: {fmt_vec(COARSE_TRANSFER_POSITION)}")
+print(f"  coarse approach-above-target waypoint: {fmt_vec(COARSE_APPROACH_TARGET_POSITION)}")
 print(f"  coarse near-target waypoint derived from target: {fmt_vec(COARSE_NEAR_TARGET_POSITION)}")
 print("  Final pass metric: tracked plug Y/Z radial offset <= 0.5 mm.")
 print("  Press Play.")
@@ -1451,6 +1523,11 @@ while simulation_app.is_running():
         log_cable_pose("AFTER coarse waypoints / BEFORE closed-loop correction")
 
         if ENABLE_PLUG_POSE_SERVO:
+            if not pre_servo_grasp_sanity_ok("AFTER coarse waypoints"):
+                print("[PHASE] DONE — coarse motion lost the plug. Fix carry path/grip before servo.")
+                phase = PHASE_DONE
+                continue
+
             print("[PHASE] → CLOSED-LOOP PLUG POSE SERVO")
             controller.clear_queue()
             init_plug_pose_servo()
