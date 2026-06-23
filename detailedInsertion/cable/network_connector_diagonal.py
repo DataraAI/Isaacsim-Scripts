@@ -101,19 +101,23 @@ ENABLE_PLUG_POSE_SERVO = True
 # =============================================================================
 # USER-SELECTED CABLE / PORT TARGET
 # =============================================================================
-# Change ONLY this position when you want the cable/plug to end somewhere else.
-# This is the desired world-space TRANSLATE value shown in the Transform panel
-# for /World/NetworkCable/E_crystal_head1_45. It is not the robot hand target
-# and it is not the bbox center.
-USER_SELECTED_CABLE_TARGET_POSITION = np.array([-0.55, 0.00, 0.325], dtype=np.float64)
+# Change these two positions when you want a different insertion stroke.
+# PRE_INSERT is the world-space TRANSLATE shown in the Transform panel for
+# /World/NetworkCable/E_crystal_head1_45 before insertion starts.
+# FINAL_INSERT is the seated/end pose after the slow X-only insertion stroke.
+# The robot hand target is derived from these; do not hand-tune the gripper pose.
+USER_SELECTED_CABLE_PRE_INSERT_POSITION = np.array([-0.50, 0.00, 0.325], dtype=np.float64)
+USER_SELECTED_CABLE_FINAL_INSERT_POSITION = np.array([-0.55, 0.00, 0.325], dtype=np.float64)
 
 # The plug's long dimension is local +X in the USD. This target is a 180-degree
 # yaw around world Z, so local +X points along world -X and the connector stays
-# horizontal for later insertion.
+# horizontal for insertion.
 USER_SELECTED_CABLE_TARGET_ORI_WXYZ = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
 
-# Internal names used by the servo. Do not edit these; edit USER_SELECTED_* above.
-PLUG_TARGET_POSITION = USER_SELECTED_CABLE_TARGET_POSITION.copy()
+# Internal names used by the pre-insert alignment servo. Do not edit these;
+# edit USER_SELECTED_* above.
+PLUG_TARGET_POSITION = USER_SELECTED_CABLE_PRE_INSERT_POSITION.copy()
+PLUG_FINAL_INSERT_POSITION = USER_SELECTED_CABLE_FINAL_INSERT_POSITION.copy()
 PLUG_TARGET_ORI_WXYZ = USER_SELECTED_CABLE_TARGET_ORI_WXYZ.copy()
 PLUG_INSERT_AXIS_WORLD = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
 
@@ -142,11 +146,17 @@ COARSE_NEAR_TARGET_POSITION = PLUG_TARGET_POSITION.copy()
 PRE_SERVO_MAX_POSITION_ERROR = 0.080
 PRE_SERVO_MAX_TILT_DEG = 35.0
 
-# Visual marker for the desired plug target. It has no collision and will not
-# affect physics. Disable if it annoys you.
-SHOW_USER_TARGET_MARKER = True
+# Visual marker for the desired pre-insert plug target. Disabled for the clean run.
+SHOW_USER_TARGET_MARKER = False
 USER_TARGET_MARKER_PATH = "/World/UserSelectedCableTarget"
 USER_TARGET_MARKER_SIZE = 0.008
+
+# Visual final target/port block. Disabled for the clean run.
+# No-overinsert protection comes from the strict X clamp below, not scene geometry.
+SHOW_FINAL_TARGET_BLOCK = False
+FINAL_TARGET_BLOCK_PATH = "/World/FinalInsertTargetBlock"
+FINAL_TARGET_BLOCK_SIZE = np.array([0.012, 0.030, 0.030], dtype=np.float64)
+FINAL_TARGET_BLOCK_COLLISION = False
 
 # Final plug-position alignment tolerances.
 # For now this is NOT insertion. The goal is to put the tracked plug transform
@@ -197,6 +207,50 @@ PLUG_YZ_OVERDRIVE_KI = 0.0025
 PLUG_YZ_INTEGRAL_LEAK = 0.995
 PLUG_YZ_INTEGRAL_LIMIT = 0.40
 PLUG_YZ_MAX_OVERDRIVE = 0.0030      # max 3.0 mm Y/Z target bias; enough to beat cable sag quickly
+
+# =============================================================================
+# INSERT STROKE SETTINGS
+# =============================================================================
+ENABLE_PLUG_INSERT_SERVO = True
+INSERT_TARGET_POSITION = PLUG_FINAL_INSERT_POSITION.copy()
+INSERT_AXIS_WORLD = PLUG_INSERT_AXIS_WORLD / np.linalg.norm(PLUG_INSERT_AXIS_WORLD)
+
+# Path requirement: during the X stroke, the measured plug Transform translate
+# should stay within 0.5 mm total radial Y/Z error. This mirrors the block insert
+# idea: align Y/Z first, then crawl along X while actively holding Y/Z.
+INSERT_YZ_TOTAL_TOL = 0.00050
+INSERT_FINAL_X_TOL = 0.00050
+INSERT_ORIENTATION_TOL_DEG = 1.00
+INSERT_STABLE_HOLD_FRAMES = 4
+INSERT_STROKE_MAX_FRAMES = 1800
+INSERT_STROKE_DEBUG_EVERY = 20
+
+# Adaptive X insertion speed. V7 used 0.075 mm/frame and took ~675 frames
+# for a 50 mm stroke even though Y/Z stayed far under the 0.5 mm limit.
+# V8 moves fast while the plug is safely on the line, then slows only near the
+# final X band or if Y/Z starts drifting toward the pause gate.
+INSERT_X_FAST_STEP = 0.0005       # 0.50 mm/frame while safely on the line
+INSERT_X_FINE_STEP = 0.00010       # 0.10 mm/frame near final X or higher Y/Z error
+INSERT_X_FINE_DISTANCE = 0.002    # switch to fine mode within 2 mm of final X
+INSERT_X_YZ_SLOWDOWN_TOL = 0.00035 # slow X if Y/Z exceeds 0.35 mm
+INSERT_X_SLOW_STEP = INSERT_X_FAST_STEP  # legacy/debug alias
+# Strict port safety: the commanded plug X is never allowed past the final target.
+# For -X insertion, commanded_x will never be < final_x. For +X insertion, it
+# will never be > final_x.
+INSERT_STRICT_NO_PAST_TARGET_X = True
+INSERT_X_MAX_PUSH_THROUGH = 0.0
+INSERT_MAX_BACKSLIDE = 0.0040
+INSERT_X_BACKTRACK_TOL = 0.00020
+
+# Pause X advancement before Y/Z violates the 0.5 mm path gate.
+INSERT_STROKE_YZ_PAUSE_TOL = 0.00045
+INSERT_STROKE_YZ_RESUME_TOL = 0.00030
+INSERT_YZ_KP = 1.35
+INSERT_YZ_KI = 0.0030
+INSERT_YZ_INTEGRAL_LEAK = 0.995
+INSERT_YZ_INTEGRAL_LIMIT = 0.50
+INSERT_YZ_MAX_OVERDRIVE = 0.0050
+INSERT_MAX_ORI_STEP_DEG = 0.45
 
 
 # =============================================================================
@@ -543,7 +597,7 @@ def make_static_box(prim_path: str, center: np.ndarray, size: np.ndarray, color=
 
 
 def spawn_user_target_marker() -> None:
-    """Spawn a small no-collision visual marker at the selected plug target."""
+    """Spawn a small no-collision visual marker at the selected pre-insert target."""
 
     if not SHOW_USER_TARGET_MARKER:
         return
@@ -559,10 +613,60 @@ def spawn_user_target_marker() -> None:
     target = PLUG_TARGET_POSITION
     xform.AddTranslateOp().Set(Gf.Vec3d(float(target[0]), float(target[1]), float(target[2])))
 
-    print("[USER CABLE TARGET MARKER]")
+    print("[USER CABLE PRE-INSERT TARGET MARKER]")
     print(f"  marker_path={USER_TARGET_MARKER_PATH}")
     print(f"  target_plug_transform_translate={fmt_vec(PLUG_TARGET_POSITION)}")
     print("  collision=disabled")
+
+
+def make_visual_target_box(
+    prim_path: str,
+    center: np.ndarray,
+    size: np.ndarray,
+    color=(1.0, 0.55, 0.0),
+    collision: bool = False,
+) -> None:
+    """Spawn a visible target/port block, optionally with collision.
+
+    Collision is off by default because this block is centered on the final plug
+    target. A colliding block there would push the connector away from the pose
+    we are trying to measure.
+    """
+
+    stage = omni.usd.get_context().get_stage()
+    remove_prim_if_exists(prim_path)
+
+    cube = UsdGeom.Cube.Define(stage, Sdf.Path(prim_path))
+    cube.CreateSizeAttr(1.0)
+    cube.CreateDisplayColorAttr([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
+
+    xform = UsdGeom.Xformable(cube.GetPrim())
+    xform.AddTranslateOp().Set(Gf.Vec3d(float(center[0]), float(center[1]), float(center[2])))
+    xform.AddScaleOp().Set(Gf.Vec3f(float(size[0]), float(size[1]), float(size[2])))
+
+    if collision:
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+
+def spawn_final_insert_target_block() -> None:
+    """Spawn a visible block at the final insert target."""
+
+    if not SHOW_FINAL_TARGET_BLOCK:
+        return
+
+    make_visual_target_box(
+        FINAL_TARGET_BLOCK_PATH,
+        INSERT_TARGET_POSITION,
+        FINAL_TARGET_BLOCK_SIZE,
+        color=(1.0, 0.55, 0.0),
+        collision=FINAL_TARGET_BLOCK_COLLISION,
+    )
+
+    print("[FINAL INSERT TARGET BLOCK]")
+    print(f"  block_path={FINAL_TARGET_BLOCK_PATH}")
+    print(f"  center_final_insert_transform={fmt_vec(INSERT_TARGET_POSITION)}")
+    print(f"  size_mm={fmt_vec(FINAL_TARGET_BLOCK_SIZE * 1000.0, 2)}")
+    print(f"  collision={'enabled' if FINAL_TARGET_BLOCK_COLLISION else 'disabled'}")
 
 
 def _set_schema_attr(api, create_attr_name: str, value) -> bool:
@@ -885,6 +989,7 @@ def build_scene_and_controller():
     block_top_z = spawn_block_and_posts()
     spawn_cable_on_block(block_top_z)
     spawn_user_target_marker()
+    spawn_final_insert_target_block()
     apply_high_grip_setup()
     enable_gpu_dynamics()
 
@@ -903,10 +1008,13 @@ def build_scene_and_controller():
 
 PHASE_COARSE_WAYPOINTS = 0
 PHASE_PLUG_POSE_SERVO = 1
-PHASE_DONE = 2
+PHASE_PLUG_INSERT_SERVO = 2
+PHASE_DONE = 3
 
 plug_pose_servo: dict = {}
 plug_pose_samples: typing.List[dict] = []
+plug_insert_servo: dict = {}
+plug_insert_samples: typing.List[dict] = []
 
 
 def normalize_quat_wxyz(quat: np.ndarray) -> np.ndarray:
@@ -1411,6 +1519,370 @@ def measure_plug_pose_servo_result() -> bool:
 
 
 
+
+# =============================================================================
+# 8. CLOSED-LOOP X INSERT SERVO
+# =============================================================================
+
+def _insert_direction() -> float:
+    d = float(np.sign(float(INSERT_TARGET_POSITION[0]) - float(PLUG_TARGET_POSITION[0])))
+    return d if abs(d) > 1e-9 else -1.0
+
+
+def _insert_final_x_bounds() -> typing.Tuple[float, float]:
+    """Return one-sided allowed final-X band.
+
+    For -X insertion, the plug may stop before the target by INSERT_FINAL_X_TOL,
+    but it may not go past the target. Example final_x=-0.55 gives
+    [-0.55000, -0.54950].
+    """
+
+    final_x = float(INSERT_TARGET_POSITION[0])
+    d = _insert_direction()
+    if d < 0.0:
+        return final_x, final_x + INSERT_FINAL_X_TOL
+    return final_x - INSERT_FINAL_X_TOL, final_x
+
+
+def _insert_x_in_final_band(actual_x: float) -> bool:
+    low, high = _insert_final_x_bounds()
+    x = float(actual_x)
+    return low <= x <= high
+
+
+def _insert_x_overshoot_distance(actual_x: float) -> float:
+    d = _insert_direction()
+    final_x = float(INSERT_TARGET_POSITION[0])
+    x = float(actual_x)
+    # Strict port rule: overshoot starts exactly at the final target plane, not
+    # final +/- tolerance. For -X insertion, x < final_x is too far.
+    if d < 0.0:
+        return max(0.0, final_x - x)
+    return max(0.0, x - final_x)
+
+
+def _clip_insert_command_x(commanded_x: float) -> float:
+    d = _insert_direction()
+    final_x = float(INSERT_TARGET_POSITION[0])
+    if INSERT_STRICT_NO_PAST_TARGET_X:
+        if d < 0.0:
+            return float(max(commanded_x, final_x))
+        return float(min(commanded_x, final_x))
+
+    push_limit = final_x + d * INSERT_X_MAX_PUSH_THROUGH
+    if d < 0.0:
+        return float(max(commanded_x, push_limit))
+    return float(min(commanded_x, push_limit))
+
+
+def init_plug_insert_servo() -> None:
+    plug_insert_servo.clear()
+    plug_insert_samples.clear()
+
+    plug_offset_local, plug_rot_local = compute_plug_hand_offsets()
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    yz_err = plug_pos[1:3] - INSERT_TARGET_POSITION[1:3]
+    yz_total = float(np.linalg.norm(yz_err))
+
+    plug_insert_servo.update({
+        "frames": 0,
+        "stable_frames": 0,
+        "ik_fail_count": 0,
+        "warned_ik": False,
+        "plug_offset_local": plug_offset_local,
+        "plug_rot_local": plug_rot_local,
+        "start_plug_pos": plug_pos.copy(),
+        "start_plug_quat": plug_quat.copy(),
+        "commanded_x": float(plug_pos[0]),
+        "stroke_paused_for_yz": yz_total > INSERT_STROKE_YZ_PAUSE_TOL,
+        "stroke_pause_count": 0,
+        "yz_integral": np.zeros(2, dtype=np.float64),
+        "last_yz_overdrive": np.zeros(2, dtype=np.float64),
+        "last_command_plug_pos": plug_pos.copy(),
+        "last_pos_step_mm": 0.0,
+        "last_x_step_mm": 0.0,
+        "last_insert_paused": False,
+        "max_yz_total": yz_total,
+        "max_x_overshoot": 0.0,
+        "max_positive_x_backtrack": 0.0,
+        "prev_x": float(plug_pos[0]),
+    })
+
+    print("=" * 88)
+    print("[PLUG X INSERT SERVO INIT]")
+    print("  control_object:          /World/NetworkCable/E_crystal_head1_45")
+    print("  position_source:         tracked plug xform translate / Transform panel value")
+    print(f"  pre_insert_transform:    {fmt_vec(PLUG_TARGET_POSITION)}")
+    print(f"  final_insert_transform:  {fmt_vec(INSERT_TARGET_POSITION)}")
+    print(f"  actual_start_transform:  {fmt_vec(plug_pos)}")
+    print(f"  insert_axis_world:       {fmt_vec(INSERT_AXIS_WORLD)}")
+    print(f"  fast/fine_x_step:        {INSERT_X_FAST_STEP * 1000.0:.3f} / {INSERT_X_FINE_STEP * 1000.0:.3f} mm/frame")
+    print(f"  fine_x_distance:         {INSERT_X_FINE_DISTANCE * 1000.0:.3f} mm")
+    print(f"  yz_slowdown_threshold:   {INSERT_X_YZ_SLOWDOWN_TOL * 1000.0:.3f} mm")
+    x_low, x_high = _insert_final_x_bounds()
+    print(f"  final_x_tolerance:       {INSERT_FINAL_X_TOL * 1000.0:.3f} mm, one-sided/no-past-target")
+    print(f"  allowed_final_x_band:    [{x_low:.5f}, {x_high:.5f}]")
+    print(f"  strict_no_past_target_x: {INSERT_STRICT_NO_PAST_TARGET_X}")
+    print(f"  path_yz_tolerance:       {INSERT_YZ_TOTAL_TOL * 1000.0:.3f} mm")
+    print(f"  pause/resume YZ:         {INSERT_STROKE_YZ_PAUSE_TOL * 1000.0:.3f} / {INSERT_STROKE_YZ_RESUME_TOL * 1000.0:.3f} mm")
+    print(f"  orientation_tolerance:   {INSERT_ORIENTATION_TOL_DEG:.3f} deg")
+    print("=" * 88)
+
+
+def sample_plug_insert_path(pos_err_norm: float, ori_err_deg: float) -> None:
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    yz_err = plug_pos[1:3] - INSERT_TARGET_POSITION[1:3]
+    yz_total = float(np.linalg.norm(yz_err))
+    axis_angle = plug_axis_angle_to_insert_deg(plug_rot)
+    tilt = plug_tilt_out_of_horizontal_deg(plug_rot)
+
+    prev_x = float(plug_insert_servo.get("prev_x", plug_pos[0]))
+    dx = float(plug_pos[0] - prev_x)
+    d = _insert_direction()
+    backtrack = max(0.0, -d * dx)
+    plug_insert_servo["max_positive_x_backtrack"] = max(
+        float(plug_insert_servo.get("max_positive_x_backtrack", 0.0)),
+        backtrack,
+    )
+    plug_insert_servo["prev_x"] = float(plug_pos[0])
+    plug_insert_servo["max_yz_total"] = max(float(plug_insert_servo.get("max_yz_total", 0.0)), yz_total)
+    plug_insert_servo["max_x_overshoot"] = max(float(plug_insert_servo.get("max_x_overshoot", 0.0)), _insert_x_overshoot_distance(plug_pos[0]))
+
+    plug_insert_samples.append({
+        "pos": plug_pos.copy(),
+        "quat": plug_quat.copy(),
+        "yz_total": yz_total,
+        "ori_err_deg": float(ori_err_deg),
+        "axis_angle_deg": axis_angle,
+        "tilt_deg": tilt,
+        "pos_err_norm": float(pos_err_norm),
+    })
+
+
+def update_plug_insert_servo_state() -> bool:
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    final_err = INSERT_TARGET_POSITION - plug_pos
+    pos_err_norm = float(np.linalg.norm(final_err))
+    x_err = float(final_err[0])
+    yz_err = np.asarray(final_err[1:3], dtype=np.float64)
+    yz_total = float(np.linalg.norm(yz_err))
+    ori_err_deg = quat_angle_error_deg(plug_quat, PLUG_TARGET_ORI_WXYZ)
+    sample_plug_insert_path(pos_err_norm, ori_err_deg)
+
+    plug_insert_servo["frames"] += 1
+    overshoot = _insert_x_overshoot_distance(plug_pos[0])
+    inside_x = _insert_x_in_final_band(plug_pos[0])
+    inside_yz = yz_total <= INSERT_YZ_TOTAL_TOL
+    inside_ori = ori_err_deg <= INSERT_ORIENTATION_TOL_DEG
+    inside = inside_x and inside_yz and inside_ori
+
+    if inside:
+        plug_insert_servo["stable_frames"] += 1
+    else:
+        plug_insert_servo["stable_frames"] = 0
+
+    if overshoot > 0.0:
+        print("\n" + "=" * 88)
+        print("[PLUG X INSERT SERVO] HARD STOP: X passed final safety band")
+        print(f"  actual_transform:       {fmt_vec(plug_pos)}")
+        print(f"  final_insert_transform: {fmt_vec(INSERT_TARGET_POSITION)}")
+        print(f"  x_band_overshoot_mm:    {overshoot * 1000.0:.3f}")
+        print("=" * 88)
+        return True
+
+    if plug_insert_servo["frames"] == 1 or plug_insert_servo["frames"] % INSERT_STROKE_DEBUG_EVERY == 0 or inside:
+        yz_overdrive = np.asarray(plug_insert_servo.get("last_yz_overdrive", np.zeros(2)), dtype=np.float64)
+        command_plug_pos = np.asarray(plug_insert_servo.get("last_command_plug_pos", plug_pos), dtype=np.float64)
+        paused = bool(plug_insert_servo.get("last_insert_paused", False))
+        print(
+            f"[PLUG X INSERT SERVO] frame={plug_insert_servo['frames']} "
+            f"x={plug_pos[0]:.5f} final_x={INSERT_TARGET_POSITION[0]:.5f} "
+            f"x_err={x_err * 1000.0:.3f}mm "
+            f"y_err={yz_err[0] * 1000.0:.3f}mm "
+            f"z_err={yz_err[1] * 1000.0:.3f}mm "
+            f"yz_total={yz_total * 1000.0:.3f}mm "
+            f"ori_err={ori_err_deg:.3f}deg "
+            f"axis_to_-X={plug_axis_angle_to_insert_deg(plug_rot):.3f}deg "
+            f"tilt={plug_tilt_out_of_horizontal_deg(plug_rot):.3f}deg "
+            f"paused={paused} "
+            f"x_command={float(plug_insert_servo.get('commanded_x', plug_pos[0])):.5f} "
+            f"x_step={float(plug_insert_servo.get('last_x_step_mm', 0.0)):.3f}mm "
+            f"pos_step={float(plug_insert_servo.get('last_pos_step_mm', 0.0)):.3f}mm "
+            f"yz_overdrive_mm={np.round(yz_overdrive * 1000.0, 3)} "
+            f"command_plug={fmt_vec(command_plug_pos)} "
+            f"stable={plug_insert_servo['stable_frames']}/{INSERT_STABLE_HOLD_FRAMES}"
+        )
+
+    if plug_insert_servo["stable_frames"] >= INSERT_STABLE_HOLD_FRAMES:
+        print("\n" + "=" * 88)
+        print("[PLUG X INSERT SERVO] final insert pose held inside tolerance")
+        print(f"  frames:               {plug_insert_servo['frames']}")
+        print(f"  final_x_error_mm:     {x_err * 1000.0:.3f}")
+        print(f"  final_y_error_mm:     {yz_err[0] * 1000.0:.3f}")
+        print(f"  final_z_error_mm:     {yz_err[1] * 1000.0:.3f}")
+        print(f"  final_yz_total_mm:    {yz_total * 1000.0:.3f}  limit={INSERT_YZ_TOTAL_TOL * 1000.0:.3f}")
+        print(f"  final_ori_error_deg:  {ori_err_deg:.3f}")
+        print("=" * 88)
+        return True
+
+    if plug_insert_servo["frames"] >= INSERT_STROKE_MAX_FRAMES:
+        print("\n" + "=" * 88)
+        print("[PLUG X INSERT SERVO] FAILED: timed out before final X target")
+        print(f"  actual_transform:       {fmt_vec(plug_pos)}")
+        print(f"  final_insert_transform: {fmt_vec(INSERT_TARGET_POSITION)}")
+        print(f"  final_x_error_mm:       {x_err * 1000.0:.3f}")
+        print(f"  final_yz_total_mm:      {yz_total * 1000.0:.3f}")
+        print("=" * 88)
+        return True
+
+    return False
+
+
+def plug_insert_servo_action(joint_pos: np.ndarray) -> ArticulationAction:
+    n_dof = int(joint_pos.shape[0])
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    final_err = INSERT_TARGET_POSITION - plug_pos
+    yz_err = np.asarray(final_err[1:3], dtype=np.float64)
+    yz_total = float(np.linalg.norm(yz_err))
+
+    paused = bool(plug_insert_servo.get("stroke_paused_for_yz", False))
+    if paused and yz_total <= INSERT_STROKE_YZ_RESUME_TOL:
+        paused = False
+    elif (not paused) and yz_total >= INSERT_STROKE_YZ_PAUSE_TOL:
+        paused = True
+    plug_insert_servo["stroke_paused_for_yz"] = paused
+    plug_insert_servo["last_insert_paused"] = paused
+    if paused:
+        plug_insert_servo["stroke_pause_count"] = int(plug_insert_servo.get("stroke_pause_count", 0)) + 1
+
+    d = _insert_direction()
+    commanded_x = float(plug_insert_servo.get("commanded_x", plug_pos[0]))
+    x_remaining = max(0.0, d * (float(INSERT_TARGET_POSITION[0]) - float(plug_pos[0])))
+    if paused:
+        # Freeze X where the plug actually is while Y/Z recovers. If we keep an
+        # old command ahead of the plug, the robot can continue inserting while
+        # the line error is already too high.
+        commanded_x = float(plug_pos[0])
+        x_step = 0.0
+    else:
+        if x_remaining <= INSERT_X_FINE_DISTANCE or yz_total >= INSERT_X_YZ_SLOWDOWN_TOL:
+            x_step = INSERT_X_FINE_STEP
+        else:
+            x_step = INSERT_X_FAST_STEP
+        if not _insert_x_in_final_band(plug_pos[0]):
+            # Advance toward the final X plane, but never command past it. This
+            # is the port-insertion safety rule: no push-through allowance.
+            next_commanded_x = commanded_x + d * x_step
+            commanded_x = _clip_insert_command_x(next_commanded_x)
+            x_step = abs(commanded_x - float(plug_insert_servo.get("commanded_x", plug_pos[0])))
+        else:
+            x_step = 0.0
+    plug_insert_servo["commanded_x"] = commanded_x
+    plug_insert_servo["last_x_step_mm"] = float(x_step * 1000.0)
+
+    yz_integral = np.asarray(plug_insert_servo.get("yz_integral", np.zeros(2)), dtype=np.float64)
+    yz_integral = INSERT_YZ_INTEGRAL_LEAK * yz_integral + yz_err
+    yz_integral = np.clip(yz_integral, -INSERT_YZ_INTEGRAL_LIMIT, INSERT_YZ_INTEGRAL_LIMIT)
+    plug_insert_servo["yz_integral"] = yz_integral
+    yz_overdrive = INSERT_YZ_KP * yz_err + INSERT_YZ_KI * yz_integral
+    yz_overdrive = np.clip(yz_overdrive, -INSERT_YZ_MAX_OVERDRIVE, INSERT_YZ_MAX_OVERDRIVE)
+
+    command_plug_pos = np.array([
+        commanded_x,
+        float(INSERT_TARGET_POSITION[1] + yz_overdrive[0]),
+        float(INSERT_TARGET_POSITION[2] + yz_overdrive[1]),
+    ], dtype=np.float64)
+    plug_insert_servo["last_yz_overdrive"] = yz_overdrive.copy()
+    plug_insert_servo["last_command_plug_pos"] = command_plug_pos.copy()
+    plug_insert_servo["last_pos_step_mm"] = float(np.linalg.norm(command_plug_pos - plug_pos) * 1000.0)
+
+    target_quat = normalize_quat_wxyz(PLUG_TARGET_ORI_WXYZ)
+    ori_err_deg = quat_angle_error_deg(plug_quat, target_quat)
+    if ori_err_deg <= 1e-9:
+        command_plug_quat = target_quat
+    else:
+        frac = min(1.0, INSERT_MAX_ORI_STEP_DEG / ori_err_deg)
+        command_plug_quat = quat_slerp_shortest(plug_quat, target_quat, frac)
+
+    target_hand_pos, _, target_hand_quat = hand_pose_for_plug_pose(
+        command_plug_pos,
+        command_plug_quat,
+        plug_insert_servo["plug_offset_local"],
+        plug_insert_servo["plug_rot_local"],
+    )
+
+    action, success = art_kinematics.compute_inverse_kinematics(
+        target_position=target_hand_pos,
+        target_orientation=target_hand_quat,
+        position_tolerance=PLUG_SERVO_IK_POS_TOL,
+        orientation_tolerance=PLUG_SERVO_IK_ORI_TOL,
+    )
+
+    if not success:
+        plug_insert_servo["ik_fail_count"] = int(plug_insert_servo.get("ik_fail_count", 0)) + 1
+        if not plug_insert_servo.get("warned_ik", False) or plug_insert_servo["ik_fail_count"] % 120 == 0:
+            print("[PLUG X INSERT SERVO] IK failed; holding closed gripper")
+            print(f"  actual_plug:        {fmt_vec(plug_pos)}")
+            print(f"  command_plug_pos:   {fmt_vec(command_plug_pos)}")
+            print(f"  target_hand_pos:    {fmt_vec(target_hand_pos)}")
+            print(f"  target_hand_quat:   {fmt_vec(target_hand_quat)}")
+            print(f"  ik_fail_count:      {plug_insert_servo['ik_fail_count']}")
+            plug_insert_servo["warned_ik"] = True
+        return closed_gripper_hold_action(n_dof)
+
+    return controller._with_closed_gripper(action, n_dof)
+
+
+def measure_plug_insert_result() -> bool:
+    plug_pos, plug_rot, plug_quat, _ = get_tracked_plug_pose_matrix()
+    final_err = plug_pos - INSERT_TARGET_POSITION
+    final_x_abs = abs(float(final_err[0]))
+    final_yz_total = float(np.linalg.norm(final_err[1:3]))
+    final_ori = quat_angle_error_deg(plug_quat, PLUG_TARGET_ORI_WXYZ)
+
+    if len(plug_insert_samples) >= 2:
+        positions = np.asarray([s["pos"] for s in plug_insert_samples], dtype=np.float64)
+        yz_totals = np.asarray([s["yz_total"] for s in plug_insert_samples], dtype=np.float64)
+        ori_errs = np.asarray([s["ori_err_deg"] for s in plug_insert_samples], dtype=np.float64)
+        axis_angles = np.asarray([s["axis_angle_deg"] for s in plug_insert_samples], dtype=np.float64)
+        tilts = np.asarray([s["tilt_deg"] for s in plug_insert_samples], dtype=np.float64)
+        dx = np.diff(positions[:, 0])
+        d = _insert_direction()
+        max_backtrack = float(np.max(np.maximum(0.0, -d * dx))) if len(dx) else 0.0
+        max_x_overshoot = float(np.max([_insert_x_overshoot_distance(x) for x in positions[:, 0]]))
+        final_x_in_band = _insert_x_in_final_band(positions[-1, 0])
+        path_ok = float(np.max(yz_totals)) <= INSERT_YZ_TOTAL_TOL and max_backtrack <= INSERT_X_BACKTRACK_TOL and max_x_overshoot <= 1e-9 and final_x_in_band
+        ori_ok = float(np.max(tilts)) <= 2.0 and float(np.max(axis_angles)) <= 2.0 and float(np.max(ori_errs)) <= INSERT_ORIENTATION_TOL_DEG
+
+        print("=" * 88)
+        print("[PLUG X INSERT PATH SUMMARY]")
+        print(f"  samples:                    {len(positions)}")
+        print(f"  start_plug_transform:       {fmt_vec(positions[0])}")
+        print(f"  end_plug_transform:         {fmt_vec(positions[-1])}")
+        print(f"  final_insert_target:        {fmt_vec(INSERT_TARGET_POSITION)}")
+        print(f"  max_yz_total_offset:        {float(np.max(yz_totals)) * 1000.0:.3f} mm  limit={INSERT_YZ_TOTAL_TOL * 1000.0:.3f}")
+        print(f"  final_yz_total_offset:      {final_yz_total * 1000.0:.3f} mm")
+        print(f"  final_x_abs_error:          {final_x_abs * 1000.0:.3f} mm  limit={INSERT_FINAL_X_TOL * 1000.0:.3f}")
+        print(f"  x_monotonic:                {max_backtrack <= INSERT_X_BACKTRACK_TOL}  max_backtrack={max_backtrack * 1000.0:.3f} mm")
+        print(f"  max_x_band_overshoot:       {max_x_overshoot * 1000.0:.3f} mm")
+        print(f"  final_x_in_band:            {final_x_in_band}")
+        print(f"  max_orientation_error_deg:  {float(np.max(ori_errs)):.3f}")
+        print(f"  final_orientation_error_deg:{final_ori:.3f}")
+        print(f"  max_axis_angle_to_-X_deg:   {float(np.max(axis_angles)):.3f}")
+        print(f"  max_tilt_horizontal_deg:    {float(np.max(tilts)):.3f}")
+        print(f"  stroke_yz_pause_frames:     {int(plug_insert_servo.get('stroke_pause_count', 0))}")
+        print(f"  ik_fail_count:              {int(plug_insert_servo.get('ik_fail_count', 0))}")
+        print("  PATH RESULT: ✓ insert path stayed within Y/Z + X limits" if path_ok else "  PATH RESULT: ✗ insert path exceeded Y/Z or X limits")
+        print("  ORIENTATION RESULT: ✓ plug stayed horizontal/aligned" if ori_ok else "  ORIENTATION RESULT: ✗ plug orientation drifted too much")
+        print("=" * 88)
+        ok = path_ok and ori_ok and final_x_abs <= INSERT_FINAL_X_TOL and final_yz_total <= INSERT_YZ_TOTAL_TOL and final_ori <= INSERT_ORIENTATION_TOL_DEG
+    else:
+        print("[PLUG X INSERT PATH SUMMARY] Not enough samples.")
+        ok = False
+
+    print("[PLUG X INSERT RESULT] ✓ inserted from pre-insert X to final X while holding Y/Z" if ok else "[PLUG X INSERT RESULT] ✗ insert failed path or endpoint checks")
+    return ok
+
 def pre_servo_grasp_sanity_ok(tag: str) -> bool:
     """Return False when the plug clearly slipped before the feedback servo starts."""
 
@@ -1464,16 +1936,18 @@ active_command_info = None
 phase = PHASE_COARSE_WAYPOINTS
 final_result_logged = False
 
-print("[READY - USER-SELECTED CABLE TRANSFORM TARGET ALIGNMENT HIGH-TARGET SAFE V6]")
-print("  Spawned: Franka robot, pickup block, two slot posts, and network cable.")
+print("[READY - CABLE PRE-INSERT ALIGN + NO-OVERINSERT X INSERT V10]")
+print("  Spawned: Franka robot, pickup support/posts, and network cable.")
 print("  You choose the final cable/plug target; the robot hand is only used as a carrier.")
 print(f"  tracked plug: {TRACKED_PLUG_PRIM_PATH}")
-print(f"  selected plug target xform translate: {fmt_vec(PLUG_TARGET_POSITION)}")
+print(f"  pre-insert plug xform translate: {fmt_vec(PLUG_TARGET_POSITION)}")
 print(f"  selected plug target orientation: {fmt_vec(PLUG_TARGET_ORI_WXYZ)}")
+print(f"  final insert plug xform translate: {fmt_vec(INSERT_TARGET_POSITION)}")
+print("  visual target blocks: disabled")
 print(f"  coarse transfer waypoint derived from target: {fmt_vec(COARSE_TRANSFER_POSITION)}")
 print(f"  coarse approach-above-target waypoint: {fmt_vec(COARSE_APPROACH_TARGET_POSITION)}")
 print(f"  coarse near-target waypoint derived from target: {fmt_vec(COARSE_NEAR_TARGET_POSITION)}")
-print("  Final pass metric: tracked plug Y/Z radial offset <= 0.5 mm.")
+print("  Pre-insert metric: tracked plug Y/Z radial offset <= 0.5 mm. Insert then strokes X to the final target while holding Y/Z <= 0.5 mm and never commanding past final X.")
 print("  Press Play.")
 
 while simulation_app.is_running():
@@ -1497,12 +1971,27 @@ while simulation_app.is_running():
 
     if phase == PHASE_PLUG_POSE_SERVO:
         if update_plug_pose_servo_state():
-            print("\n[PHASE] CLOSED-LOOP PLUG POSE SERVO complete")
-            measure_plug_pose_servo_result()
+            print("\n[PHASE] CLOSED-LOOP PRE-INSERT ALIGNMENT complete")
+            pre_insert_ok = measure_plug_pose_servo_result()
+            if ENABLE_PLUG_INSERT_SERVO and pre_insert_ok:
+                print("\n[PHASE] → CLOSED-LOOP X INSERT STROKE")
+                init_plug_insert_servo()
+                phase = PHASE_PLUG_INSERT_SERVO
+            else:
+                phase = PHASE_DONE
+                print("\n[PHASE] DONE — pre-insert alignment failed or insertion disabled. Press Stop to reset/rerun.")
+        else:
+            franka.get_articulation_controller().apply_action(plug_pose_servo_action(joint_pos))
+        continue
+
+    if phase == PHASE_PLUG_INSERT_SERVO:
+        if update_plug_insert_servo_state():
+            print("\n[PHASE] CLOSED-LOOP X INSERT STROKE complete")
+            measure_plug_insert_result()
             phase = PHASE_DONE
             print("\n[PHASE] DONE — gripper remains closed for inspection. Press Stop to reset/rerun.")
         else:
-            franka.get_articulation_controller().apply_action(plug_pose_servo_action(joint_pos))
+            franka.get_articulation_controller().apply_action(plug_insert_servo_action(joint_pos))
         continue
 
     if phase == PHASE_DONE:
@@ -1528,7 +2017,7 @@ while simulation_app.is_running():
                 phase = PHASE_DONE
                 continue
 
-            print("[PHASE] → CLOSED-LOOP PLUG POSE SERVO")
+            print("[PHASE] → CLOSED-LOOP PRE-INSERT ALIGNMENT")
             controller.clear_queue()
             init_plug_pose_servo()
             phase = PHASE_PLUG_POSE_SERVO
