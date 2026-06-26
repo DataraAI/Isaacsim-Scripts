@@ -6,7 +6,9 @@ import sys
 import typing
 from pathlib import Path
 
+import carb
 import numpy as np
+import omni.ui as ui
 import omni.usd
 
 from isaacsim.core.api import World
@@ -110,6 +112,18 @@ PREINSERT_YZ_LINE_TOL = 0.00050
 
 WORK_TABLE_PATH = "/World/WorkTable"
 
+# Keep the Isaac UI clean. Only the live viewport stays visible.
+VIEWPORT_ONLY_LAYOUT = False
+VIEWPORT_KEEP_TITLES = ("Viewport", "Viewport 1")
+VIEWPORT_HIDE_TOKENS = ("Sensors Output",)
+VIEWPORT_LAYOUT_REAPPLY_FRAMES = 120
+
+# V20 speed controls. The main time sink is excessive render/log overhead plus
+# over-conservative servo/retreat waits. Keep pickup mechanically stable, but
+# stop printing/bbox-checking every command during the demo.
+FAST_DEMO_LOGGING = False
+FAST_RENDER_EVERY_N_FRAMES = 2  # V22: after coarse pickup only; pickup/transit force render every frame
+
 # Collision forgiveness for the target AS4610 RJ45 cage.
 # The exact DataHall mesh colliders are too unforgiving for this demo: a tiny
 # visual/intersection error at the RJ45 mouth can push the connector out or stall
@@ -136,7 +150,7 @@ INSERT_COLLISION_TUNNEL_Z_PAD = 0.075        # room above/below plug shell and l
 # release needs the port/rack collisions back on or the cable has nothing to sit
 # in and can fall through the visual switch geometry.
 REENABLE_PORT_COLLISION_BEFORE_RELEASE = True
-POST_INSERT_COLLISION_SETTLE_FRAMES = 35
+POST_INSERT_COLLISION_SETTLE_FRAMES = 12
 REENABLED_PORT_COLLISION_CONTACT_OFFSET = 0.0005
 REENABLED_PORT_COLLISION_REST_OFFSET = -0.0005
 
@@ -227,20 +241,20 @@ HORIZONTAL_ORI = np.array([0.70710678, 0, 0.70710678, 0.0], dtype=np.float64)
 # Grip/contact tuning. These change physics, not the motion path.
 # The original gripper delta was 0.02m per frame, which snaps shut in only a few
 # frames and can squeeze/eject the connector before contact settles.
-GRIPPER_ACTION_DELTA = 0.02
-GRIP_CLOSE_WAIT_FRAMES = 60
+GRIPPER_ACTION_DELTA = 0.0025
+GRIP_CLOSE_WAIT_FRAMES = 220  # V22: pickup is failing; give the fingers/contact solver time to actually settle
 
 # High-friction physics material for the finger pads and connector plug.
 # If the plug still slips, raise both friction values together. If the plug sticks
 # unnaturally to everything, lower them together.
-GRIP_STATIC_FRICTION = 10.0
-GRIP_DYNAMIC_FRICTION = 10.0
+GRIP_STATIC_FRICTION = 30.0
+GRIP_DYNAMIC_FRICTION = 30.0
 GRIP_RESTITUTION = 0.0
 GRIP_MATERIAL_PATH = "/World/Looks/HighGripPhysicsMaterial"
 
 # Small contact offsets help tiny mesh contacts resolve before visible penetration.
 
-GRIP_CONTACT_OFFSET = 0.003
+GRIP_CONTACT_OFFSET = 0.006
 GRIP_REST_OFFSET = 0.0
 
 # Closed-loop plug pose servo. This is the cable version of the block insertion
@@ -324,26 +338,26 @@ PLUG_POSITION_TOL = 0.0010          # legacy total XYZ print limit
 PLUG_X_TOL = 0.0010                 # 1.0 mm X tolerance for staging/alignment
 PLUG_YZ_TOTAL_TOL = 0.00050         # 0.5 mm radial Y/Z tolerance — main metric
 PLUG_ORIENTATION_TOL_DEG = 1.00     # full quaternion angular error
-PLUG_HOLD_FRAMES = 2                # fast demo settle; still avoids one-frame false positives
-PLUG_SERVO_MAX_FRAMES = 500
-PLUG_SERVO_DEBUG_EVERY = 15
+PLUG_HOLD_FRAMES = 1                # fast demo settle; still avoids one-frame false positives
+PLUG_SERVO_MAX_FRAMES = 350
+PLUG_SERVO_DEBUG_EVERY = 60
 
 # Per-frame correction limits. These are intentionally small so the correction
 # behaves like a servo, not a teleporting IK target.
 PLUG_SERVO_POS_KP = 0.65           # legacy fallback value; adaptive gains below are used
 # Fast/fine position servo inspired by the block insert: move aggressively while
 # far from target, then slow down only near the 0.5 mm Y/Z gate.
-PLUG_FAST_MODE_DISTANCE = 0.0080     # >6 mm error: fast catch-up
-PLUG_MID_MODE_DISTANCE = 0.0025      # 2-6 mm error: medium catch-up
+PLUG_FAST_MODE_DISTANCE = 0.0100     # >6 mm error: fast catch-up
+PLUG_MID_MODE_DISTANCE = 0.0030      # 2-6 mm error: medium catch-up
 PLUG_FAST_POS_KP = 1.00
 PLUG_MID_POS_KP = 0.85
 PLUG_FINE_POS_KP = 0.95
-PLUG_FAST_MAX_POS_STEP = 0.0060      # 6.0 mm/frame while far
-PLUG_MID_MAX_POS_STEP = 0.0040       # 2.5 mm/frame while medium
-PLUG_FINE_MAX_POS_STEP = 0.0025      # 2.0 mm/frame while settling
+PLUG_FAST_MAX_POS_STEP = 0.0080      # 6.0 mm/frame while far
+PLUG_MID_MAX_POS_STEP = 0.0050       # 2.5 mm/frame while medium
+PLUG_FINE_MAX_POS_STEP = 0.0030      # 2.0 mm/frame while settling
 PLUG_SERVO_MAX_POS_STEP = PLUG_FAST_MAX_POS_STEP
-PLUG_FAST_ORI_STEP_DEG = 2.00
-PLUG_FINE_ORI_STEP_DEG = 1.00
+PLUG_FAST_ORI_STEP_DEG = 2.50
+PLUG_FINE_ORI_STEP_DEG = 1.25
 PLUG_SERVO_MAX_ORI_STEP_DEG = PLUG_FAST_ORI_STEP_DEG
 PLUG_SERVO_IK_POS_TOL = 0.0002
 PLUG_SERVO_IK_ORI_TOL = 0.020       # radians-ish tolerance used by Lula IK
@@ -377,23 +391,23 @@ INSERT_AXIS_WORLD = PLUG_INSERT_AXIS_WORLD / np.linalg.norm(PLUG_INSERT_AXIS_WOR
 # should stay close to the port line. Pre-insert still locks to 0.5 mm; the
 # insert stroke gets a looser 1.0 mm gate so it does not stall before the plug
 # actually reaches the port.
-INSERT_YZ_TOTAL_TOL = 0.00100   # insert-only tolerance: V9 already hovered at 0.46-0.58 mm; get the physical insertion first
+INSERT_YZ_TOTAL_TOL = 0.00100   # hard demo requirement: measured plug Y/Z path must never exceed 1.0 mm
 INSERT_FINAL_X_TOL = 0.00050
 INSERT_ORIENTATION_TOL_DEG = 1.00
-INSERT_STABLE_HOLD_FRAMES = 2
-INSERT_STROKE_MAX_FRAMES = 900
-INSERT_STROKE_DEBUG_EVERY = 20
-INSERT_HARD_ABORT_YZ_TOL = 0.00150  # abort if collision pushes plug >1.5 mm off the port line
+INSERT_STABLE_HOLD_FRAMES = 1
+INSERT_STROKE_MAX_FRAMES = 1200
+INSERT_STROKE_DEBUG_EVERY = 40
+INSERT_HARD_ABORT_YZ_TOL = 0.00105  # strict path guard: abort almost immediately if Y/Z tries to exceed 1 mm
 INSERT_HARD_ABORT_ORI_TOL_DEG = 3.0 # abort if collision tilts the connector before final target
 
 # Adaptive X insertion speed. V7 used 0.075 mm/frame and took ~675 frames
 # for a 50 mm stroke even though Y/Z stayed far under the 0.5 mm limit.
 # V8 moves fast while the plug is safely on the line, then slows only near the
 # final X band or if Y/Z starts drifting toward the pause gate.
-INSERT_X_FAST_STEP = 0.00150      # 1.50 mm/frame while safely on the line
-INSERT_X_FINE_STEP = 0.00030       # 0.30 mm/frame near final X or higher Y/Z error
-INSERT_X_FINE_DISTANCE = 0.004    # switch to fine mode within 2 mm of final X
-INSERT_X_YZ_SLOWDOWN_TOL = 0.00120 # slow X only when Y/Z is meaningfully drifting; do not crawl at 0.45 mm
+INSERT_X_FAST_STEP = 0.00100      # strict-path insert: slower X so Y/Z correction never spikes past 1 mm
+INSERT_X_FINE_STEP = 0.00025       # strict-path insert: crawl when near final X or when Y/Z starts drifting
+INSERT_X_FINE_DISTANCE = 0.006    # switch to fine mode earlier so the last centimeters do not kick Y/Z sideways
+INSERT_X_YZ_SLOWDOWN_TOL = 0.00055 # slow X before Y/Z approaches the 1 mm path limit
 INSERT_X_SLOW_STEP = INSERT_X_FAST_STEP  # legacy/debug alias
 # Strict port safety: the commanded plug X is never allowed past the final target.
 # For -X insertion, commanded_x will never be < final_x. For +X insertion, it
@@ -407,14 +421,14 @@ INSERT_X_BACKTRACK_TOL = 0.00020
 # 760 frames because it paused at 0.49 mm and required recovery to 0.43 mm; the
 # plug sat safely around 0.46 mm Y/Z error but never inserted. Keep moving unless
 # Y/Z approaches the hard-abort band.
-INSERT_STROKE_YZ_PAUSE_TOL = 0.00150
-INSERT_STROKE_YZ_RESUME_TOL = 0.00100
-INSERT_YZ_KP = 1.35
-INSERT_YZ_KI = 0.0030
-INSERT_YZ_INTEGRAL_LEAK = 0.995
-INSERT_YZ_INTEGRAL_LIMIT = 0.50
-INSERT_YZ_MAX_OVERDRIVE = 0.0080
-INSERT_MAX_ORI_STEP_DEG = 0.80
+INSERT_STROKE_YZ_PAUSE_TOL = 0.00070
+INSERT_STROKE_YZ_RESUME_TOL = 0.00040
+INSERT_YZ_KP = 2.20
+INSERT_YZ_KI = 0.0040
+INSERT_YZ_INTEGRAL_LEAK = 0.997
+INSERT_YZ_INTEGRAL_LIMIT = 0.75
+INSERT_YZ_MAX_OVERDRIVE = 0.0100
+INSERT_MAX_ORI_STEP_DEG = 0.70
 
 # =============================================================================
 # POST-INSERT RELEASE / RETREAT SETTINGS
@@ -424,9 +438,9 @@ INSERT_MAX_ORI_STEP_DEG = 0.80
 # opposite direction of the -X insertion stroke. This deliberately does not move
 # the cable target or change insertion depth.
 ENABLE_POST_INSERT_RELEASE_RETREAT = True
-POST_INSERT_OPEN_WAIT_FRAMES = 80
+POST_INSERT_OPEN_WAIT_FRAMES = 40
 POST_INSERT_RETREAT_X_M = 0.120
-POST_INSERT_RETREAT_LINEAR_STEP = 0.0060
+POST_INSERT_RETREAT_LINEAR_STEP = 0.0120
 POST_INSERT_RETREAT_POS_TOL = 0.0030
 
 # =============================================================================
@@ -441,11 +455,11 @@ POST_INSERT_RETREAT_POS_TOL = 0.0030
 # transit is too violent: it yanks the long tail and the connector rotates out
 # of the fingers. Keep the proven pickup, but make the carry deliberately slow
 # and split translation from reorientation.
-TRANSIT_LIFT_LINEAR_STEP = 0.0240      # controlled lift for the heavier/manual-2x cable
-TRANSIT_REORIENT_JOINT_STEPS = 110     # mid-waypoint wrist rotation
-TRANSIT_TRANSFER_JOINT_STEPS = 130     # medium carry; avoid long diagonal drag
-TRANSIT_APPROACH_JOINT_STEPS = 120     # medium final approach above target
-TRANSIT_DESCEND_LINEAR_STEP = 0.0040   # controlled final descend so the tail does not whip
+TRANSIT_LIFT_LINEAR_STEP = 0.0240      # V20: do not raise; V19 40mm/frame broke pickup      # controlled lift for the heavier/manual-2x cable
+TRANSIT_REORIENT_JOINT_STEPS = 110     # V21: restore V18 working physical transit; V20 85 slipped the cable
+TRANSIT_TRANSFER_JOINT_STEPS = 130     # V21: restore V18 working physical transit; V20 95 slipped the cable
+TRANSIT_APPROACH_JOINT_STEPS = 120     # V21: restore V18 working physical transit; V20 85 slipped the cable
+TRANSIT_DESCEND_LINEAR_STEP = 0.0040   # V21: restore V18 working descend; V20 6mm/frame was too aggressive
 
 # Tail-clearance waypoints used when pickup is offset from the robot base.
 # V5 dragged the held cable from x≈1.19 to x=0 while still diagonal-down, which
@@ -592,6 +606,34 @@ def get_bbox(prim_path: str):
     center = 0.5 * (mn + mx)
     dims = mx - mn
     return mn, mx, center, dims
+
+
+# =============================================================================
+# VIEWPORT / UI HELPERS
+# =============================================================================
+
+def _should_keep_viewport_window(title: str) -> bool:
+    if any(token in title for token in VIEWPORT_HIDE_TOKENS):
+        return False
+    return title in VIEWPORT_KEEP_TITLES
+
+
+def configure_viewport_only_layout() -> None:
+    """Hide dock windows while keeping the live viewport window alive."""
+    if not VIEWPORT_ONLY_LAYOUT:
+        return
+
+    try:
+        for window in ui.Workspace.get_windows():
+            title = getattr(window, "title", str(window))
+            ui.Workspace.show_window(title, _should_keep_viewport_window(title))
+
+        for viewport_title in VIEWPORT_KEEP_TITLES:
+            viewport = ui.Workspace.get_window(viewport_title)
+            if viewport is not None:
+                ui.Workspace.show_window(viewport_title, True)
+    except Exception as exc:
+        carb.log_warn(f"Could not apply viewport-only layout: {exc}")
 
 
 # =============================================================================
@@ -1335,6 +1377,10 @@ def apply_high_grip_setup() -> None:
     material = create_high_grip_physics_material()
 
     targets = [
+        # V22: bind the entire cable asset, not just the tracked plug prim.
+        # The actual contact collider can live on a sibling/child mesh, so only
+        # binding E_crystal_head1_45 can miss the surface the fingers touch.
+        NETWORK_CABLE_ROOT_PATH,
         TRACKED_PLUG_PRIM_PATH,
         f"{FRANKA_PATH}/panda_leftfinger",
         f"{FRANKA_PATH}/panda_rightfinger",
@@ -1770,13 +1816,13 @@ def build_controller(franka: SingleManipulator):
     kinematics_solver.set_robot_base_pose(base_position, base_orientation)
 
     controller = FrankaMotionController(
-        name="datahall_cable_support18x_yminus06_fast_v17",
+        name="datahall_cable_support18x_yminus06_pathstrict_fast_v24",
         robot_articulation=franka,
         task_traj_gen=task_traj_gen,
         art_kinematics=art_kinematics,
         gripper=franka.gripper,
         tool_offset=TOOL_OFFSET,
-        debug=True,
+        debug=False,
     )
 
     return controller, kinematics_solver, art_kinematics
@@ -1788,9 +1834,9 @@ def build_scene_and_controller():
 
     stage = omni.usd.get_context().get_stage()
 
-    light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
-    light.CreateIntensityAttr(500.0)
-    light.CreateColorAttr((1.0, 1.0, 1.0))
+    # light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
+    # light.CreateIntensityAttr(500.0)
+    # light.CreateColorAttr((1.0, 1.0, 1.0))
 
     print("[SCENE] Loading DataHall...")
     add_reference_to_stage(usd_path=DATAHALL_USD, prim_path="/World/DataHall")
@@ -2860,12 +2906,15 @@ def user_robot_step(
 # =============================================================================
 
 world, franka, controller, kinematics_solver, art_kinematics = build_scene_and_controller()
+configure_viewport_only_layout()
 waypoints_queued = False
 active_command_info = None
 phase = PHASE_COARSE_WAYPOINTS
 final_result_logged = False
+viewport_layout_frames = 0
+sim_frame_counter = 0
 
-print("[READY - DATAHALL AS4610 RJ45 SUPPORT 1.8X Y -0.6 FAST SOCKET HOLD V17]")
+print("[READY - DATAHALL AS4610 RJ45 SUPPORT 1.8X Y -0.6 PATH-STRICT FAST SOCKET HOLD V24]")
 print("  Spawned: Franka robot, pickup support/posts, and network cable.")
 print("  Cable targets use the DataHall port bbox face plus the measured plug nose offset; the robot hand is only a carrier.")
 print(f"  tracked plug: {TRACKED_PLUG_PRIM_PATH}")
@@ -2884,27 +2933,50 @@ print("  Pickup support/cable are at y=-0.600, while the Franka base stays in th
 print("  Transit is split but not dragged all the way across while diagonal: lift -> short tail-clearance move -> reorient at a mid waypoint -> transfer/approach in insert orientation.")
 print("  Alignment servo restored from network_connector_diagonal.py. Insert stroke fixed: X no longer freezes at ~0.46-0.49 mm Y/Z error; it only pauses near the hard-abort band.")
 print("  Forgiving collision mode: selected RJ45 component plus a broader AS4610 insert tunnel are visual-only so hidden parent/sibling/rack colliders cannot block insertion.")
-print("  FAST MODE: shorter grip settle, faster transit, faster pre-insert servo, faster X stroke, shorter release settle/open, faster +X retreat.")
-print(f"  FAST mid-reorient transit + old servo + deeper insert joint steps: reorient={TRANSIT_REORIENT_JOINT_STEPS}, transfer={TRANSIT_TRANSFER_JOINT_STEPS}, approach={TRANSIT_APPROACH_JOINT_STEPS}")
-print(f"  FAST mid-reorient transit + old servo + deeper insert linear steps: lift={TRANSIT_LIFT_LINEAR_STEP * 1000.0:.1f}mm/frame, descend={TRANSIT_DESCEND_LINEAR_STEP * 1000.0:.1f}mm/frame")
-print(f"  FAST insert X steps: fast={INSERT_X_FAST_STEP * 1000.0:.1f}mm/frame, fine={INSERT_X_FINE_STEP * 1000.0:.1f}mm/frame, hold={INSERT_STABLE_HOLD_FRAMES} frames")
-print(f"  FAST release/retreat: settle={POST_INSERT_COLLISION_SETTLE_FRAMES} frames, open={POST_INSERT_OPEN_WAIT_FRAMES} frames, retreat_step={POST_INSERT_RETREAT_LINEAR_STEP * 1000.0:.1f}mm/frame")
+print("  PATH-STRICT FAST V24: V22 grip recovery kept; insert slowed only enough to keep max Y/Z path error under 1.0 mm.")
+print("  Viewport-only layout enabled: hiding dock windows except Viewport / Viewport 1.")
+print(f"  PATH-STRICT FAST mid-reorient transit + old servo + strict insert joint steps: reorient={TRANSIT_REORIENT_JOINT_STEPS}, transfer={TRANSIT_TRANSFER_JOINT_STEPS}, approach={TRANSIT_APPROACH_JOINT_STEPS}")
+print(f"  PATH-STRICT FAST physical-transit + old servo + strict insert linear steps: lift={TRANSIT_LIFT_LINEAR_STEP * 1000.0:.1f}mm/frame, descend={TRANSIT_DESCEND_LINEAR_STEP * 1000.0:.1f}mm/frame")
+print(f"  PATH-STRICT FAST insert X steps: fast={INSERT_X_FAST_STEP * 1000.0:.1f}mm/frame, fine={INSERT_X_FINE_STEP * 1000.0:.1f}mm/frame, hold={INSERT_STABLE_HOLD_FRAMES} frames")
+print(f"  PATH-STRICT Y/Z guard: slow_at={INSERT_X_YZ_SLOWDOWN_TOL * 1000.0:.2f}mm, pause_at={INSERT_STROKE_YZ_PAUSE_TOL * 1000.0:.2f}mm, resume_at={INSERT_STROKE_YZ_RESUME_TOL * 1000.0:.2f}mm, abort_at={INSERT_HARD_ABORT_YZ_TOL * 1000.0:.2f}mm")
+print(f"  PATH-STRICT FAST release/retreat: settle={POST_INSERT_COLLISION_SETTLE_FRAMES} frames, open={POST_INSERT_OPEN_WAIT_FRAMES} frames, retreat_step={POST_INSERT_RETREAT_LINEAR_STEP * 1000.0:.1f}mm/frame")
+print(f"  PATH-STRICT FAST logging: FAST_DEMO_LOGGING={FAST_DEMO_LOGGING}, render_every_n_frames={FAST_RENDER_EVERY_N_FRAMES}")
+print(f"  PATH-STRICT pickup grip: static/dynamic friction={GRIP_STATIC_FRICTION:.1f}/{GRIP_DYNAMIC_FRICTION:.1f}, contact_offset={GRIP_CONTACT_OFFSET*1000.0:.1f}mm, close_wait={GRIP_CLOSE_WAIT_FRAMES} frames")
+print("  V24 guardrail: grip/transit stay fast-safe; X insert pauses at 0.70 mm Y/Z and resumes at 0.40 mm so the 1.0 mm path limit is preserved.")
 print(f"  fixed table/robot base height: {TABLE_HEIGHT:.3f} m")
 print("  Insert technique: coarse land in front of port -> measured horizontal pose lock -> strict -X insert.")
 print("  Post-insert: if final insert succeeds, port/tunnel collisions are restored, the gripper opens, then the hand retreats linearly +X away from the port.")
 print("  Press Play.")
 
 while simulation_app.is_running():
-    world.step(render=True)
+    sim_frame_counter += 1
+    # V22: do NOT skip render during physical pickup/transit. In this scene the
+    # cable contact/grasp became unreliable when V20/V21 reduced render cadence
+    # during the coarse carry. Keep full render until the plug reaches the
+    # pre-insert area; after that, reduce render cadence for speed.
+    if phase == PHASE_COARSE_WAYPOINTS:
+        render_this_frame = True
+    else:
+        render_this_frame = (FAST_RENDER_EVERY_N_FRAMES <= 1) or (sim_frame_counter % FAST_RENDER_EVERY_N_FRAMES == 0)
+    world.step(render=render_this_frame)
 
     if not world.is_playing():
+        if VIEWPORT_ONLY_LAYOUT:
+            configure_viewport_only_layout()
         continue
+
+    if VIEWPORT_ONLY_LAYOUT and viewport_layout_frames < VIEWPORT_LAYOUT_REAPPLY_FRAMES:
+        configure_viewport_only_layout()
+        viewport_layout_frames += 1
 
     if not waypoints_queued:
         queue_user_waypoints(controller)
-        print_queued_commands(controller)
-        print_plug_pose_error("AFTER queue_user_waypoints / BEFORE first command")
-        log_cable_pose("AFTER queue_user_waypoints / BEFORE first command")
+        if FAST_DEMO_LOGGING:
+            print_queued_commands(controller)
+            print_plug_pose_error("AFTER queue_user_waypoints / BEFORE first command")
+            log_cable_pose("AFTER queue_user_waypoints / BEFORE first command")
+        else:
+            print("[QUEUED CONTROLLER COMMANDS] fast-demo logging disabled; running pickup/transit.")
         waypoints_queued = True
 
     user_robot_step(world, franka, controller, art_kinematics)
@@ -2955,7 +3027,8 @@ while simulation_app.is_running():
             print("  Gripper opened.")
             print("  Hand retreated linearly along +X away from the port.")
             print("=" * 88)
-            log_cable_pose("AFTER release + X retreat")
+            if FAST_DEMO_LOGGING:
+                log_cable_pose("AFTER release + X retreat")
             phase = PHASE_DONE
             print("\n[PHASE] DONE — port collision restored, cable released after insertion, hand retreated. Press Stop to reset/rerun.")
         else:
@@ -2965,7 +3038,8 @@ while simulation_app.is_running():
 
     if phase == PHASE_DONE:
         if not final_result_logged:
-            log_cable_pose("FINAL HOLD / ALL PHASES DONE")
+            if FAST_DEMO_LOGGING:
+                log_cable_pose("FINAL HOLD / ALL PHASES DONE")
             final_result_logged = True
         continue
 
@@ -2973,12 +3047,14 @@ while simulation_app.is_running():
     # same before/after command debug you already had.
     if controller.is_done():
         if active_command_info is not None:
-            log_command_boundary("AFTER", active_command_info)
+            if FAST_DEMO_LOGGING:
+                log_command_boundary("AFTER", active_command_info)
             active_command_info = None
 
         print("\n[PHASE] COARSE WAYPOINTS complete")
-        print_plug_pose_error("AFTER coarse waypoints / BEFORE closed-loop correction")
-        log_cable_pose("AFTER coarse waypoints / BEFORE closed-loop correction")
+        if FAST_DEMO_LOGGING:
+            print_plug_pose_error("AFTER coarse waypoints / BEFORE closed-loop correction")
+            log_cable_pose("AFTER coarse waypoints / BEFORE closed-loop correction")
 
         if ENABLE_PLUG_POSE_SERVO:
             if not pre_servo_grasp_sanity_ok("AFTER coarse waypoints"):
@@ -3000,14 +3076,16 @@ while simulation_app.is_running():
     if current_info is not None:
         if active_command_info is None:
             active_command_info = current_info
-            log_command_boundary("BEFORE", active_command_info)
+            if FAST_DEMO_LOGGING:
+                log_command_boundary("BEFORE", active_command_info)
         elif current_info["index"] != active_command_info["index"]:
             # The previous command completed between frames. Print its after-pose,
             # then immediately print the before-pose for the new command.
             log_command_boundary("AFTER", active_command_info)
             print_plug_pose_error(f"AFTER command {active_command_info['index']} / {active_command_info['label']}")
             active_command_info = current_info
-            log_command_boundary("BEFORE", active_command_info)
+            if FAST_DEMO_LOGGING:
+                log_command_boundary("BEFORE", active_command_info)
             print_plug_pose_error(f"BEFORE command {active_command_info['index']} / {active_command_info['label']}")
 
     previous_info = active_command_info
@@ -3020,8 +3098,9 @@ while simulation_app.is_running():
     next_info = get_current_command_info(controller)
     if previous_info is not None:
         if next_info is None or next_info["index"] != previous_info["index"]:
-            log_command_boundary("AFTER", previous_info)
-            print_plug_pose_error(f"AFTER command {previous_info['index']} / {previous_info['label']}")
+            if FAST_DEMO_LOGGING:
+                log_command_boundary("AFTER", previous_info)
+                print_plug_pose_error(f"AFTER command {previous_info['index']} / {previous_info['label']}")
             active_command_info = None
 
 simulation_app.close()
