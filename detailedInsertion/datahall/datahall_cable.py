@@ -24,141 +24,107 @@ from isaacsim.robot_motion.motion_generation import (
     interface_config_loader,
 )
 from isaacsim.storage.native import get_assets_root_path
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade, PhysxSchema
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade, PhysxSchema
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from collision_setup import apply_datahall_scale, enable_articulation_collisions, enable_static_collisions
+from collision_setup import apply_datahall_scale, enable_static_collisions
 from franka_motion_controller import FrankaMotionController
-from port_frame import PortFrame
 
 
 # =============================================================================
-# 1. PATHS / PRIMS
+# 1. USER CONFIG — EDIT HERE
 # =============================================================================
 
+# Scene/assets
 NETWORK_CABLE_USD_PATH = "/home/aayush/isaacsim_assets/Network cable 001/model_Networkcable1_69323.usd"
-NETWORK_CABLE_ROOT_PATH = "/World/NetworkCable"
-TRACKED_PLUG_PRIM_PATH = f"{NETWORK_CABLE_ROOT_PATH}/E_crystal_head1_45"
-
-FRANKA_PATH = "/World/Franka"
-BLOCK_PATH = "/World/PickupBlock"
-POST_LEFT_PATH = "/World/PickupPostLeft"
-POST_RIGHT_PATH = "/World/PickupPostRight"
-
 DATAHALL_USD = (
     "/home/aayush/isaacsim_assets/datacenter/Assets/DigitalTwin"
     "/Assets/Datacenter/Facilities/Stages/Data_Hall/DataHall_Full_01.usd"
 )
 DATAHALL_SCALE = 2.0
-# Fixed work-table/robot base height for the AS4610 RJ45 test.
-# The old QSFP/DataHall scripts used a much higher table. For this switch, the
-# user-visible table should sit around 2.35 m so the robot approaches the RJ45
-# row from a sane height instead of reaching down from above the port.
-TABLE_HEIGHT = 2.35
-TABLE_THICKNESS = 0.05
-ROBOT_BASE_POS = np.array([0.55, -0.15, TABLE_HEIGHT], dtype=np.float64)
 
-# AS4610 RJ45 12-pack component. This asset does NOT expose each Ethernet jack as
-# its own prim, so the target port is inferred from this component bbox as a 2x6
-# grid. Change TARGET_RJ45_ROW / TARGET_RJ45_COL to pick a different port.
+# Main placement knobs. ROBOT_BASE_POS is derived once in configure_datahall_cable_targets().
+# Do not define ROBOT_BASE_POS anywhere else.
+TABLE_HEIGHT = 2.35
+ROBOT_BASE_X = 0.55
+ROBOT_BASE_Y_OFFSET_FROM_PORT = 0.1675
+PICKUP_WORLD_Y = -0.600
+
+# Pickup geometry is robot-local for X/Z, and world-pinned for Y. This preserves
+# the working grasp while keeping the long cable away from the robot base.
+PICKUP_SUPPORT_SCALE = 1.8
+PICKUP_LOCAL_BLOCK_CENTER = np.array([0.65, 0.00, 0.10], dtype=np.float64)
+PICKUP_LOCAL_GRASP_X = 0.642
+
+# AS4610 RJ45 target selection. The asset exposes a 12-port component, not
+# individual jack prims, so the selected jack is inferred from the component bbox.
 DATAHALL_PORT_PRIM_PATH = (
     "/World/DataHall/Network_Switches/AS4610_01/AS4610_inst/AS4610_01/"
     "Switch/Net_12_Pack_no_LED_Component_02"
 )
 TARGET_RJ45_ROW = 0  # 0 = top row, 1 = bottom row
 TARGET_RJ45_COL = 0  # 0 = most negative-Y port, 5 = most positive-Y port
+DATAHALL_PORT_LATERAL_OFFSET = np.array([0.0, 0.004, 0.0015], dtype=np.float64)
+
+# View/logging
+VIEWPORT_ONLY_LAYOUT = False
+FAST_DEMO_LOGGING = False
+FAST_RENDER_EVERY_N_FRAMES = 2
+
+
+# =============================================================================
+# 2. PRIM PATHS
+# =============================================================================
+
+NETWORK_CABLE_ROOT_PATH = "/World/NetworkCable"
+TRACKED_PLUG_PRIM_PATH = f"{NETWORK_CABLE_ROOT_PATH}/E_crystal_head1_45"
+FRANKA_PATH = "/World/Franka"
+BLOCK_PATH = "/World/PickupBlock"
+POST_LEFT_PATH = "/World/PickupPostLeft"
+POST_RIGHT_PATH = "/World/PickupPostRight"
+WORK_TABLE_PATH = "/World/WorkTable"
+
+
+# =============================================================================
+# 3. TARGET / PHYSICS CONSTANTS
+# =============================================================================
+
+TABLE_THICKNESS = 0.05
+PHYSICS_DT = 1.0 / 120.0
+RENDERING_DT = 1.0 / 60.0
+TOOL_OFFSET = 0.111
+
 AS4610_PORT_ROWS = 2
 AS4610_PORT_COLS = 6
 AS4610_Y_MARGIN_FRACTION = 0.090
 AS4610_Z_MARGIN_FRACTION = 0.210
-DATAHALL_PORT_LATERAL_OFFSET = np.array([0.0, 0.004, 0.0015], dtype=np.float64)  # +1.0mm right in Y, +0.5mm up in Z
-# Positive Y is treated as "right" across the AS4610 RJ45 row. If the visual
-# offset goes the wrong way, flip the Y value above to -0.0010 and leave Z alone.
-
-# Robot/cable spawn placement. Z is no longer derived from the port height; the
-# table and Franka base stay fixed at TABLE_HEIGHT=2.35 m. Y is still placed
-# relative to the selected RJ45 port so the robot starts near the target lane.
-ROBOT_BASE_Z_BELOW_TARGET_M = None  # unused; kept so old comments/debug are not misleading
-ROBOT_BASE_Y_OFFSET_FROM_TARGET_M = 0.1675
-ROBOT_BASE_X_M = 0.55
-
-# Cable target construction from the port frame.
-# The important correction: the controlled value is the plug XFORM CENTER, but
-# collision/contact happens at the plug FRONT FACE. The previous version placed
-# the plug center 50 mm in front of the port face, which means the physical nose
-# of the connector was only ~31 mm in front. During insertion it then drove the
-# nose ~18 mm into the port before the center reached the old final target.
-#
-# V6 defines pre-insert/final targets by the PLUG FRONT FACE, then converts those
-# to the tracked plug xform-center target using the measured plug half-length.
-DATAHALL_FINAL_PLUG_CENTER_AXIAL_DEPTH_M = 0.018  # legacy only; do not use for target math
-DATAHALL_FINAL_PLUG_FRONT_AXIAL_DEPTH_M = 0.004   # first safe port test: nose only 4 mm past face
-DATAHALL_PRE_INSERT_FRONT_GAP_M = 0.050           # nose is 50 mm in front of port face
+DATAHALL_FINAL_PLUG_FRONT_AXIAL_DEPTH_M = 0.004
+DATAHALL_PRE_INSERT_FRONT_GAP_M = 0.050
 DATAHALL_PORT_FACE_EXTRA_CLEARANCE_X_M = 0.000
-PLUG_FRONT_TO_XFORM_X_OFFSET_M = 0.019            # overwritten from actual cable bbox after spawn
-DATAHALL_PORT_FACE_X_M = float("nan")                # set from bbox max X in configure_datahall_cable_targets
-# Legacy names kept only so older print/debug text does not confuse the file.
-DATAHALL_PRE_INSERT_DISTANCE_FROM_PORT_FACE_X_M = DATAHALL_PRE_INSERT_FRONT_GAP_M
-DATAHALL_PRE_INSERT_STANDOFF_M = DATAHALL_PRE_INSERT_FRONT_GAP_M
-DATAHALL_REQUIRE_X_DOMINANT_PORT_AXIS = True
-DATAHALL_MIN_ABS_X_AXIS = 0.85
+PLUG_FRONT_TO_XFORM_X_OFFSET_M = 0.019
+DATAHALL_PORT_FACE_X_M = float("nan")
 
-# Before insertion is allowed to start, the measured plug pose must be locked on
-# the port line and essentially horizontal. This prevents the robot from trying
-# to insert while the cable is still diagonal/tilted from transit.
 PREINSERT_AXIS_TO_PORT_TOL_DEG = 1.00
 PREINSERT_HORIZONTAL_TOL_DEG = 1.00
 PREINSERT_YZ_LINE_TOL = 0.00050
 
-WORK_TABLE_PATH = "/World/WorkTable"
-
-# Keep the Isaac UI clean. Only the live viewport stays visible.
-VIEWPORT_ONLY_LAYOUT = False
 VIEWPORT_KEEP_TITLES = ("Viewport", "Viewport 1")
 VIEWPORT_HIDE_TOKENS = ("Sensors Output",)
 VIEWPORT_LAYOUT_REAPPLY_FRAMES = 120
 
-# V20 speed controls. The main time sink is excessive render/log overhead plus
-# over-conservative servo/retreat waits. Keep pickup mechanically stable, but
-# stop printing/bbox-checking every command during the demo.
-FAST_DEMO_LOGGING = False
-FAST_RENDER_EVERY_N_FRAMES = 2  # V22: after coarse pickup only; pickup/transit force render every frame
-
-# Collision forgiveness for the target AS4610 RJ45 cage.
-# The exact DataHall mesh colliders are too unforgiving for this demo: a tiny
-# visual/intersection error at the RJ45 mouth can push the connector out or stall
-# the X insert. Keep the switch visible, but make the selected 12-port RJ45
-# component collision-free so insertion is judged by the measured plug pose
-# servo, not by brittle mesh contact.
 DISABLE_TARGET_RJ45_COMPONENT_COLLISION = True
-
-# Broader invisible-collider fix. Disabling only the orange/white 12-port RJ45
-# component is not enough when the DataHall asset has collision on parent/sibling
-# switch meshes, rack face plates, or imported proxy geometry. This creates a
-# visual-only collision tunnel around the selected insertion line. It keeps the
-# scene visible but removes *all* switch/rack collision geometry that intersects
-# the plug + gripper corridor.
 DISABLE_AS4610_INSERT_COLLISION_TUNNEL = True
 AS4610_INSERT_COLLISION_ROOT_PATH = "/World/DataHall/Network_Switches/AS4610_01"
-INSERT_COLLISION_TUNNEL_X_BACK_PAD = 0.100   # extra room behind final plug center, into the switch
-INSERT_COLLISION_TUNNEL_X_FRONT_PAD = 0.220  # room in front for fingers/gripper body
-INSERT_COLLISION_TUNNEL_Y_PAD = 0.090        # wider than one RJ45 mouth so near-sibling colliders cannot block
-INSERT_COLLISION_TUNNEL_Z_PAD = 0.075        # room above/below plug shell and latch
+INSERT_COLLISION_TUNNEL_X_BACK_PAD = 0.100
+INSERT_COLLISION_TUNNEL_X_FRONT_PAD = 0.220
+INSERT_COLLISION_TUNNEL_Y_PAD = 0.090
+INSERT_COLLISION_TUNNEL_Z_PAD = 0.075
 
-# Re-enable the same port/tunnel collisions after a successful insertion but
-# before opening the hand. The insert needs the collision tunnel disabled, but
-# release needs the port/rack collisions back on or the cable has nothing to sit
-# in and can fall through the visual switch geometry.
 REENABLE_PORT_COLLISION_BEFORE_RELEASE = True
 POST_INSERT_COLLISION_SETTLE_FRAMES = 12
 REENABLED_PORT_COLLISION_CONTACT_OFFSET = 0.0005
 REENABLED_PORT_COLLISION_REST_OFFSET = -0.0005
 
-# Re-enabling the imported switch collision is not enough if the cable is already
-# inside a disabled/overlapping mesh corridor. Add a tiny invisible static cradle
-# after successful insertion and before gripper release. This is the demo-safe
-# version of an RJ45 socket retaining the connector: it supports the plug from
-# below and lightly constrains Y without blocking the hand retreat along +X.
 ENABLE_POST_INSERT_SOCKET_HOLD_PROXY = True
 SOCKET_HOLD_PROXY_ROOT_PATH = "/World/PostInsertSocketHoldProxy"
 SOCKET_HOLD_MATERIAL_PATH = "/World/Looks/SocketHoldPhysicsMaterial"
@@ -175,252 +141,75 @@ SOCKET_HOLD_X_PAD = 0.0140
 SOCKET_HOLD_Y_PAD = 0.0060
 SOCKET_HOLD_Z_PAD = 0.0060
 
-
-# =============================================================================
-# 2. SCENE SETTINGS
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# PICKUP GEOMETRY — DO NOT "OPTIMIZE" THIS CASUALLY.
-# -----------------------------------------------------------------------------
-# These are copied from the standalone good pickup script in robot-local form.
-# The DataHall robot can move in world space, but the cable/support geometry must
-# stay at the exact same pose relative to the Franka base as the working file:
-#
-#   original robot base:      [0, 0, 0]
-#   original block center:    [0.65, 0.00, 0.10]
-#   original pickup target:   [0.642, 0.00, 0.1125]
-#
-# We convert these local pickup coordinates into world coordinates after the
-# AS4610 target chooses ROBOT_BASE_POS. This preserves the working grasp while
-# still letting the whole pickup island sit at TABLE_HEIGHT=2.35.
-# Your imported cable USD is now manually scaled 2x in the asset file itself.
-# Do NOT scale the cable again in this script. Only scale the pickup support
-# geometry around the cable so the manually enlarged plug has a proportional
-# cradle/slot.
-PICKUP_SUPPORT_SCALE = 1.8
-# Hard-set the cable/support pickup island Y in world space. This moves the
-# support block, posts, cable spawn placement, and pickup grasp waypoint together.
-# It does NOT scale the cable USD; the imported asset has already been manually doubled.
-FIXED_PICKUP_WORLD_Y = -0.600
-
-PICKUP_LOCAL_BLOCK_CENTER = np.array([0.65, 0.00, 0.10], dtype=np.float64)
-BLOCK_CENTER = ROBOT_BASE_POS + PICKUP_LOCAL_BLOCK_CENTER
 BLOCK_SIZE = np.array([0.04, 0.005, 0.025], dtype=np.float64) * PICKUP_SUPPORT_SCALE
-
-# Keep the original pickup X/Y relationship, but raise the pickup Z to the new
-# scaled block top. This preserves the diagonal pickup technique while matching
-# the taller 2x support.
 PICKUP_LOCAL_GRASP_POSITION = np.array(
-    [0.642, 0.00, PICKUP_LOCAL_BLOCK_CENTER[2] + 0.5 * BLOCK_SIZE[2]],
+    [PICKUP_LOCAL_GRASP_X, PICKUP_LOCAL_BLOCK_CENTER[1], PICKUP_LOCAL_BLOCK_CENTER[2] + 0.5 * BLOCK_SIZE[2]],
     dtype=np.float64,
 )
-
-# Two small red posts make the cable slot visible. Scale only the support/post
-# geometry; the cable asset itself is already scaled in the imported USD.
 POST_SIZE = np.array([0.001, 0.001, 0.005], dtype=np.float64) * PICKUP_SUPPORT_SCALE
 POST_GAP_Y = 0.008 * PICKUP_SUPPORT_SCALE
 POST_X_OFFSET = -0.020 * PICKUP_SUPPORT_SCALE
-
-# Cable plug rests this far above the top of the block. Scaled to match the
-# manually enlarged cable asset.
 PLUG_BLOCK_CLEARANCE = 0.004 * PICKUP_SUPPORT_SCALE
-PICKUP_GRASP_POSITION = ROBOT_BASE_POS + PICKUP_LOCAL_GRASP_POSITION
 
-PHYSICS_DT = 1.0 / 120.0
-RENDERING_DT = 1.0 / 60.0
-
-# Used by FrankaMotionController when you add cartesian waypoints.
-TOOL_OFFSET = 0.111
-
-TOP_DOWN_ORI = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float64)
 DIAGONAL_DOWN_ORI = np.array([0.5, 0.0, 0.86602540, 0.0], dtype=np.float64)
 DIAGONAL_INSERT_ORI = np.array([0.0, -0.86602540, 0.0, 0.5], dtype=np.float64)
-HORIZONTAL_ORI = np.array([0.70710678, 0, 0.70710678, 0.0], dtype=np.float64)
+USER_SELECTED_CABLE_TARGET_ORI_WXYZ = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
 
-# Grip/contact tuning. These change physics, not the motion path.
-# The original gripper delta was 0.02m per frame, which snaps shut in only a few
-# frames and can squeeze/eject the connector before contact settles.
 GRIPPER_ACTION_DELTA = 0.0025
-GRIP_CLOSE_WAIT_FRAMES = 220  # V22: pickup is failing; give the fingers/contact solver time to actually settle
-
-# High-friction physics material for the finger pads and connector plug.
-# If the plug still slips, raise both friction values together. If the plug sticks
-# unnaturally to everything, lower them together.
+GRIP_CLOSE_WAIT_FRAMES = 220
 GRIP_STATIC_FRICTION = 30.0
 GRIP_DYNAMIC_FRICTION = 30.0
 GRIP_RESTITUTION = 0.0
 GRIP_MATERIAL_PATH = "/World/Looks/HighGripPhysicsMaterial"
-
-# Small contact offsets help tiny mesh contacts resolve before visible penetration.
-
 GRIP_CONTACT_OFFSET = 0.006
 GRIP_REST_OFFSET = 0.0
 
-# Closed-loop plug pose servo. This is the cable version of the block insertion
-# feedback loop: it reads /World/NetworkCable/E_crystal_head1_45 every frame and
-# corrects the robot until the plug position AND orientation are inside tolerance.
-# Position uses the tracked plug XFORM TRANSLATE because that is the value shown
-# in the Isaac Sim Transform panel. Bbox center is still printed as secondary
-# debug, but it is not the controlled target in this version.
 ENABLE_PLUG_POSE_SERVO = True
-
-# =============================================================================
-# USER-SELECTED CABLE / PORT TARGET
-# =============================================================================
-# Change these two positions when you want a different insertion stroke.
-# PRE_INSERT is the world-space TRANSLATE shown in the Transform panel for
-# /World/NetworkCable/E_crystal_head1_45 before insertion starts.
-# FINAL_INSERT is the seated/end pose after the slow X-only insertion stroke.
-# The robot hand target is derived from these; do not hand-tune the gripper pose.
-USER_SELECTED_CABLE_PRE_INSERT_POSITION = np.array([-0.50, 0.00, 0.325], dtype=np.float64)
-USER_SELECTED_CABLE_FINAL_INSERT_POSITION = np.array([-0.55, 0.00, 0.325], dtype=np.float64)
-
-# The plug's long dimension is local +X in the USD. This target is a 180-degree
-# yaw around world Z, so local +X points along world -X and the connector stays
-# horizontal for insertion.
-USER_SELECTED_CABLE_TARGET_ORI_WXYZ = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-
-# Internal names used by the pre-insert alignment servo. Do not edit these;
-# edit USER_SELECTED_* above.
-PLUG_TARGET_POSITION = USER_SELECTED_CABLE_PRE_INSERT_POSITION.copy()
-PLUG_FINAL_INSERT_POSITION = USER_SELECTED_CABLE_FINAL_INSERT_POSITION.copy()
-PLUG_TARGET_ORI_WXYZ = USER_SELECTED_CABLE_TARGET_ORI_WXYZ.copy()
-PLUG_INSERT_AXIS_WORLD = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
-
-# Coarse routing is still hand/tool motion, but the last coarse waypoint is now
-# derived from the cable target above. The final measured position is corrected
-# by the plug feedback servo, not by trusting the hand waypoint.
-COARSE_TRANSFER_LANE_Y = -0.50
-
-# Do NOT add a huge fixed +125 mm height above every target.
-# That was the slip bug for higher targets: z=0.325 produced a 0.450 m carry lane,
-# then the next waypoint yanked the plug back down while the cable tail was loaded.
-# Keep only a small clearance above the selected target, with the old 0.325 m
-# floor preserved for low targets.
-COARSE_TARGET_CLEARANCE_Z = 0.025
-COARSE_TRANSFER_Z = max(0.325, float(PLUG_TARGET_POSITION[2]) + COARSE_TARGET_CLEARANCE_Z)
-
-COARSE_TRANSFER_POSITION = np.array([0.0, COARSE_TRANSFER_LANE_Y, COARSE_TRANSFER_Z], dtype=np.float64)
-COARSE_APPROACH_TARGET_POSITION = np.array(
-    [float(PLUG_TARGET_POSITION[0]), float(PLUG_TARGET_POSITION[1]), COARSE_TRANSFER_Z],
-    dtype=np.float64,
-)
-COARSE_NEAR_TARGET_POSITION = PLUG_TARGET_POSITION.copy()
-
-# If the plug is nowhere near the target after coarse motion, do not let the servo
-# pretend it can recover. That means the cable has already slipped out.
-PRE_SERVO_MAX_POSITION_ERROR = 0.080
-PRE_SERVO_MAX_TILT_DEG = 35.0
-# Do not let the fine servo try to rescue a badly rotated plug. In the failed run,
-# the plug entered servo about 33 deg off-axis; the servo then twisted the cable
-# out of the gripper and the pose error exploded. These guards stop that early.
-PRE_SERVO_MAX_AXIS_ANGLE_DEG = 12.0
-PRE_SERVO_MAX_ORI_ERROR_DEG = 20.0
-
-# Visual marker for the desired pre-insert plug target. Disabled for the clean run.
-SHOW_USER_TARGET_MARKER = False
-USER_TARGET_MARKER_PATH = "/World/UserSelectedCableTarget"
-USER_TARGET_MARKER_SIZE = 0.008
-
-# Visual final target/port block. Disabled for the clean run.
-# No-overinsert protection comes from the strict X clamp below, not scene geometry.
-SHOW_FINAL_TARGET_BLOCK = False
-FINAL_TARGET_BLOCK_PATH = "/World/FinalInsertTargetBlock"
-FINAL_TARGET_BLOCK_SIZE = np.array([0.012, 0.030, 0.030], dtype=np.float64)
-FINAL_TARGET_BLOCK_COLLISION = False
-
-# Final plug-position alignment tolerances.
-# For now this is NOT insertion. The goal is to put the tracked plug transform
-# translate at the user-selected port/alignment point with <= 0.5 mm total Y/Z
-# offset, matching the Transform panel value.
-PLUG_POSITION_TOL = 0.0010          # legacy total XYZ print limit
-PLUG_X_TOL = 0.0010                 # 1.0 mm X tolerance for staging/alignment
-PLUG_YZ_TOTAL_TOL = 0.00050         # 0.5 mm radial Y/Z tolerance — main metric
-PLUG_ORIENTATION_TOL_DEG = 1.00     # full quaternion angular error
-PLUG_HOLD_FRAMES = 1                # fast demo settle; still avoids one-frame false positives
+PLUG_POSITION_TOL = 0.0010
+PLUG_X_TOL = 0.0010
+PLUG_YZ_TOTAL_TOL = 0.00050
+PLUG_ORIENTATION_TOL_DEG = 1.00
+PLUG_HOLD_FRAMES = 1
 PLUG_SERVO_MAX_FRAMES = 350
 PLUG_SERVO_DEBUG_EVERY = 60
-
-# Per-frame correction limits. These are intentionally small so the correction
-# behaves like a servo, not a teleporting IK target.
-PLUG_SERVO_POS_KP = 0.65           # legacy fallback value; adaptive gains below are used
-# Fast/fine position servo inspired by the block insert: move aggressively while
-# far from target, then slow down only near the 0.5 mm Y/Z gate.
-PLUG_FAST_MODE_DISTANCE = 0.0100     # >6 mm error: fast catch-up
-PLUG_MID_MODE_DISTANCE = 0.0030      # 2-6 mm error: medium catch-up
+PLUG_FAST_MODE_DISTANCE = 0.0100
+PLUG_MID_MODE_DISTANCE = 0.0030
 PLUG_FAST_POS_KP = 1.00
 PLUG_MID_POS_KP = 0.85
 PLUG_FINE_POS_KP = 0.95
-PLUG_FAST_MAX_POS_STEP = 0.0080      # 6.0 mm/frame while far
-PLUG_MID_MAX_POS_STEP = 0.0050       # 2.5 mm/frame while medium
-PLUG_FINE_MAX_POS_STEP = 0.0030      # 2.0 mm/frame while settling
-PLUG_SERVO_MAX_POS_STEP = PLUG_FAST_MAX_POS_STEP
+PLUG_FAST_MAX_POS_STEP = 0.0080
+PLUG_MID_MAX_POS_STEP = 0.0050
+PLUG_FINE_MAX_POS_STEP = 0.0030
+PLUG_SERVO_IK_POS_TOL = 0.0002
+PLUG_SERVO_IK_ORI_TOL = 0.020
 PLUG_FAST_ORI_STEP_DEG = 2.50
 PLUG_FINE_ORI_STEP_DEG = 1.25
-PLUG_SERVO_MAX_ORI_STEP_DEG = PLUG_FAST_ORI_STEP_DEG
-PLUG_SERVO_IK_POS_TOL = 0.0002
-PLUG_SERVO_IK_ORI_TOL = 0.020       # radians-ish tolerance used by Lula IK
-PLUG_LOCAL_DRIFT_WARN_POS = 0.0040  # if exceeded, plug is moving in fingers
+PLUG_LOCAL_DRIFT_WARN_POS = 0.0040
 PLUG_LOCAL_DRIFT_WARN_ORI_DEG = 5.0
-
-# The uploaded baseline consistently plateaued around +1.2 mm Z error at the
-# final pose. This Y/Z overdrive is the missing block-servo idea: if the measured
-# plug sits low/right, command the hand slightly high/left until the measured
-# plug itself is on the target line. This only runs near the target so it does
-# not yank the cable during the long approach.
-PLUG_YZ_OVERDRIVE_ENABLE_RADIUS = 0.012  # activate earlier; final bias was previously starving
-PLUG_YZ_OVERDRIVE_X_ENABLE = 0.0100      # allow final Y/Z bias as soon as X is reasonably close
-# Gentler than v3. The old 4 mm overdrive was accurate but could oscillate for
-# hundreds of frames. This is closer to the block servo idea: enough bias to beat
-# steady-state cable sag, not enough to throw the plug past the target line.
+PLUG_YZ_OVERDRIVE_ENABLE_RADIUS = 0.012
+PLUG_YZ_OVERDRIVE_X_ENABLE = 0.0100
 PLUG_YZ_OVERDRIVE_KP = 1.65
 PLUG_YZ_OVERDRIVE_KI = 0.0025
 PLUG_YZ_INTEGRAL_LEAK = 0.995
 PLUG_YZ_INTEGRAL_LIMIT = 0.40
-PLUG_YZ_MAX_OVERDRIVE = 0.0030      # max 3.0 mm Y/Z target bias; enough to beat cable sag quickly
+PLUG_YZ_MAX_OVERDRIVE = 0.0030
 
-# =============================================================================
-# INSERT STROKE SETTINGS
-# =============================================================================
 ENABLE_PLUG_INSERT_SERVO = True
-INSERT_TARGET_POSITION = PLUG_FINAL_INSERT_POSITION.copy()
-INSERT_AXIS_WORLD = PLUG_INSERT_AXIS_WORLD / np.linalg.norm(PLUG_INSERT_AXIS_WORLD)
-
-# Path requirement: during the X stroke, the measured plug Transform translate
-# should stay close to the port line. Pre-insert still locks to 0.5 mm; the
-# insert stroke gets a looser 1.0 mm gate so it does not stall before the plug
-# actually reaches the port.
-INSERT_YZ_TOTAL_TOL = 0.00100   # hard demo requirement: measured plug Y/Z path must never exceed 1.0 mm
+INSERT_YZ_TOTAL_TOL = 0.00100
 INSERT_FINAL_X_TOL = 0.00050
 INSERT_ORIENTATION_TOL_DEG = 1.00
 INSERT_STABLE_HOLD_FRAMES = 1
 INSERT_STROKE_MAX_FRAMES = 1200
 INSERT_STROKE_DEBUG_EVERY = 40
-INSERT_HARD_ABORT_YZ_TOL = 0.00105  # strict path guard: abort almost immediately if Y/Z tries to exceed 1 mm
-INSERT_HARD_ABORT_ORI_TOL_DEG = 3.0 # abort if collision tilts the connector before final target
-
-# Adaptive X insertion speed. V7 used 0.075 mm/frame and took ~675 frames
-# for a 50 mm stroke even though Y/Z stayed far under the 0.5 mm limit.
-# V8 moves fast while the plug is safely on the line, then slows only near the
-# final X band or if Y/Z starts drifting toward the pause gate.
-INSERT_X_FAST_STEP = 0.00100      # strict-path insert: slower X so Y/Z correction never spikes past 1 mm
-INSERT_X_FINE_STEP = 0.00025       # strict-path insert: crawl when near final X or when Y/Z starts drifting
-INSERT_X_FINE_DISTANCE = 0.006    # switch to fine mode earlier so the last centimeters do not kick Y/Z sideways
-INSERT_X_YZ_SLOWDOWN_TOL = 0.00055 # slow X before Y/Z approaches the 1 mm path limit
-INSERT_X_SLOW_STEP = INSERT_X_FAST_STEP  # legacy/debug alias
-# Strict port safety: the commanded plug X is never allowed past the final target.
-# For -X insertion, commanded_x will never be < final_x. For +X insertion, it
-# will never be > final_x.
+INSERT_HARD_ABORT_YZ_TOL = 0.00105
+INSERT_HARD_ABORT_ORI_TOL_DEG = 3.0
+INSERT_X_FAST_STEP = 0.00100
+INSERT_X_FINE_STEP = 0.00025
+INSERT_X_FINE_DISTANCE = 0.006
+INSERT_X_YZ_SLOWDOWN_TOL = 0.00055
 INSERT_STRICT_NO_PAST_TARGET_X = True
 INSERT_X_MAX_PUSH_THROUGH = 0.0
-INSERT_MAX_BACKSLIDE = 0.0040
 INSERT_X_BACKTRACK_TOL = 0.00020
-
-# Pause X advancement only when Y/Z is genuinely bad. V9 froze the X stroke for
-# 760 frames because it paused at 0.49 mm and required recovery to 0.43 mm; the
-# plug sat safely around 0.46 mm Y/Z error but never inserted. Keep moving unless
-# Y/Z approaches the hard-abort band.
 INSERT_STROKE_YZ_PAUSE_TOL = 0.00070
 INSERT_STROKE_YZ_RESUME_TOL = 0.00040
 INSERT_YZ_KP = 2.20
@@ -430,44 +219,45 @@ INSERT_YZ_INTEGRAL_LIMIT = 0.75
 INSERT_YZ_MAX_OVERDRIVE = 0.0100
 INSERT_MAX_ORI_STEP_DEG = 0.70
 
-# =============================================================================
-# POST-INSERT RELEASE / RETREAT SETTINGS
-# =============================================================================
-# Runs only after the measured insert servo reports a successful final pose. The
-# hand opens first, then retreats straight backward along world +X, which is the
-# opposite direction of the -X insertion stroke. This deliberately does not move
-# the cable target or change insertion depth.
 ENABLE_POST_INSERT_RELEASE_RETREAT = True
 POST_INSERT_OPEN_WAIT_FRAMES = 40
 POST_INSERT_RETREAT_X_M = 0.120
 POST_INSERT_RETREAT_LINEAR_STEP = 0.0120
 POST_INSERT_RETREAT_POS_TOL = 0.0030
 
-# =============================================================================
-# TRANSIT SPEED SETTINGS
-# =============================================================================
-# These only affect the coarse carry to pre-insert. Pickup, grip, pre-insert
-# servo, strict no-overinsert clamp, and final X insert logic are unchanged.
-# The old values were deliberately conservative: 240/320/320 joint steps plus
-# tiny linear steps. That made the transit phase crawl even though the measured
-# plug stayed stable.
-# The cable is now physically 2x larger in the imported USD, so the old fast
-# transit is too violent: it yanks the long tail and the connector rotates out
-# of the fingers. Keep the proven pickup, but make the carry deliberately slow
-# and split translation from reorientation.
-TRANSIT_LIFT_LINEAR_STEP = 0.0240      # V20: do not raise; V19 40mm/frame broke pickup      # controlled lift for the heavier/manual-2x cable
-TRANSIT_REORIENT_JOINT_STEPS = 110     # V21: restore V18 working physical transit; V20 85 slipped the cable
-TRANSIT_TRANSFER_JOINT_STEPS = 130     # V21: restore V18 working physical transit; V20 95 slipped the cable
-TRANSIT_APPROACH_JOINT_STEPS = 120     # V21: restore V18 working physical transit; V20 85 slipped the cable
-TRANSIT_DESCEND_LINEAR_STEP = 0.0040   # V21: restore V18 working descend; V20 6mm/frame was too aggressive
-
-# Tail-clearance waypoints used when pickup is offset from the robot base.
-# V5 dragged the held cable from x≈1.19 to x=0 while still diagonal-down, which
-# created the ugly transit loop you saw. Reorient after a shorter clear-out move.
+TRANSIT_LIFT_LINEAR_STEP = 0.0240
+TRANSIT_REORIENT_JOINT_STEPS = 110
+TRANSIT_TRANSFER_JOINT_STEPS = 130
+TRANSIT_APPROACH_JOINT_STEPS = 120
+TRANSIT_DESCEND_LINEAR_STEP = 0.0040
 TAIL_CLEAR_X = 0.80
-TAIL_CLEAR_Y = -0.58
+TAIL_CLEAR_Y = PICKUP_WORLD_Y + 0.02
 MID_TRANSFER_X = 0.25
+COARSE_TRANSFER_LANE_Y = PICKUP_WORLD_Y + 0.10
+COARSE_TARGET_CLEARANCE_Z = 0.025
 
+# Derived scene values. These are assigned once in configure_datahall_cable_targets()
+# after the DataHall port bbox is available. Do not assign them at the top.
+ROBOT_BASE_POS: np.ndarray
+BLOCK_CENTER: np.ndarray
+PICKUP_GRASP_POSITION: np.ndarray
+USER_SELECTED_CABLE_PRE_INSERT_POSITION: np.ndarray
+USER_SELECTED_CABLE_FINAL_INSERT_POSITION: np.ndarray
+PLUG_TARGET_POSITION: np.ndarray
+PLUG_FINAL_INSERT_POSITION: np.ndarray
+PLUG_TARGET_ORI_WXYZ: np.ndarray
+PLUG_INSERT_AXIS_WORLD: np.ndarray
+INSERT_TARGET_POSITION: np.ndarray
+INSERT_AXIS_WORLD: np.ndarray
+COARSE_TRANSFER_Z: float
+COARSE_TRANSFER_POSITION: np.ndarray
+COARSE_APPROACH_TARGET_POSITION: np.ndarray
+COARSE_NEAR_TARGET_POSITION: np.ndarray
+
+PRE_SERVO_MAX_POSITION_ERROR = 0.080
+PRE_SERVO_MAX_TILT_DEG = 35.0
+PRE_SERVO_MAX_AXIS_ANGLE_DEG = 12.0
+PRE_SERVO_MAX_ORI_ERROR_DEG = 20.0
 
 # =============================================================================
 # 3. EDIT YOUR WAYPOINTS HERE
@@ -652,12 +442,12 @@ def pickup_local_to_world(local_position: np.ndarray) -> np.ndarray:
     """Map the proven standalone pickup coordinates into the DataHall scene.
 
     X/Z stay translated from the Franka base like the working pickup. Y is
-    intentionally pinned to FIXED_PICKUP_WORLD_Y because the cable/support spawn
+    intentionally pinned to PICKUP_WORLD_Y because the cable/support spawn
     lane needs to sit at y=-0.600 regardless of the selected RJ45 port lane.
     """
 
     world_pos = np.asarray(ROBOT_BASE_POS, dtype=np.float64) + np.asarray(local_position, dtype=np.float64)
-    world_pos[1] = float(FIXED_PICKUP_WORLD_Y + np.asarray(local_position, dtype=np.float64)[1])
+    world_pos[1] = float(PICKUP_WORLD_Y + np.asarray(local_position, dtype=np.float64)[1])
     return world_pos
 
 
@@ -1206,79 +996,6 @@ def apply_as4610_insert_collision_tunnel() -> None:
 
 
 
-def spawn_user_target_marker() -> None:
-    """Spawn a small no-collision visual marker at the selected pre-insert target."""
-
-    if not SHOW_USER_TARGET_MARKER:
-        return
-
-    stage = omni.usd.get_context().get_stage()
-    remove_prim_if_exists(USER_TARGET_MARKER_PATH)
-
-    cube = UsdGeom.Cube.Define(stage, Sdf.Path(USER_TARGET_MARKER_PATH))
-    cube.CreateSizeAttr(float(USER_TARGET_MARKER_SIZE))
-    cube.CreateDisplayColorAttr([Gf.Vec3f(0.0, 1.0, 0.0)])
-
-    xform = UsdGeom.Xformable(cube.GetPrim())
-    target = PLUG_TARGET_POSITION
-    xform.AddTranslateOp().Set(Gf.Vec3d(float(target[0]), float(target[1]), float(target[2])))
-
-    print("[USER CABLE PRE-INSERT TARGET MARKER]")
-    print(f"  marker_path={USER_TARGET_MARKER_PATH}")
-    print(f"  target_plug_transform_translate={fmt_vec(PLUG_TARGET_POSITION)}")
-    print("  collision=disabled")
-
-
-def make_visual_target_box(
-    prim_path: str,
-    center: np.ndarray,
-    size: np.ndarray,
-    color=(1.0, 0.55, 0.0),
-    collision: bool = False,
-) -> None:
-    """Spawn a visible target/port block, optionally with collision.
-
-    Collision is off by default because this block is centered on the final plug
-    target. A colliding block there would push the connector away from the pose
-    we are trying to measure.
-    """
-
-    stage = omni.usd.get_context().get_stage()
-    remove_prim_if_exists(prim_path)
-
-    cube = UsdGeom.Cube.Define(stage, Sdf.Path(prim_path))
-    cube.CreateSizeAttr(1.0)
-    cube.CreateDisplayColorAttr([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
-
-    xform = UsdGeom.Xformable(cube.GetPrim())
-    xform.AddTranslateOp().Set(Gf.Vec3d(float(center[0]), float(center[1]), float(center[2])))
-    xform.AddScaleOp().Set(Gf.Vec3f(float(size[0]), float(size[1]), float(size[2])))
-
-    if collision:
-        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-
-
-def spawn_final_insert_target_block() -> None:
-    """Spawn a visible block at the final insert target."""
-
-    if not SHOW_FINAL_TARGET_BLOCK:
-        return
-
-    make_visual_target_box(
-        FINAL_TARGET_BLOCK_PATH,
-        INSERT_TARGET_POSITION,
-        FINAL_TARGET_BLOCK_SIZE,
-        color=(1.0, 0.55, 0.0),
-        collision=FINAL_TARGET_BLOCK_COLLISION,
-    )
-
-    print("[FINAL INSERT TARGET BLOCK]")
-    print(f"  block_path={FINAL_TARGET_BLOCK_PATH}")
-    print(f"  center_final_insert_transform={fmt_vec(INSERT_TARGET_POSITION)}")
-    print(f"  size_mm={fmt_vec(FINAL_TARGET_BLOCK_SIZE * 1000.0, 2)}")
-    print(f"  collision={'enabled' if FINAL_TARGET_BLOCK_COLLISION else 'disabled'}")
-
-
 def _set_schema_attr(api, create_attr_name: str, value) -> bool:
     """Best-effort setter for generated USD/PhysX schema attributes."""
 
@@ -1512,7 +1229,7 @@ def spawn_block_and_posts() -> float:
 
     print("[SUPPORT SPAWNED]")
     print(f"  block_center={np.round(BLOCK_CENTER, 5)}")
-    print(f"  fixed_pickup_world_y={FIXED_PICKUP_WORLD_Y:.5f}")
+    print(f"  pickup_world_y={PICKUP_WORLD_Y:.5f}")
     print(f"  pickup_support_scale={PICKUP_SUPPORT_SCALE:.2f}")
     print(f"  block_size_mm={np.round(BLOCK_SIZE * 1000.0, 2)}")
     print(f"  block_top_z={block_top_z:.5f}")
@@ -1573,27 +1290,6 @@ def _normalize_vec(v: np.ndarray) -> np.ndarray:
     if n < 1e-12:
         raise ValueError("Cannot normalize zero-length vector")
     return v / n
-
-
-def orientation_for_cable_axis(axis_world: np.ndarray) -> np.ndarray:
-    """Quaternion that points cable local +X along the port insert axis.
-
-    The cable USD plug length axis is local +X. This keeps the local +Z as close
-    as possible to world-up so the connector stays horizontal like the working
-    non-DataHall cable insertion.
-    """
-
-    x_axis = _normalize_vec(axis_world)
-    z_hint = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    if abs(float(np.dot(x_axis, z_hint))) > 0.95:
-        z_hint = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    z_axis = z_hint - x_axis * float(np.dot(z_hint, x_axis))
-    z_axis = _normalize_vec(z_axis)
-    y_axis = _normalize_vec(np.cross(z_axis, x_axis))
-    rot = np.column_stack([x_axis, y_axis, z_axis])
-    quat = rot_matrices_to_quats(rot.reshape(1, 3, 3))[0]
-    quat = np.asarray(quat, dtype=np.float64)
-    return quat / np.linalg.norm(quat)
 
 
 def measure_plug_front_to_xform_offset_for_minus_x_insert() -> float:
@@ -1675,22 +1371,22 @@ def _selected_as4610_rj45_face_center() -> typing.Tuple[np.ndarray, np.ndarray, 
 
 
 def configure_datahall_cable_targets() -> None:
-    """Target one inferred AS4610 RJ45 port from the 2x6 component bbox.
+    """Compute the selected AS4610 RJ45 target and all derived scene positions.
 
-    The old QSFP flow used PortFrame because each QSFP connector had its own prim.
-    The AS4610 RJ45 block does not. This function replaces PortFrame with a
-    bbox-grid target: choose row/col, compute the port face, then use the same
-    front-tip-referenced cable insertion logic from V6.
+    Single source of truth:
+      - TABLE_HEIGHT, ROBOT_BASE_X, ROBOT_BASE_Y_OFFSET_FROM_PORT, PICKUP_WORLD_Y
+        are edited near the top.
+      - ROBOT_BASE_POS, BLOCK_CENTER, pickup grasp, and coarse waypoints are
+        derived here exactly once after the DataHall port bbox is known.
     """
 
     global USER_SELECTED_CABLE_PRE_INSERT_POSITION
     global USER_SELECTED_CABLE_FINAL_INSERT_POSITION
-    global USER_SELECTED_CABLE_TARGET_ORI_WXYZ
     global PLUG_TARGET_POSITION, PLUG_FINAL_INSERT_POSITION, PLUG_TARGET_ORI_WXYZ
     global PLUG_INSERT_AXIS_WORLD, INSERT_TARGET_POSITION, INSERT_AXIS_WORLD
     global COARSE_TRANSFER_Z, COARSE_TRANSFER_POSITION, COARSE_APPROACH_TARGET_POSITION, COARSE_NEAR_TARGET_POSITION
     global PLUG_FRONT_TO_XFORM_X_OFFSET_M, DATAHALL_PORT_FACE_X_M
-    global TABLE_HEIGHT, ROBOT_BASE_POS, BLOCK_CENTER, PICKUP_GRASP_POSITION
+    global ROBOT_BASE_POS, BLOCK_CENTER, PICKUP_GRASP_POSITION
 
     face_center, comp_min, comp_max, comp_dims = _selected_as4610_rj45_face_center()
     port_face_x = float(face_center[0])
@@ -1711,38 +1407,22 @@ def configure_datahall_cable_targets() -> None:
     pre_insert_pos = np.array([pre_center_x, face_center[1], face_center[2]], dtype=np.float64)
     final_pos = np.array([final_center_x, face_center[1], face_center[2]], dtype=np.float64)
 
-    target_quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    ROBOT_BASE_POS = np.array(
+        [ROBOT_BASE_X, float(face_center[1] + ROBOT_BASE_Y_OFFSET_FROM_PORT), TABLE_HEIGHT],
+        dtype=np.float64,
+    )
+    BLOCK_CENTER = pickup_local_to_world(PICKUP_LOCAL_BLOCK_CENTER)
+    PICKUP_GRASP_POSITION = pickup_local_to_world(PICKUP_LOCAL_GRASP_POSITION)
 
     USER_SELECTED_CABLE_PRE_INSERT_POSITION = pre_insert_pos.copy()
     USER_SELECTED_CABLE_FINAL_INSERT_POSITION = final_pos.copy()
-    USER_SELECTED_CABLE_TARGET_ORI_WXYZ = target_quat.copy()
-
     PLUG_TARGET_POSITION = pre_insert_pos.copy()
     PLUG_FINAL_INSERT_POSITION = final_pos.copy()
-    PLUG_TARGET_ORI_WXYZ = target_quat.copy()
+    PLUG_TARGET_ORI_WXYZ = USER_SELECTED_CABLE_TARGET_ORI_WXYZ.copy()
     PLUG_INSERT_AXIS_WORLD = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
     INSERT_TARGET_POSITION = final_pos.copy()
     INSERT_AXIS_WORLD = PLUG_INSERT_AXIS_WORLD.copy()
 
-    # Keep the work table and Franka base at the fixed AS4610 height requested by
-    # the user. IMPORTANT: do NOT lock robot base Y to the pickup cable Y. The
-    # cable/support pickup island is intentionally offset at y=-0.600 so the long
-    # cable does not run through the robot base. The Franka base should stay in
-    # the original port-relative lane that was visually good.
-    TABLE_HEIGHT = 2.35
-    ROBOT_BASE_POS = np.array(
-        [ROBOT_BASE_X_M, float(face_center[1] + ROBOT_BASE_Y_OFFSET_FROM_TARGET_M), TABLE_HEIGHT],
-        dtype=np.float64,
-    )
-    # Preserve the standalone pickup exactly relative to the shifted Franka base.
-    # Do not derive this from the port, target height, or table collision geometry.
-    BLOCK_CENTER = pickup_local_to_world(PICKUP_LOCAL_BLOCK_CENTER)
-    PICKUP_GRASP_POSITION = pickup_local_to_world(PICKUP_LOCAL_GRASP_POSITION)
-
-    # Preserve the standalone pickup lift/carry height relative to the Franka base.
-    # In the good pickup file, local carry was 0.35 m for the 0.325 m target.
-    # The previous AS4610 file used TABLE_HEIGHT+0.325, which lowered the lift by
-    # 25 mm and changed the cable loading during grasp.
     COARSE_TRANSFER_Z = max(ROBOT_BASE_POS[2] + 0.350, float(PLUG_TARGET_POSITION[2]) + COARSE_TARGET_CLEARANCE_Z)
     COARSE_TRANSFER_POSITION = np.array([0.0, COARSE_TRANSFER_LANE_Y, COARSE_TRANSFER_Z], dtype=np.float64)
     COARSE_APPROACH_TARGET_POSITION = np.array(
@@ -1752,40 +1432,26 @@ def configure_datahall_cable_targets() -> None:
     COARSE_NEAR_TARGET_POSITION = PLUG_TARGET_POSITION.copy()
 
     print("=" * 88)
-    print("[DATAHALL AS4610 RJ45 TARGET - BBOX GRID + TIP-REFERENCED INSERT]")
-    print(f"  component_prim:        {DATAHALL_PORT_PRIM_PATH}")
-    print(f"  selected_port_id:      r{TARGET_RJ45_ROW}_c{TARGET_RJ45_COL}")
-    print(f"  component_bbox_min:    {fmt_vec(comp_min)}")
-    print(f"  component_bbox_max:    {fmt_vec(comp_max)}")
-    print(f"  component_bbox_dims_mm:{fmt_vec(comp_dims * 1000.0, 3)}")
-    print(f"  grid_rows_cols:        {AS4610_PORT_ROWS} x {AS4610_PORT_COLS}")
-    print(f"  grid_margins_yz:       {AS4610_Y_MARGIN_FRACTION:.3f} / {AS4610_Z_MARGIN_FRACTION:.3f}")
-    print(f"  port_face_center:      {fmt_vec(face_center)}")
-    print(f"  applied_yz_offset_mm:  right_y={DATAHALL_PORT_LATERAL_OFFSET[1] * 1000.0:.3f}, up_z={DATAHALL_PORT_LATERAL_OFFSET[2] * 1000.0:.3f}")
-    print(f"  port_face_x_bbox_max:  {port_face_x:.5f}")
-    print("  servo_insert_axis:     [-1.  0.  0.]  # strict -X RJ45 insert")
-    print(f"  plug_front_to_xform_mm:{PLUG_FRONT_TO_XFORM_X_OFFSET_M * 1000.0:.3f}")
-    print(f"  pre_insert_front_gap_mm:{DATAHALL_PRE_INSERT_FRONT_GAP_M * 1000.0:.1f}")
-    print(f"  final_front_depth_mm:  {DATAHALL_FINAL_PLUG_FRONT_AXIAL_DEPTH_M * 1000.0:.1f}")
-    print(f"  pre_insert_plug_center:{fmt_vec(PLUG_TARGET_POSITION)}")
+    print("[DATAHALL AS4610 RJ45 TARGET - CLEAN CONFIG V30]")
+    print(f"  component_prim:          {DATAHALL_PORT_PRIM_PATH}")
+    print(f"  selected_port_id:        r{TARGET_RJ45_ROW}_c{TARGET_RJ45_COL}")
+    print(f"  component_bbox_min:      {fmt_vec(comp_min)}")
+    print(f"  component_bbox_max:      {fmt_vec(comp_max)}")
+    print(f"  component_bbox_dims_mm:  {fmt_vec(comp_dims * 1000.0, 3)}")
+    print(f"  port_face_center:        {fmt_vec(face_center)}")
+    print(f"  applied_yz_offset_mm:    right_y={DATAHALL_PORT_LATERAL_OFFSET[1] * 1000.0:.3f}, up_z={DATAHALL_PORT_LATERAL_OFFSET[2] * 1000.0:.3f}")
+    print(f"  plug_front_to_xform_mm:  {PLUG_FRONT_TO_XFORM_X_OFFSET_M * 1000.0:.3f}")
+    print(f"  pre_insert_plug_center:  {fmt_vec(PLUG_TARGET_POSITION)}")
     print(f"  final_insert_plug_center:{fmt_vec(INSERT_TARGET_POSITION)}")
-    print(f"  pre_insert_front_x:    {PLUG_TARGET_POSITION[0] - PLUG_FRONT_TO_XFORM_X_OFFSET_M:.5f}")
-    print(f"  final_front_x:         {INSERT_TARGET_POSITION[0] - PLUG_FRONT_TO_XFORM_X_OFFSET_M:.5f}")
-    print(f"  robot_base_pos:        {fmt_vec(ROBOT_BASE_POS)}  # original port-relative Y lane")
-    print(f"  robot_to_pickup_y_delta_mm:{(FIXED_PICKUP_WORLD_Y - ROBOT_BASE_POS[1]) * 1000.0:.3f}")
-    print(f"  robot_to_port_y_delta_mm:{(face_center[1] - ROBOT_BASE_POS[1]) * 1000.0:.3f}")
-    print(f"  table_height:          {TABLE_HEIGHT:.5f}  # fixed AS4610 work-table height")
-    print(f"  pickup_block_center:   {fmt_vec(BLOCK_CENTER)}")
-    print(f"  pickup_grasp_position: {fmt_vec(PICKUP_GRASP_POSITION)}")
-    print(f"  fixed_pickup_world_y:  {FIXED_PICKUP_WORLD_Y:.5f}")
-    print(f"  pickup_support_scale:  {PICKUP_SUPPORT_SCALE:.2f}  # support only; cable USD already manually scaled")
-    print(f"  pickup_local_block:    {fmt_vec(PICKUP_LOCAL_BLOCK_CENTER)}  # original working pickup island center")
-    print(f"  pickup_local_grasp:    {fmt_vec(PICKUP_LOCAL_GRASP_POSITION)}  # same pickup, raised to scaled block top")
-    print(f"  plug_target_ori_wxyz:  {fmt_vec(PLUG_TARGET_ORI_WXYZ)}")
-    print(f"  coarse_hand_ori_wxyz:  {fmt_vec(DIAGONAL_INSERT_ORI)}")
-    print(f"  coarse_transfer_z:     {COARSE_TRANSFER_Z:.5f}")
-    print("  technique: land at 50 mm pre-insert front gap, then closed-loop reorient/lock the tracked plug horizontal before X insertion.")
-    print("  note: AS4610 has no per-jack prim path; this is a row/column bbox-grid target.")
+    print(f"  robot_base_pos:          {fmt_vec(ROBOT_BASE_POS)}")
+    print(f"  pickup_world_y:          {PICKUP_WORLD_Y:.5f}")
+    print(f"  robot_to_pickup_y_mm:    {(PICKUP_WORLD_Y - ROBOT_BASE_POS[1]) * 1000.0:.3f}")
+    print(f"  robot_to_port_y_mm:      {(face_center[1] - ROBOT_BASE_POS[1]) * 1000.0:.3f}")
+    print(f"  table_height:            {TABLE_HEIGHT:.5f}")
+    print(f"  pickup_block_center:     {fmt_vec(BLOCK_CENTER)}")
+    print(f"  pickup_grasp_position:   {fmt_vec(PICKUP_GRASP_POSITION)}")
+    print(f"  pickup_support_scale:    {PICKUP_SUPPORT_SCALE:.2f}")
+    print(f"  coarse_transfer_z:       {COARSE_TRANSFER_Z:.5f}")
     print("=" * 88)
 
 
@@ -1816,7 +1482,7 @@ def build_controller(franka: SingleManipulator):
     kinematics_solver.set_robot_base_pose(base_position, base_orientation)
 
     controller = FrankaMotionController(
-        name="datahall_cable_support18x_yminus06_pathstrict_fast_v24",
+        name="datahall_cable_clean_config_v30",
         robot_articulation=franka,
         task_traj_gen=task_traj_gen,
         art_kinematics=art_kinematics,
@@ -1832,12 +1498,6 @@ def build_scene_and_controller():
     world = World(stage_units_in_meters=1.0)
     world.set_simulation_dt(physics_dt=PHYSICS_DT, rendering_dt=RENDERING_DT)
 
-    stage = omni.usd.get_context().get_stage()
-
-    # light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
-    # light.CreateIntensityAttr(500.0)
-    # light.CreateColorAttr((1.0, 1.0, 1.0))
-
     print("[SCENE] Loading DataHall...")
     add_reference_to_stage(usd_path=DATAHALL_USD, prim_path="/World/DataHall")
     apply_datahall_scale("/World/DataHall", DATAHALL_SCALE)
@@ -1845,18 +1505,6 @@ def build_scene_and_controller():
     print(f"[SCENE] Static switch colliders enabled: {switch_collider_count}")
     apply_target_rj45_forgiving_collision()
 
-    # assets_root = get_assets_root_path()
-    # if assets_root is not None:
-    #     add_reference_to_stage(
-    #         usd_path=assets_root + "/Isaac/Environments/Grid/default_environment.usd",
-    #         prim_path="/World/ground",
-    #     )
-    # else:
-    #     world.scene.add_default_ground_plane()
-
-    # Configure AS4610 row/column target before spawning the robot. The target
-    # still comes from the RJ45 bbox-grid, but the table/robot/cable spawn height
-    # is fixed at TABLE_HEIGHT=2.35 m as requested.
     configure_datahall_cable_targets()
     apply_as4610_insert_collision_tunnel()
     build_work_table()
@@ -1864,8 +1512,6 @@ def build_scene_and_controller():
     franka = spawn_robot(world)
     block_top_z = spawn_block_and_posts()
     spawn_cable_on_block(block_top_z)
-    spawn_user_target_marker()
-    spawn_final_insert_target_block()
     apply_high_grip_setup()
     enable_gpu_dynamics()
 
@@ -2914,7 +2560,7 @@ final_result_logged = False
 viewport_layout_frames = 0
 sim_frame_counter = 0
 
-print("[READY - DATAHALL AS4610 RJ45 SUPPORT 1.8X Y -0.6 PATH-STRICT FAST SOCKET HOLD V24]")
+print("[READY - DATAHALL AS4610 RJ45 CLEAN CONFIG V30]")
 print("  Spawned: Franka robot, pickup support/posts, and network cable.")
 print("  Cable targets use the DataHall port bbox face plus the measured plug nose offset; the robot hand is only a carrier.")
 print(f"  tracked plug: {TRACKED_PLUG_PRIM_PATH}")
@@ -2922,7 +2568,6 @@ print(f"  selected AS4610 RJ45 component: {DATAHALL_PORT_PRIM_PATH}")
 print(f"  pre-insert plug xform translate: {fmt_vec(PLUG_TARGET_POSITION)}")
 print(f"  selected plug target orientation: {fmt_vec(PLUG_TARGET_ORI_WXYZ)}")
 print(f"  final insert plug xform translate: {fmt_vec(INSERT_TARGET_POSITION)}")
-print("  visual target blocks: disabled")
 print(f"  coarse transfer waypoint derived from target: {fmt_vec(COARSE_TRANSFER_POSITION)}")
 print(f"  coarse approach-above-target waypoint: {fmt_vec(COARSE_APPROACH_TARGET_POSITION)}")
 print(f"  coarse near-target waypoint derived from target: {fmt_vec(COARSE_NEAR_TARGET_POSITION)}")
@@ -2933,8 +2578,8 @@ print("  Pickup support/cable are at y=-0.600, while the Franka base stays in th
 print("  Transit is split but not dragged all the way across while diagonal: lift -> short tail-clearance move -> reorient at a mid waypoint -> transfer/approach in insert orientation.")
 print("  Alignment servo restored from network_connector_diagonal.py. Insert stroke fixed: X no longer freezes at ~0.46-0.49 mm Y/Z error; it only pauses near the hard-abort band.")
 print("  Forgiving collision mode: selected RJ45 component plus a broader AS4610 insert tunnel are visual-only so hidden parent/sibling/rack colliders cannot block insertion.")
-print("  PATH-STRICT FAST V24: V22 grip recovery kept; insert slowed only enough to keep max Y/Z path error under 1.0 mm.")
-print("  Viewport-only layout enabled: hiding dock windows except Viewport / Viewport 1.")
+print("  CLEAN CONFIG V30: old duplicate placement constants removed; V22 grip and V24 strict insert behavior kept.")
+print("  Viewport-only layout flag is respected; no UI windows are hidden unless VIEWPORT_ONLY_LAYOUT=True.")
 print(f"  PATH-STRICT FAST mid-reorient transit + old servo + strict insert joint steps: reorient={TRANSIT_REORIENT_JOINT_STEPS}, transfer={TRANSIT_TRANSFER_JOINT_STEPS}, approach={TRANSIT_APPROACH_JOINT_STEPS}")
 print(f"  PATH-STRICT FAST physical-transit + old servo + strict insert linear steps: lift={TRANSIT_LIFT_LINEAR_STEP * 1000.0:.1f}mm/frame, descend={TRANSIT_DESCEND_LINEAR_STEP * 1000.0:.1f}mm/frame")
 print(f"  PATH-STRICT FAST insert X steps: fast={INSERT_X_FAST_STEP * 1000.0:.1f}mm/frame, fine={INSERT_X_FINE_STEP * 1000.0:.1f}mm/frame, hold={INSERT_STABLE_HOLD_FRAMES} frames")
@@ -2942,7 +2587,7 @@ print(f"  PATH-STRICT Y/Z guard: slow_at={INSERT_X_YZ_SLOWDOWN_TOL * 1000.0:.2f}
 print(f"  PATH-STRICT FAST release/retreat: settle={POST_INSERT_COLLISION_SETTLE_FRAMES} frames, open={POST_INSERT_OPEN_WAIT_FRAMES} frames, retreat_step={POST_INSERT_RETREAT_LINEAR_STEP * 1000.0:.1f}mm/frame")
 print(f"  PATH-STRICT FAST logging: FAST_DEMO_LOGGING={FAST_DEMO_LOGGING}, render_every_n_frames={FAST_RENDER_EVERY_N_FRAMES}")
 print(f"  PATH-STRICT pickup grip: static/dynamic friction={GRIP_STATIC_FRICTION:.1f}/{GRIP_DYNAMIC_FRICTION:.1f}, contact_offset={GRIP_CONTACT_OFFSET*1000.0:.1f}mm, close_wait={GRIP_CLOSE_WAIT_FRAMES} frames")
-print("  V24 guardrail: grip/transit stay fast-safe; X insert pauses at 0.70 mm Y/Z and resumes at 0.40 mm so the 1.0 mm path limit is preserved.")
+print("  V30 guardrail: ROBOT_BASE_POS is derived once from the selected port; pickup island Y is controlled by PICKUP_WORLD_Y only.")
 print(f"  fixed table/robot base height: {TABLE_HEIGHT:.3f} m")
 print("  Insert technique: coarse land in front of port -> measured horizontal pose lock -> strict -X insert.")
 print("  Post-insert: if final insert succeeds, port/tunnel collisions are restored, the gripper opens, then the hand retreats linearly +X away from the port.")
