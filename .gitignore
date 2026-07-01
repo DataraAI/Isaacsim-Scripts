@@ -1,3 +1,4 @@
 __pycache__/
 .venv
 .cursorignore
+detailedInsertion/datahall/debug_logs/
