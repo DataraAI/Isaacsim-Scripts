@@ -314,6 +314,125 @@ def hide_exact_franka_cable_prims(*, log_missing: bool = False, force_log: bool 
         return 0
 
 
+# =============================================================================
+# VISUAL COLOR PASS: UNIQUE COLORS FOR CABLES AND QSFP BLOCKS
+# =============================================================================
+# Visual-only. These material/display-color edits do not change physics, contact,
+# collisions, grasping, or controller targets.
+ENABLE_UNIQUE_OBJECT_COLORS = os.environ.get(
+    "DATAHALL_UNIQUE_OBJECT_COLORS", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+
+CABLE_VISUAL_COLORS = {
+    "R1": (0.05, 0.72, 1.00),  # top cable: cyan
+    "R2": (0.55, 0.55, 0.55),  # bottom cable: gray
+}
+
+QSFP_BLOCK_VISUAL_COLORS = {
+    "robot1": (0.05, 0.72, 1.00),  # top block: cyan
+    "robot2": (0.55, 0.55, 0.55),  # bottom block: gray
+}
+
+
+def _make_preview_surface_material(stage, material_path: str, rgb: tuple[float, float, float]):
+    from pxr import Gf, Sdf, UsdShade
+
+    mat = UsdShade.Material.Define(stage, Sdf.Path(material_path))
+    shader = UsdShade.Shader.Define(stage, Sdf.Path(f"{material_path}/PreviewSurface"))
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*rgb))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.45)
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    output = mat.CreateSurfaceOutput()
+    try:
+        output.ConnectToSource(shader.ConnectableAPI(), "surface")
+    except Exception:
+        output.ConnectToSource(shader, "surface")
+    return mat
+
+
+def _color_gprims_under_root(stage, root_path: str, material, rgb: tuple[float, float, float]) -> tuple[int, str | None]:
+    from pxr import Gf, Usd, UsdGeom, UsdShade
+
+    root = stage.GetPrimAtPath(root_path)
+    if not root or not root.IsValid():
+        return 0, f"missing root: {root_path}"
+
+    colored = 0
+    first_error = None
+    for prim in Usd.PrimRange(root):
+        if not prim or not prim.IsValid():
+            continue
+        try:
+            gprim = UsdGeom.Gprim(prim)
+            if not gprim:
+                continue
+            gprim.GetDisplayColorAttr().Set([Gf.Vec3f(*rgb)])
+            gprim.GetDisplayOpacityAttr().Set([1.0])
+            binding_api = UsdShade.MaterialBindingAPI.Apply(prim)
+            try:
+                binding_api.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+            except TypeError:
+                binding_api.Bind(material)
+            colored += 1
+        except Exception as exc:
+            if first_error is None:
+                first_error = f"{prim.GetPath()} ({exc})"
+
+    if colored == 0 and first_error is None:
+        first_error = f"no visual Gprims found under {root_path}"
+    return colored, first_error
+
+
+def apply_unique_object_colors(*, force_log: bool = False) -> None:
+    if not ENABLE_UNIQUE_OBJECT_COLORS:
+        debug_print("MAIN", "[OBJECT COLORS] disabled by DATAHALL_UNIQUE_OBJECT_COLORS=0", force=force_log)
+        return
+
+    try:
+        import omni.usd
+
+        stage = omni.usd.get_context().get_stage()
+        specs = []
+
+        for runtime in globals().get("runtimes", []):
+            label = str(runtime.get("label", "?"))
+            ns = runtime.get("ns", {})
+            root_path = ns.get("NETWORK_CABLE_ROOT_PATH")
+            if root_path:
+                specs.append((f"cable {label}", root_path, CABLE_VISUAL_COLORS.get(label, (1.0, 1.0, 1.0))))
+
+        qsfp_namespace = globals().get("qsfp_ns", {})
+        for robot_label, jobs_key in (("robot1", "INSERT_JOBS"), ("robot2", "SECOND_INSERT_JOBS")):
+            for job_index, job in enumerate(qsfp_namespace.get(jobs_key, [])):
+                root_path = job.get("module_prim_path")
+                if root_path:
+                    specs.append(
+                        (
+                            f"block {robot_label} job{job_index}",
+                            root_path,
+                            QSFP_BLOCK_VISUAL_COLORS.get(robot_label, (1.0, 1.0, 1.0)),
+                        )
+                    )
+
+        debug_print("MAIN", f"[OBJECT COLORS V54] applying cyan/gray colors to {len(specs)} objects", force=force_log)
+        for name, root_path, rgb in specs:
+            material_name = (
+                name.replace(" ", "_")
+                .replace("/", "_")
+                .replace("-", "_")
+                .replace("?", "unknown")
+                .lower()
+            )
+            material = _make_preview_surface_material(stage, f"/World/Looks/UniqueColor_{material_name}", rgb)
+            colored, error = _color_gprims_under_root(stage, root_path, material, rgb)
+            debug_print("MAIN", f"  {name}: root={root_path} rgb={rgb} colored_gprims={colored}", force=force_log)
+            if error:
+                debug_print("MAIN", f"    color warning: {error}", force=force_log)
+    except Exception as exc:
+        debug_print("MAIN", f"[OBJECT COLORS ERROR] {exc}", force=True)
+
+
 main_print = make_scoped_print("MAIN")
 summary_print = make_scoped_print("SUMMARY")
 main_print("[DEBUG V51] readable terminal enabled")
@@ -723,6 +842,8 @@ qsfp_camera_pose_logger = qsfp_ns.get("log_viewport_camera_for_config")
 qsfp_camera_pose_seconds = float(qsfp_ns.get("CAMERA_POSE_LOG_SECONDS", 10.0))
 qsfp_viewport_camera_enabled = bool(qsfp_ns.get("VIEWPORT_CAMERA", False))
 
+apply_unique_object_colors(force_log=True)
+
 # The QSFP setup performs a shared-world reset after adding its robots/modules.
 # Rebuild the cable controllers once after that reset so their kinematics/tensor
 # views point at the current simulation view before Play starts.
@@ -793,7 +914,7 @@ def print_debug_dashboard(frame: int) -> None:
 # =============================================================================
 # COMBINED MAIN LOOP
 # =============================================================================
-main_print("[READY - FRESH COMBINED DATAHALL V52 ONE QSFP BLOCK PER ROBOT + EXACT FRANKA CABLE PRIMS HIDDEN]")
+main_print("[READY - FRESH COMBINED DATAHALL V54 CYAN TOP / GRAY BOTTOM COLORS]")
 main_print("  Cable runtime: uploaded datahall_cable.py, two RJ45 cable robots.")
 main_print("    Cable R1: /World/Franka")
 main_print("    Cable R2: /World/Franka_2")
@@ -802,6 +923,7 @@ main_print("    QSFP R1: /World/QSFP_Franka_1")
 main_print("    QSFP R2: /World/QSFP_Franka_2")
 main_print("  DataHall is loaded once by the cable runtime and reused by the QSFP runtime.")
 main_print("  Exact Franka cable/wire visual prims are hidden on all four robots.")
+main_print("  Top cable/block are cyan; bottom cable/block are gray.")
 main_print("  Press Play.")
 
 viewport_layout_frames = 0
