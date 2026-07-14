@@ -57,23 +57,18 @@ class CameraFrame:
 
 @dataclass(frozen=True)
 class PortDetection:
+    """2D candidate data used by geometry, ranking, and debug output."""
+
     bbox_xywh: tuple[int, int, int, int]
     center_uv: tuple[int, int]
-    area_px: int
-    aspect_ratio: float
-    fill_ratio: float
-    candidate_count: int
+    shape_score: float
     roi_uv: tuple[int, int, int, int]
     mask: np.ndarray
 
 
 @dataclass(frozen=True)
 class DepthSample:
-    center_depth_m: float
     median_depth_m: float
-    minimum_depth_m: float
-    maximum_depth_m: float
-    valid_count: int
     patch_bounds_uv: tuple[int, int, int, int]
 
 
@@ -81,18 +76,12 @@ class DepthSample:
 class OpeningPlane:
     depth_m: float
     recess_depth_m: float
-    valid_count: int
     ring_bounds_xyxy: tuple[int, int, int, int]
-    minimum_depth_m: float
-    maximum_depth_m: float
 
 
 @dataclass(frozen=True)
 class PlaneFit:
-    normal_cv: np.ndarray
     normal_usd_local: np.ndarray
-    inlier_count: int
-    input_count: int
     rms_residual_m: float
     camera_angle_deg: float
 
@@ -104,11 +93,8 @@ class PortEstimate:
     opening: OpeningPlane
     plane: PlaneFit
 
-    cavity_camera_xyz_m: np.ndarray
     cavity_world_xyz_m: np.ndarray
-    opening_camera_xyz_m: np.ndarray
     opening_world_xyz_m: np.ndarray
-
     outward_world_normal: np.ndarray
     preinsert_world_xyz_m: np.ndarray
 
@@ -172,19 +158,63 @@ def normalize_depth(
     return np.ascontiguousarray(depth.astype(np.float32, copy=False))
 
 
-def detect_port(
+def score_port_shape(
+    aspect_ratio: float,
+    fill_ratio: float,
+    cfg: PerceptionConfig,
+) -> float:
+    """Score RJ45 silhouette quality without using image position."""
+    aspect_error = (
+        abs(aspect_ratio - cfg.target_aspect_ratio)
+        / cfg.target_aspect_ratio
+    )
+    fill_error = abs(fill_ratio - cfg.target_fill_ratio)
+
+    aspect_score = max(
+        0.0,
+        1.0 - aspect_error / cfg.aspect_score_tolerance,
+    )
+    fill_score = max(
+        0.0,
+        1.0 - fill_error / cfg.fill_score_tolerance,
+    )
+
+    weight_sum = (
+        cfg.aspect_score_weight
+        + cfg.fill_score_weight
+    )
+    if weight_sum <= 0.0:
+        raise ValueError("Shape-score weights must sum to a positive value.")
+
+    return float(
+        (
+            cfg.aspect_score_weight * aspect_score
+            + cfg.fill_score_weight * fill_score
+        )
+        / weight_sum
+    )
+
+
+def detect_port_candidates(
     rgb: np.ndarray,
     cfg: PerceptionConfig,
-) -> PortDetection:
-    """Find the strongest dark RJ45-like component in the configured ROI."""
+) -> list[PortDetection]:
+    """Find all RJ45-like dark components across the configured search area."""
     if rgb.ndim != 3 or rgb.shape[2] != 3:
         raise ValueError(f"Expected HxWx3 RGB, got {rgb.shape}.")
 
     height, width = rgb.shape[:2]
-    u0, v0, u1, v1 = cfg.roi_uv
+
+    if cfg.roi_uv is None:
+        u0, v0, u1, v1 = 0, 0, width, height
+    else:
+        u0, v0, u1, v1 = cfg.roi_uv
 
     if not (0 <= u0 < u1 <= width and 0 <= v0 < v1 <= height):
-        raise ValueError(f"ROI {cfg.roi_uv} is outside image {width}x{height}.")
+        raise ValueError(
+            f"Search area {(u0, v0, u1, v1)} is outside "
+            f"image {width}x{height}."
+        )
 
     roi = rgb[v0:v1, u0:u1]
     gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
@@ -195,18 +225,30 @@ def detect_port(
         connectivity=8,
     )
 
-    candidates: list[tuple[float, PortDetection]] = []
+    full_mask = np.zeros((height, width), dtype=np.uint8)
+    full_mask[v0:v1, u0:u1] = binary
+
+    candidates: list[PortDetection] = []
 
     for index in range(1, count):
         x, y, w, h, area = map(int, stats[index])
         if w <= 0 or h <= 0:
             continue
 
+        gx, gy = u0 + x, v0 + y
         aspect = w / h
         fill = area / (w * h)
 
+        touches_edge = (
+            gx < cfg.edge_margin_px
+            or gy < cfg.edge_margin_px
+            or gx + w > width - cfg.edge_margin_px
+            or gy + h > height - cfg.edge_margin_px
+        )
+
         accepted = (
-            cfg.min_width_px <= w <= cfg.max_width_px
+            not touches_edge
+            and cfg.min_width_px <= w <= cfg.max_width_px
             and cfg.min_height_px <= h <= cfg.max_height_px
             and cfg.min_aspect_ratio <= aspect <= cfg.max_aspect_ratio
             and cfg.min_area_px <= area <= cfg.max_area_px
@@ -215,36 +257,29 @@ def detect_port(
         if not accepted:
             continue
 
-        gx, gy = u0 + x, v0 + y
-        mask = np.zeros((height, width), dtype=np.uint8)
-        mask[v0:v1, u0:u1] = binary
-
-        detection = PortDetection(
-            bbox_xywh=(gx, gy, w, h),
-            center_uv=(gx + w // 2, gy + h // 2),
-            area_px=area,
+        shape_score = score_port_shape(
             aspect_ratio=aspect,
             fill_ratio=fill,
-            candidate_count=0,  # filled after sorting
-            roi_uv=cfg.roi_uv,
-            mask=mask,
+            cfg=cfg,
         )
-        candidates.append((area * fill, detection))
+        if shape_score < cfg.min_shape_score:
+            continue
 
-    if not candidates:
-        raise RuntimeError(
-            "No port candidate passed the configured ROI/shape filters."
+        candidates.append(
+            PortDetection(
+                bbox_xywh=(gx, gy, w, h),
+                center_uv=(gx + w // 2, gy + h // 2),
+                shape_score=shape_score,
+                roi_uv=(u0, v0, u1, v1),
+                mask=full_mask,
+            )
         )
 
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    best = candidates[0][1]
-
-    return PortDetection(
-        **{
-            **best.__dict__,
-            "candidate_count": len(candidates),
-        }
+    candidates.sort(
+        key=lambda candidate: candidate.shape_score,
+        reverse=True,
     )
+    return candidates
 
 
 def sample_center_depth(
@@ -273,11 +308,7 @@ def sample_center_depth(
         raise RuntimeError("Port-center depth patch contains no valid values.")
 
     return DepthSample(
-        center_depth_m=float(depth_m[v, u]),
         median_depth_m=float(np.median(valid)),
-        minimum_depth_m=float(np.min(valid)),
-        maximum_depth_m=float(np.max(valid)),
-        valid_count=int(valid.size),
         patch_bounds_uv=(u0, v0, u1, v1),
     )
 
@@ -347,10 +378,7 @@ def estimate_opening_plane(
     return OpeningPlane(
         depth_m=depth,
         recess_depth_m=recess,
-        valid_count=int(values.size),
         ring_bounds_xyxy=bounds,
-        minimum_depth_m=float(np.min(values)),
-        maximum_depth_m=float(np.max(values)),
     )
 
 
@@ -430,8 +458,6 @@ def fit_opening_normal(
         cfg.plane_mad_scale * 1.4826 * mad,
     )
 
-    input_count = int(z.size)
-
     keep = np.abs(z - median) <= tolerance
     u, v, z = u[keep], v[keep], z[keep]
 
@@ -475,22 +501,18 @@ def fit_opening_normal(
     )
 
     return PlaneFit(
-        normal_cv=normal_cv,
         normal_usd_local=normal_usd,
-        inlier_count=int(z.size),
-        input_count=input_count,
         rms_residual_m=rms,
         camera_angle_deg=angle,
     )
 
 
-def process_port(
+def _estimate_candidate_geometry(
     frame: CameraFrame,
+    detection: PortDetection,
     cfg: PerceptionConfig,
 ) -> PortEstimate:
-    """Run the full RGB-D port pipeline and return one typed estimate."""
-    detection = detect_port(frame.rgb, cfg)
-
+    """Build one complete 3D estimate or raise when geometry is implausible."""
     cavity = sample_center_depth(
         frame.depth_m,
         detection.center_uv,
@@ -511,12 +533,12 @@ def process_port(
         cfg,
     )
 
-    cavity_cv, cavity_usd = deproject_pixel(
+    _, cavity_usd = deproject_pixel(
         detection.center_uv,
         cavity.median_depth_m,
         frame.camera,
     )
-    opening_cv, opening_usd = deproject_pixel(
+    _, opening_usd = deproject_pixel(
         detection.center_uv,
         opening.depth_m,
         frame.camera,
@@ -545,10 +567,61 @@ def process_port(
         cavity=cavity,
         opening=opening,
         plane=plane,
-        cavity_camera_xyz_m=cavity_cv,
         cavity_world_xyz_m=cavity_world,
-        opening_camera_xyz_m=opening_cv,
         opening_world_xyz_m=opening_world,
         outward_world_normal=outward_world,
         preinsert_world_xyz_m=preinsert,
     )
+
+
+def process_port(
+    frame: CameraFrame,
+    cfg: PerceptionConfig,
+) -> PortEstimate:
+    """
+    Scan the full frame, validate every candidate in 3D, then choose shape.
+
+    Image position is intentionally not part of the ranking. A candidate must
+    first pass cavity-recess and front-plane checks. Among those physically
+    plausible candidates, the highest RJ45 shape score wins.
+    """
+    candidates = detect_port_candidates(
+        frame.rgb,
+        cfg,
+    )
+
+    if not candidates:
+        raise RuntimeError(
+            "No port candidate passed the full-screen shape filters."
+        )
+
+    valid: list[PortEstimate] = []
+    rejection_reasons: list[str] = []
+
+    for candidate in candidates:
+        try:
+            valid.append(
+                _estimate_candidate_geometry(
+                    frame=frame,
+                    detection=candidate,
+                    cfg=cfg,
+                )
+            )
+        except (RuntimeError, ValueError) as exc:
+            rejection_reasons.append(
+                f"{candidate.center_uv}: {exc}"
+            )
+
+    if not valid:
+        details = "; ".join(rejection_reasons[:4])
+        raise RuntimeError(
+            f"Found {len(candidates)} full-screen shape candidate(s), "
+            "but none passed depth/geometry validation. "
+            f"{details}"
+        )
+
+    return max(
+        valid,
+        key=lambda estimate: estimate.detection.shape_score,
+    )
+

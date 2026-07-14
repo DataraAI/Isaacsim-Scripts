@@ -58,16 +58,21 @@ class CameraConfig:
     tick_rate_hz: float = 15.0
     capture_every_sim_frames: int = 60
 
-    output_dir: Path = Path(
-        "/home/aayush/Isaacsim-Scripts/single_rack_cv/camera_output"
+    # Save beside this project:
+    # ~/Isaacsim-Scripts/single_rack_cv/camera_output
+    output_dir: Path = (
+        Path(__file__).resolve().parent
+        / "camera_output"
     )
 
 
 @dataclass(frozen=True)
 class PerceptionConfig:
-    # (u_min, v_min, u_max_exclusive, v_max_exclusive)
-    roi_uv: tuple[int, int, int, int] = (145, 220, 225, 290)
+    # None means scan the entire RGB frame. A tuple can still be supplied
+    # later for debugging or a deliberately constrained search.
+    roi_uv: tuple[int, int, int, int] | None = None
     max_gray: int = 60
+    edge_margin_px: int = 4
 
     min_width_px: int = 12
     max_width_px: int = 45
@@ -79,17 +84,29 @@ class PerceptionConfig:
     max_area_px: int = 1200
     min_fill_ratio: float = 0.35
 
+    # Shape ranking is deliberately independent of image position. The
+    # winner is the geometry-valid candidate closest to this RJ45 silhouette.
+    target_aspect_ratio: float = 1.22
+    target_fill_ratio: float = 0.63
+    aspect_score_tolerance: float = 0.55
+    fill_score_tolerance: float = 0.35
+    aspect_score_weight: float = 0.70
+    fill_score_weight: float = 0.30
+    min_shape_score: float = 0.25
+
     depth_patch_size_px: int = 11
     opening_ring_width_px: int = 4
     min_valid_ring_pixels: int = 80
-    min_recess_depth_m: float = 0.002
-    max_recess_depth_m: float = 0.050
+    # Full-screen false positives must pass the same physical checks as
+    # the known port before they are allowed to compete on shape.
+    min_recess_depth_m: float = 0.010
+    max_recess_depth_m: float = 0.016
 
     plane_mad_scale: float = 3.0
     plane_min_depth_tolerance_m: float = 0.0005
     plane_min_inlier_points: int = 100
-    plane_max_rms_residual_m: float = 0.0015
-    plane_max_camera_angle_deg: float = 35.0
+    plane_max_rms_residual_m: float = 0.00075
+    plane_max_camera_angle_deg: float = 8.0
 
     preinsert_standoff_m: float = 0.050
 
@@ -104,11 +121,14 @@ class IKConfig:
     target_path: str = "/World/IK_Target"
     target_name: str = "ik_target"
     target_scale: float = 0.08
+    target_visible: bool = False
+    select_target_on_start: bool = False
 
-    # Visible frame showing the tool center actually achieved by the robot.
+    # Frame showing the tool center actually achieved by the robot.
     actual_tool_path: str = "/World/ToolCenter"
     actual_tool_name: str = "tool_center"
     actual_tool_scale: float = 0.05
+    actual_tool_visible: bool = False
 
     # Nominal Franka hand TCP: 103.4 mm along panda_hand local +Z.
     # This is the grasp/insertion center between the two fingers.
@@ -147,9 +167,40 @@ class IKConfig:
 
     tracking_enabled: bool = True
     update_every_sim_frames: int = 1
-    position_tolerance_m: float = 0.001
+    position_tolerance_m: float = 0.0001
     orientation_tolerance_rad: float = 0.01
     warn_every_sim_frames: int = 120
+
+
+@dataclass(frozen=True)
+class DriveTuningConfig:
+    """
+    Tighten only the seven Franka arm position drives.
+
+    A 4x stiffness increase should reduce the static position bias by
+    roughly the same factor. Damping is scaled by sqrt(4)=2 to preserve
+    approximately the same damping ratio instead of making the arm ring.
+    """
+
+    enabled: bool = True
+
+    arm_joint_names: tuple[str, ...] = (
+        "panda_joint1",
+        "panda_joint2",
+        "panda_joint3",
+        "panda_joint4",
+        "panda_joint5",
+        "panda_joint6",
+        "panda_joint7",
+    )
+
+    stiffness_multiplier: float = 4.0
+    damping_multiplier: float = 2.0
+
+    # Simulation-only accuracy mode. Disabling gravity on the Franka links
+    # removes the static load that made the position drives settle slightly
+    # away from the IK joint targets. Scene objects keep normal gravity.
+    disable_gravity_on_franka: bool = True
 
 
 @dataclass(frozen=True)
@@ -160,12 +211,14 @@ class AutoPreinsertConfig:
     required_stable_samples: int = 5
     max_sample_spread_m: float = 0.002
 
-    min_recess_depth_m: float = 0.010
-    max_recess_depth_m: float = 0.016
-    max_plane_rms_m: float = 0.00075
-    max_normal_angle_deg: float = 8.0
-
     move_duration_s: float = 3.0
+
+    # The interpolated target move is not "complete" until the actual
+    # virtual ToolCenter stays within this distance for several frames.
+    settle_position_tolerance_m: float = 0.0001
+    required_settled_frames: int = 30
+    settle_warning_timeout_s: float = 8.0
+
     freeze_perception_after_latch: bool = True
 
 
@@ -200,6 +253,9 @@ class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     ik: IKConfig = field(default_factory=IKConfig)
+    drive_tuning: DriveTuningConfig = field(
+        default_factory=DriveTuningConfig
+    )
     auto_preinsert: AutoPreinsertConfig = field(
         default_factory=AutoPreinsertConfig
     )

@@ -11,7 +11,7 @@ import carb
 import numpy as np
 import omni.usd
 
-from pxr import Gf, Usd, UsdGeom
+from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 import isaacsim.core.experimental.utils.app as app_utils
 import isaacsim.core.experimental.utils.stage as stage_utils
@@ -243,11 +243,32 @@ def tool_pose_to_hand_pose(
     return hand_position, hand_orientation
 
 
-
 def smoothstep01(progress: float) -> float:
     """Clamp progress to [0, 1] and apply cubic smoothstep."""
     t = min(1.0, max(0.0, float(progress)))
     return t * t * (3.0 - 2.0 * t)
+
+
+def update_convergence_counter(
+    position_error_m: float,
+    tolerance_m: float,
+    current_count: int,
+) -> int:
+    """Count consecutive in-tolerance frames; reset immediately on a miss."""
+    error = float(position_error_m)
+    tolerance = float(tolerance_m)
+
+    if not math.isfinite(error) or error < 0.0:
+        raise ValueError("position_error_m must be finite and nonnegative.")
+    if not math.isfinite(tolerance) or tolerance <= 0.0:
+        raise ValueError("tolerance_m must be finite and positive.")
+    if current_count < 0:
+        raise ValueError("current_count must be nonnegative.")
+
+    if error <= tolerance:
+        return current_count + 1
+
+    return 0
 
 
 @dataclass
@@ -312,15 +333,18 @@ class AutoPreinsertState:
     target_latched: bool = False
     perception_frozen: bool = False
     moving: bool = False
+    settling: bool = False
     complete: bool = False
 
     start_frame: int = 0
     duration_frames: int = 1
+    settle_start_frame: int = 0
+    settled_frame_count: int = 0
+    settle_timeout_reported: bool = False
 
     start_position_m: np.ndarray | None = None
     target_position_m: np.ndarray | None = None
     held_orientation_wxyz: np.ndarray | None = None
-    sample_spread_m: float = math.inf
 
 
 @dataclass
@@ -331,7 +355,7 @@ class IKRuntime:
     hand_path: str
     kinematics_solver: LulaKinematicsSolver
     articulation_solver: ArticulationKinematicsSolver
-    failures: int = 0
+
     last_warning_frame: int = -1_000_000
 
 
@@ -405,13 +429,6 @@ class SimulationRuntime:
         if not cfg.enabled or state.target_latched:
             return False
 
-        rejection = self._preinsert_rejection_reason(estimate)
-
-        if rejection is not None:
-            state.latch.reset()
-            log(f"Auto pre-insert sample rejected: {rejection}")
-            return False
-
         latched, target_position, spread = state.latch.add(
             estimate.preinsert_world_xyz_m
         )
@@ -448,9 +465,13 @@ class SimulationRuntime:
         state.target_latched = True
         state.perception_frozen = cfg.freeze_perception_after_latch
         state.moving = True
+        state.settling = False
         state.complete = False
         state.start_frame = self.frame_index
         state.duration_frames = duration_frames
+        state.settle_start_frame = 0
+        state.settled_frame_count = 0
+        state.settle_timeout_reported = False
         state.start_position_m = np.asarray(
             current_position,
             dtype=np.float64,
@@ -465,7 +486,6 @@ class SimulationRuntime:
                 dtype=np.float64,
             )
         )
-        state.sample_spread_m = float(spread)
 
         log(
             "AUTO PRE-INSERT TARGET LATCHED\n"
@@ -483,10 +503,17 @@ class SimulationRuntime:
         return True
 
     def update_auto_preinsert_motion(self) -> None:
-        """Advance the one-shot smooth tool-target motion by one sim frame."""
-        state = self.auto_preinsert
+        """
+        Move the desired tool target, then wait for the actual ToolCenter.
 
-        if not state.moving:
+        The target endpoint never moves backward to meet the robot. Lula keeps
+        solving the fixed endpoint until the achieved ToolCenter is inside the
+        configured tolerance for the required number of consecutive frames.
+        """
+        state = self.auto_preinsert
+        cfg = self.cfg.auto_preinsert
+
+        if not state.moving and not state.settling:
             return
 
         if self.ik is None:
@@ -499,81 +526,129 @@ class SimulationRuntime:
         ):
             raise RuntimeError("Automatic motion state is incomplete.")
 
-        elapsed = max(0, self.frame_index - state.start_frame)
-        progress = min(1.0, elapsed / state.duration_frames)
-        blend = smoothstep01(progress)
+        if state.moving:
+            elapsed = max(0, self.frame_index - state.start_frame)
+            progress = min(1.0, elapsed / state.duration_frames)
+            blend = smoothstep01(progress)
 
-        target_position = (
-            state.start_position_m
-            + blend
-            * (
-                state.target_position_m
-                - state.start_position_m
+            target_position = (
+                state.start_position_m
+                + blend
+                * (
+                    state.target_position_m
+                    - state.start_position_m
+                )
             )
-        )
 
-        self.ik.target.set_world_pose(
-            position=target_position,
-            orientation=state.held_orientation_wxyz,
-        )
+            self.ik.target.set_world_pose(
+                position=target_position,
+                orientation=state.held_orientation_wxyz,
+            )
 
-        if progress < 1.0:
+            if progress < 1.0:
+                return
+
+            # Hold the exact detected endpoint throughout convergence.
+            self.ik.target.set_world_pose(
+                position=state.target_position_m,
+                orientation=state.held_orientation_wxyz,
+            )
+
+            state.moving = False
+            state.settling = True
+            state.complete = False
+            state.settle_start_frame = self.frame_index
+            state.settled_frame_count = 0
+            state.settle_timeout_reported = False
+
+            log(
+                "AUTO PRE-INSERT TARGET MOTION FINISHED\n"
+                f"  fixed tool target: "
+                f"{np.round(state.target_position_m, 5).tolist()}\n"
+                f"  convergence tolerance: "
+                f"{cfg.settle_position_tolerance_m * 1000.0:.3f} mm\n"
+                f"  required settled frames: "
+                f"{cfg.required_settled_frames}"
+            )
+
             return
 
-        # Set the exact endpoint once more to remove interpolation roundoff.
+        # Settling phase: never move the desired target away from its exact
+        # endpoint. Only the robot is allowed to converge toward it.
         self.ik.target.set_world_pose(
             position=state.target_position_m,
             orientation=state.held_orientation_wxyz,
         )
 
-        state.moving = False
-        state.complete = True
-
-        log(
-            "AUTO PRE-INSERT MOVE COMPLETE\n"
-            f"  held tool target: "
-            f"{np.round(state.target_position_m, 5).tolist()}\n"
-            "  next action: verify the achieved tool-center pose; "
-            "no insertion is commanded."
-        )
-
-    def _preinsert_rejection_reason(
-        self,
-        estimate: PortEstimate,
-    ) -> str | None:
-        cfg = self.cfg.auto_preinsert
-
-        recess = float(estimate.opening.recess_depth_m)
-        plane_rms = float(estimate.plane.rms_residual_m)
-        normal_angle = float(estimate.plane.camera_angle_deg)
-        point = np.asarray(
-            estimate.preinsert_world_xyz_m,
+        actual_tool_position, _ = self.ik.actual_tool.get_world_pose()
+        actual_tool_position = np.asarray(
+            actual_tool_position,
             dtype=np.float64,
         )
 
-        if point.shape != (3,) or not np.all(np.isfinite(point)):
-            return "pre-insert point is not a finite 3-vector"
+        position_error_m = float(
+            np.linalg.norm(
+                actual_tool_position
+                - state.target_position_m
+            )
+        )
 
-        if not cfg.min_recess_depth_m <= recess <= cfg.max_recess_depth_m:
-            return (
-                f"recess {recess * 1000.0:.3f} mm outside "
-                f"[{cfg.min_recess_depth_m * 1000.0:.1f}, "
-                f"{cfg.max_recess_depth_m * 1000.0:.1f}] mm"
+        state.settled_frame_count = update_convergence_counter(
+            position_error_m=position_error_m,
+            tolerance_m=cfg.settle_position_tolerance_m,
+            current_count=state.settled_frame_count,
+        )
+
+        if state.settled_frame_count >= cfg.required_settled_frames:
+            state.settling = False
+            state.complete = True
+
+            log(
+                "AUTO PRE-INSERT CONVERGED\n"
+                f"  target tool center: "
+                f"{np.round(state.target_position_m, 6).tolist()}\n"
+                f"  actual tool center: "
+                f"{np.round(actual_tool_position, 6).tolist()}\n"
+                f"  final position error: "
+                f"{position_error_m * 1000.0:.3f} mm\n"
+                f"  settled frames: "
+                f"{state.settled_frame_count}/"
+                f"{cfg.required_settled_frames}\n"
+                "  next action: hold; no insertion is commanded."
             )
 
-        if plane_rms > cfg.max_plane_rms_m:
-            return (
-                f"plane RMS {plane_rms * 1000.0:.3f} mm exceeds "
-                f"{cfg.max_plane_rms_m * 1000.0:.3f} mm"
+            return
+
+        timeout_frames = max(
+            1,
+            int(
+                round(
+                    cfg.settle_warning_timeout_s
+                    / self.cfg.scene.physics_dt
+                )
+            ),
+        )
+
+        settle_elapsed_frames = (
+            self.frame_index
+            - state.settle_start_frame
+        )
+
+        if (
+            settle_elapsed_frames >= timeout_frames
+            and not state.settle_timeout_reported
+        ):
+            state.settle_timeout_reported = True
+
+            warn(
+                "ToolCenter has not converged within the warning timeout. "
+                "The target remains fixed and IK will keep trying.\n"
+                f"  current position error: "
+                f"{position_error_m * 1000.0:.3f} mm\n"
+                f"  required: "
+                f"{cfg.settle_position_tolerance_m * 1000.0:.3f} mm"
             )
 
-        if normal_angle > cfg.max_normal_angle_deg:
-            return (
-                f"normal angle {normal_angle:.3f} deg exceeds "
-                f"{cfg.max_normal_angle_deg:.3f} deg"
-            )
-
-        return None
 
     def update_ik(self) -> None:
         """
@@ -635,10 +710,7 @@ class SimulationRuntime:
 
         if success:
             runtime.articulation.apply_action(action)
-            runtime.failures = 0
             return
-
-        runtime.failures += 1
 
         if (
             self.frame_index - runtime.last_warning_frame
@@ -792,6 +864,8 @@ class SimulationRuntime:
             scale=(1.0, 1.0, 1.0),
         )
         self._add_reference(franka_usd, scene.franka_asset_path)
+        self._configure_franka_gravity()
+        self._configure_franka_arm_drives()
 
         self.camera_path, rtx_camera = self._create_hand_camera()
         self.camera_sensor = CameraSensor(
@@ -904,6 +978,231 @@ class SimulationRuntime:
             f"roll={camera_cfg.local_roll_deg}°"
         )
         return camera_path, rtx_camera
+
+    def _configure_franka_gravity(self) -> None:
+        """
+        Disable gravity only on the Franka's rigid links.
+
+        This is the smallest simulation-only way to remove the measured
+        gravity-induced steady joint bias. The IK target stays unchanged,
+        there is no hidden Cartesian offset, and joints are not teleported.
+        """
+        cfg = self.cfg.drive_tuning
+
+        if not cfg.disable_gravity_on_franka:
+            log("Franka link gravity left enabled.")
+            return
+
+        stage = omni.usd.get_context().get_stage()
+
+        if stage is None:
+            raise RuntimeError(
+                "Cannot configure Franka gravity without a valid USD stage."
+            )
+
+        root = stage.GetPrimAtPath(
+            self.cfg.scene.franka_asset_path
+        )
+
+        if not root.IsValid():
+            raise RuntimeError(
+                "Franka asset root is invalid: "
+                f"{self.cfg.scene.franka_asset_path}"
+            )
+
+        changed_paths: list[str] = []
+
+        for prim in Usd.PrimRange(root):
+            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                continue
+
+            physx_body = PhysxSchema.PhysxRigidBodyAPI.Apply(prim)
+            physx_body.CreateDisableGravityAttr().Set(True)
+            changed_paths.append(str(prim.GetPath()))
+
+        if not changed_paths:
+            raise RuntimeError(
+                "No Franka rigid bodies were found below "
+                f"{self.cfg.scene.franka_asset_path}"
+            )
+
+        log(
+            "FRANKA SIM ACCURACY MODE\n"
+            f"  gravity disabled on: {len(changed_paths)} rigid links\n"
+            "  scene/object gravity: unchanged\n"
+            "  hidden target offset: none\n"
+            "  joint teleporting: none"
+        )
+
+    def _configure_franka_arm_drives(self) -> None:
+        """
+        Scale the existing Franka arm drive gains at their source.
+
+        This does not alter IK targets, joint commands, tool transforms, or
+        add Cartesian compensation. It only makes the seven existing arm
+        position drives track their commanded joint angles more tightly.
+        """
+        cfg = self.cfg.drive_tuning
+
+        if not cfg.enabled:
+            log("Franka arm drive tuning disabled.")
+            return
+
+        if (
+            not math.isfinite(cfg.stiffness_multiplier)
+            or cfg.stiffness_multiplier <= 0.0
+        ):
+            raise ValueError(
+                "stiffness_multiplier must be finite and positive."
+            )
+
+        if (
+            not math.isfinite(cfg.damping_multiplier)
+            or cfg.damping_multiplier <= 0.0
+        ):
+            raise ValueError(
+                "damping_multiplier must be finite and positive."
+            )
+
+        stage = omni.usd.get_context().get_stage()
+
+        if stage is None:
+            raise RuntimeError(
+                "Cannot tune Franka drives without a valid USD stage."
+            )
+
+        root = stage.GetPrimAtPath(
+            self.cfg.scene.franka_asset_path
+        )
+
+        if not root.IsValid():
+            raise RuntimeError(
+                "Franka asset root is invalid: "
+                f"{self.cfg.scene.franka_asset_path}"
+            )
+
+        requested_names = set(cfg.arm_joint_names)
+        found: dict[str, Usd.Prim] = {}
+
+        for prim in Usd.PrimRange(root):
+            name = prim.GetName()
+
+            if name in requested_names:
+                found[name] = prim
+
+        missing = [
+            name
+            for name in cfg.arm_joint_names
+            if name not in found
+        ]
+
+        if missing:
+            discovered = sorted(
+                prim.GetName()
+                for prim in Usd.PrimRange(root)
+                if "joint" in prim.GetName().lower()
+            )
+
+            raise RuntimeError(
+                "Could not find all Franka arm joint prims. "
+                f"Missing={missing}; discovered={discovered}"
+            )
+
+        report_lines = [
+            "FRANKA ARM DRIVE TUNING",
+            f"  stiffness multiplier: "
+            f"{cfg.stiffness_multiplier:.3f}x",
+            f"  damping multiplier: "
+            f"{cfg.damping_multiplier:.3f}x",
+        ]
+
+        for joint_name in cfg.arm_joint_names:
+            joint_prim = found[joint_name]
+
+            if not joint_prim.IsA(UsdPhysics.RevoluteJoint):
+                raise RuntimeError(
+                    f"{joint_prim.GetPath()} is not a revolute joint."
+                )
+
+            # Read the existing angular-drive attributes directly from
+            # the composed USD prim. This avoids creating a new drive or
+            # depending on a controller-side gain override.
+            stiffness_attr = joint_prim.GetAttribute(
+                "drive:angular:physics:stiffness"
+            )
+            damping_attr = joint_prim.GetAttribute(
+                "drive:angular:physics:damping"
+            )
+            max_force_attr = joint_prim.GetAttribute(
+                "drive:angular:physics:maxForce"
+            )
+
+            if (
+                not stiffness_attr.IsValid()
+                or not damping_attr.IsValid()
+            ):
+                raise RuntimeError(
+                    "Missing existing angular-drive gain attributes on "
+                    f"{joint_prim.GetPath()}"
+                )
+
+            old_stiffness = stiffness_attr.Get()
+            old_damping = damping_attr.Get()
+            max_force = (
+                max_force_attr.Get()
+                if max_force_attr.IsValid()
+                else "not authored"
+            )
+
+            if old_stiffness is None or old_damping is None:
+                raise RuntimeError(
+                    "Drive gains are missing on "
+                    f"{joint_prim.GetPath()}"
+                )
+
+            old_stiffness = float(old_stiffness)
+            old_damping = float(old_damping)
+
+            if (
+                not math.isfinite(old_stiffness)
+                or old_stiffness <= 0.0
+            ):
+                raise RuntimeError(
+                    f"Invalid existing stiffness on {joint_name}: "
+                    f"{old_stiffness}"
+                )
+
+            if (
+                not math.isfinite(old_damping)
+                or old_damping < 0.0
+            ):
+                raise RuntimeError(
+                    f"Invalid existing damping on {joint_name}: "
+                    f"{old_damping}"
+                )
+
+            new_stiffness = (
+                old_stiffness
+                * cfg.stiffness_multiplier
+            )
+            new_damping = (
+                old_damping
+                * cfg.damping_multiplier
+            )
+
+            stiffness_attr.Set(new_stiffness)
+            damping_attr.Set(new_damping)
+
+            report_lines.append(
+                f"  {joint_name}: "
+                f"Kp {old_stiffness:.3f} -> "
+                f"{new_stiffness:.3f}, "
+                f"Kd {old_damping:.3f} -> "
+                f"{new_damping:.3f}, "
+                f"maxForce unchanged={max_force}"
+            )
+
+        log("\n".join(report_lines))
 
     def _create_ik(self, assets_root: str) -> IKRuntime:
         """
@@ -1028,7 +1327,7 @@ class SimulationRuntime:
                 cfg.target_scale,
                 dtype=np.float64,
             ),
-            visible=True,
+            visible=cfg.target_visible,
         )
         target.initialize()
 
@@ -1042,21 +1341,22 @@ class SimulationRuntime:
                 cfg.actual_tool_scale,
                 dtype=np.float64,
             ),
-            visible=True,
+            visible=cfg.actual_tool_visible,
         )
         actual_tool.initialize()
 
-        try:
-            (
-                omni.usd.get_context()
-                .get_selection()
-                .set_selected_prim_paths(
-                    [cfg.target_path],
-                    True,
+        if cfg.select_target_on_start:
+            try:
+                (
+                    omni.usd.get_context()
+                    .get_selection()
+                    .set_selected_prim_paths(
+                        [cfg.target_path],
+                        True,
+                    )
                 )
-            )
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         base_position, base_orientation = (
             articulation.get_world_pose()
