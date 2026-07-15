@@ -41,9 +41,26 @@ class SceneConfig:
 @dataclass(frozen=True)
 class CameraConfig:
     hand_link_name: str = "panda_hand"
-    camera_name: str = "hand_camera"
+    left_camera_name: str = "left_eye_camera"
+    right_camera_name: str = "right_eye_camera"
 
-    local_position: tuple[float, float, float] = (0.04, 0.0, 0.025)
+    # Two physical RGB eyes, symmetric around the old single-camera pose.
+    left_local_position: tuple[float, float, float] = (
+        0.04,
+        -0.020,
+        0.025,
+    )
+    right_local_position: tuple[float, float, float] = (
+        0.04,
+        +0.020,
+        0.025,
+    )
+    # Mathematical midpoint only. No camera sensor is created here.
+    virtual_local_position: tuple[float, float, float] = (
+        0.04,
+        0.0,
+        0.025,
+    )
     local_y_rotation_deg: float = 177.5
     local_roll_deg: float = 90.0
 
@@ -64,7 +81,7 @@ class CameraConfig:
 
 @dataclass(frozen=True)
 class PerceptionConfig:
-    """RGB-only RJ45 cavity detection and known-size ranging."""
+    """Strict per-eye RJ45 detection plus calibrated stereo geometry."""
 
     roi_uv: tuple[int, int, int, int] | None = None
     max_gray: int = 60
@@ -95,12 +112,29 @@ class PerceptionConfig:
     fill_score_weight: float = 0.30
     min_shape_score: float = 0.25
 
-    # Calibrated dark-cavity dimensions for the rack asset. These are the
-    # only metric assumptions used by the RGB-only range estimate.
+    # Opening dimensions are validation bounds and overlay scale only.
+    # Stereo disparity, not known-size ranging, determines control depth.
     port_width_m: float = 0.0114
     port_height_m: float = 0.0070
     min_estimated_range_m: float = 0.08
     max_estimated_range_m: float = 0.35
+
+
+    # Stereo matching and corner refinement.
+    stereo_corner_refine_window_px: int = 5
+    stereo_max_corner_refine_shift_px: float = 6.0
+    stereo_max_epipolar_error_px: float = 3.0
+    stereo_max_scale_ratio: float = 1.30
+    stereo_min_abs_disparity_px: float = 4.0
+    stereo_max_ray_gap_m: float = 0.0020
+    stereo_max_reprojection_rms_px: float = 1.0
+    stereo_max_reprojection_px: float = 2.0
+    stereo_max_plane_residual_m: float = 0.00075
+    stereo_min_width_m: float = 0.008
+    stereo_max_width_m: float = 0.015
+    stereo_min_height_m: float = 0.005
+    stereo_max_height_m: float = 0.010
+    stereo_max_opposite_edge_ratio: float = 1.20
 
     # Once acquired, prefer image continuity over an unrelated blob with a
     # slightly better single-frame shape score.

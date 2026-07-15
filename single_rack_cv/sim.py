@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isaac Sim scene, RGB eye-in-hand capture, visual servo, and Lula IK."""
+"""Isaac Sim scene, synchronized stereo RGB servo, and Lula IK."""
 
 from __future__ import annotations
 
@@ -32,7 +32,9 @@ from perception import (
     CameraFrame,
     CameraModel,
     PortDetection,
-    PortObservation,
+    StereoFrame,
+    StereoPortObservation,
+    build_virtual_camera_model,
     compute_bounded_step,
     compute_desired_port_camera_usd,
     normalize_rgb,
@@ -287,7 +289,8 @@ class VisualServoState:
     startup_ready: bool = False
     startup_settled_frame_count: int = 0
 
-    reference: PortDetection | None = None
+    left_reference: PortDetection | None = None
+    right_reference: PortDetection | None = None
     acquisition_features: list[np.ndarray] = field(default_factory=list)
     acquired: bool = False
     consecutive_misses: int = 0
@@ -321,12 +324,14 @@ class SimulationRuntime:
         self.cfg = cfg
 
         self.frame_index = 0
-        self.camera_path = ""
-        self.camera_sensor: CameraSensor | None = None
+        self.left_camera_path = ""
+        self.right_camera_path = ""
+        self.left_camera_sensor: CameraSensor | None = None
+        self.right_camera_sensor: CameraSensor | None = None
         self.ik: IKRuntime | None = None
 
         self.visual_servo = VisualServoState()
-        self.desired_port_camera_usd = (
+        self.desired_port_virtual_camera_usd = (
             self._compute_desired_port_camera_usd()
         )
 
@@ -417,16 +422,19 @@ class SimulationRuntime:
         state.startup_ready = True
 
         log(
-            "RGB VISUAL SERVO STARTUP SETTLED\n"
+            "RGB STEREO VISUAL SERVO STARTUP SETTLED\n"
             f"  ToolCenter error: {position_error_m * 1000.0:.3f} mm\n"
             f"  stable frames: {state.startup_settled_frame_count}/"
             f"{cfg.required_startup_settled_frames}\n"
-            "  next action: begin RGB acquisition"
+            "  next action: begin synchronized stereo acquisition"
         )
 
-    def visual_servo_reference(self) -> PortDetection | None:
-        """Return the previous image-space detection for continuity tracking."""
-        return self.visual_servo.reference
+    def visual_servo_references(
+        self,
+    ) -> tuple[PortDetection | None, PortDetection | None]:
+        """Return both previous eye detections for continuity tracking."""
+        state = self.visual_servo
+        return state.left_reference, state.right_reference
 
     def note_perception_failure(self) -> None:
         """Hold position on a missed frame and reacquire after repeated misses."""
@@ -445,20 +453,25 @@ class SimulationRuntime:
         if state.consecutive_misses < cfg.max_consecutive_misses:
             return
 
-        had_track = state.reference is not None or state.acquired
-        state.reference = None
+        had_track = (
+            state.left_reference is not None
+            or state.right_reference is not None
+            or state.acquired
+        )
+        state.left_reference = None
+        state.right_reference = None
         state.acquisition_features.clear()
         state.acquired = False
         state.consecutive_misses = 0
 
         if had_track:
-            log("RGB visual track lost; holding position and reacquiring.")
+            log("RGB stereo track lost; holding position and reacquiring both eyes.")
 
     def observe_visual_servo(
         self,
-        observation: PortObservation,
+        observation: StereoPortObservation,
     ) -> None:
-        """Apply one small translation-only ToolCenter correction from RGB."""
+        """Apply one bounded translation from a valid two-eye observation."""
         cfg = self.cfg.visual_servo
         state = self.visual_servo
 
@@ -467,7 +480,8 @@ class SimulationRuntime:
         if self.ik is None:
             raise RuntimeError("Visual servo requires initialized IK.")
 
-        state.reference = observation.detection
+        state.left_reference = observation.left.detection
+        state.right_reference = observation.right.detection
         state.consecutive_misses = 0
 
         if not state.acquired:
@@ -499,7 +513,7 @@ class SimulationRuntime:
                 state.settle_timeout_reported = False
 
                 log(
-                    "RGB VISUAL ALIGNMENT LOCKED\n"
+                    "RGB STEREO VISUAL ALIGNMENT LOCKED\n"
                     f"  center error: {center_error_px:.3f} px\n"
                     f"  range error: {range_error_m * 1000.0:.3f} mm\n"
                     f"  aligned captures: "
@@ -542,35 +556,32 @@ class SimulationRuntime:
 
     def _update_visual_acquisition(
         self,
-        observation: PortObservation,
+        observation: StereoPortObservation,
     ) -> None:
-        """Require a short stable image track before allowing motion."""
+        """Require stable virtual-center pixels and stereo depth before motion."""
         state = self.visual_servo
         cfg = self.cfg.visual_servo
-        detection = observation.detection
 
         feature = np.array(
             [
-                detection.center_uv[0],
-                detection.center_uv[1],
-                math.log(detection.scale_px),
+                observation.projected_virtual_center_uv[0],
+                observation.projected_virtual_center_uv[1],
+                observation.estimated_range_m,
             ],
             dtype=np.float64,
         )
         state.acquisition_features.append(feature)
 
-        if (
-            len(state.acquisition_features)
-            > cfg.required_acquisition_samples
-        ):
+        if len(state.acquisition_features) > cfg.required_acquisition_samples:
             state.acquisition_features.pop(0)
 
         count = len(state.acquisition_features)
         if count < cfg.required_acquisition_samples:
             log(
-                "RGB visual acquisition "
+                "RGB stereo acquisition "
                 f"{count}/{cfg.required_acquisition_samples}: "
-                f"pixel={tuple(round(value, 1) for value in detection.center_uv)}"
+                f"virtual_pixel=({feature[0]:.1f}, {feature[1]:.1f}), "
+                f"range={feature[2] * 1000.0:.1f} mm"
             )
             return
 
@@ -584,28 +595,21 @@ class SimulationRuntime:
                 )
             )
         )
-        log_scale_median = float(np.median(samples[:, 2]))
-        scale_spread_ratio = float(
-            np.max(
-                np.exp(
-                    np.abs(samples[:, 2] - log_scale_median)
-                )
-                - 1.0
-            )
+        range_median = float(np.median(samples[:, 2]))
+        range_spread_m = float(
+            np.max(np.abs(samples[:, 2] - range_median))
         )
 
         stable = (
-            center_spread_px
-            <= cfg.max_acquisition_center_spread_px
-            and scale_spread_ratio
-            <= cfg.max_acquisition_scale_spread_ratio
+            center_spread_px <= cfg.max_acquisition_center_spread_px
+            and range_spread_m <= cfg.range_tolerance_m
         )
 
         if not stable:
             log(
-                "RGB visual acquisition not stable: "
+                "RGB stereo acquisition not stable: "
                 f"center spread={center_spread_px:.2f} px, "
-                f"scale spread={scale_spread_ratio * 100.0:.1f}%"
+                f"range spread={range_spread_m * 1000.0:.2f} mm"
             )
             return
 
@@ -613,10 +617,10 @@ class SimulationRuntime:
         state.acquisition_features.clear()
 
         log(
-            "RGB VISUAL TRACK ACQUIRED\n"
-            f"  center spread: {center_spread_px:.3f} px\n"
-            f"  scale spread: {scale_spread_ratio * 100.0:.3f}%\n"
-            "  controller: bounded translation-only feedback"
+            "RGB STEREO TRACK ACQUIRED\n"
+            f"  virtual-center spread: {center_spread_px:.3f} px\n"
+            f"  stereo range spread: {range_spread_m * 1000.0:.3f} mm\n"
+            "  controller: virtual-center translation-only feedback"
         )
 
     def update_visual_servo_completion(self) -> None:
@@ -647,7 +651,7 @@ class SimulationRuntime:
             state.complete = True
 
             log(
-                "RGB VISUAL SERVO COMPLETE\n"
+                "RGB STEREO VISUAL SERVO COMPLETE\n"
                 f"  final ToolCenter target: "
                 f"{np.round(target_position, 6).tolist()}\n"
                 f"  actual ToolCenter: "
@@ -678,7 +682,7 @@ class SimulationRuntime:
         ):
             state.settle_timeout_reported = True
             warn(
-                "RGB alignment is stable, but ToolCenter has not settled "
+                "RGB stereo alignment is stable, but ToolCenter has not settled "
                 "within the warning timeout.\n"
                 f"  current physical error: "
                 f"{position_error_m * 1000.0:.3f} mm\n"
@@ -724,7 +728,7 @@ class SimulationRuntime:
 
         return compute_desired_port_camera_usd(
             camera_position_hand_m=np.asarray(
-                camera_cfg.local_position,
+                camera_cfg.virtual_local_position,
                 dtype=np.float64,
             ),
             hand_from_camera=hand_from_camera,
@@ -841,28 +845,54 @@ class SimulationRuntime:
             orientation=tool_orientation,
         )
 
-    def capture(self) -> CameraFrame:
-        """Capture one RGB frame and the current camera calibration/pose."""
-        if self.camera_sensor is None:
-            raise RuntimeError("CameraSensor is not initialized.")
+    def capture(self) -> StereoFrame:
+        """Capture both physical eyes on the current simulation frame."""
+        if self.left_camera_sensor is None:
+            raise RuntimeError("Left CameraSensor is not initialized.")
+        if self.right_camera_sensor is None:
+            raise RuntimeError("Right CameraSensor is not initialized.")
 
-        rgb_data, _ = self.camera_sensor.get_data("rgb")
-        rgb = normalize_rgb(
-            self._sensor_to_numpy(rgb_data, "rgb"),
+        left_data, _ = self.left_camera_sensor.get_data("rgb")
+        right_data, _ = self.right_camera_sensor.get_data("rgb")
+        left_rgb = normalize_rgb(
+            self._sensor_to_numpy(left_data, "left rgb"),
+            self.cfg.camera.resolution,
+        )
+        right_rgb = normalize_rgb(
+            self._sensor_to_numpy(right_data, "right rgb"),
             self.cfg.camera.resolution,
         )
 
-        stage = omni.usd.get_context().get_stage()
-        camera_prim = stage.GetPrimAtPath(self.camera_path)
-        camera = UsdGeom.Camera(camera_prim)
-
-        camera_world = UsdGeom.Xformable(
-            camera_prim
-        ).ComputeLocalToWorldTransform(
-            Usd.TimeCode.Default()
+        left_frame = CameraFrame(
+            rgb=left_rgb,
+            camera=self._camera_model(self.left_camera_path, left_rgb),
+        )
+        right_frame = CameraFrame(
+            rgb=right_rgb,
+            camera=self._camera_model(self.right_camera_path, right_rgb),
+        )
+        virtual_camera = build_virtual_camera_model(
+            left_frame.camera,
+            right_frame.camera,
+        )
+        return StereoFrame(
+            left=left_frame,
+            right=right_frame,
+            virtual_camera=virtual_camera,
         )
 
-        model = CameraModel(
+    def _camera_model(
+        self,
+        camera_path: str,
+        rgb: np.ndarray,
+    ) -> CameraModel:
+        stage = omni.usd.get_context().get_stage()
+        camera_prim = stage.GetPrimAtPath(camera_path)
+        camera = UsdGeom.Camera(camera_prim)
+        camera_world = UsdGeom.Xformable(
+            camera_prim
+        ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        return CameraModel(
             image_height_px=rgb.shape[0],
             image_width_px=rgb.shape[1],
             focal_length_mm=float(camera.GetFocalLengthAttr().Get()),
@@ -872,13 +902,8 @@ class SimulationRuntime:
             vertical_aperture_mm=float(
                 camera.GetVerticalApertureAttr().Get()
             ),
-            world_from_camera=np.asarray(
-                camera_world,
-                dtype=np.float64,
-            ),
+            world_from_camera=np.asarray(camera_world, dtype=np.float64),
         )
-
-        return CameraFrame(rgb=rgb, camera=model)
 
     def stop(self) -> None:
         try:
@@ -942,9 +967,29 @@ class SimulationRuntime:
         self._configure_franka_gravity()
         self._configure_franka_arm_drives()
 
-        self.camera_path, rtx_camera = self._create_hand_camera()
-        self.camera_sensor = CameraSensor(
-            rtx_camera,
+        (
+            self.left_camera_path,
+            left_rtx_camera,
+        ) = self._create_hand_camera(
+            self.cfg.camera.left_camera_name,
+            self.cfg.camera.left_local_position,
+            "left",
+        )
+        (
+            self.right_camera_path,
+            right_rtx_camera,
+        ) = self._create_hand_camera(
+            self.cfg.camera.right_camera_name,
+            self.cfg.camera.right_local_position,
+            "right",
+        )
+        self.left_camera_sensor = CameraSensor(
+            left_rtx_camera,
+            resolution=self.cfg.camera.resolution,
+            annotators=["rgb"],
+        )
+        self.right_camera_sensor = CameraSensor(
+            right_rtx_camera,
             resolution=self.cfg.camera.resolution,
             annotators=["rgb"],
         )
@@ -970,25 +1015,32 @@ class SimulationRuntime:
             f"  rack:       {scene.rack_usd_path}\n"
             f"  Franka:     pos={scene.franka_position}, "
             f"yaw={scene.franka_yaw_deg}°\n"
-            f"  hand camera:{self.camera_path}\n"
-            f"  sensor:     RGB only at "
+            f"  left eye:   {self.left_camera_path}\n"
+            f"  right eye:  {self.right_camera_path}\n"
+            f"  sensors:    synchronized RGB pair at "
             f"{self.cfg.camera.tick_rate_hz:.1f} Hz\n"
+            "  baseline:   40.0 mm; no physical center camera\n"
             f"  tool target:{self.cfg.ik.target_path}\n"
             f"  actual tool:{self.cfg.ik.actual_tool_path}\n"
             f"  visual servo: "
             f"{self.cfg.visual_servo.max_target_step_m * 1000.0:.1f} "
             "mm max step, 50 mm pre-insert standoff\n"
-            f"  desired port in camera: "
-            f"{np.round(self.desired_port_camera_usd, 5).tolist()}"
+            f"  desired port in virtual center eye: "
+            f"{np.round(self.desired_port_virtual_camera_usd, 5).tolist()}"
         )
 
-    def _create_hand_camera(self) -> tuple[str, RtxCamera]:
+    def _create_hand_camera(
+        self,
+        camera_name: str,
+        local_position: tuple[float, float, float],
+        eye_label: str,
+    ) -> tuple[str, RtxCamera]:
         camera_cfg = self.cfg.camera
         hand_path = self._find_unique_descendant(
             self.cfg.scene.franka_asset_path,
             camera_cfg.hand_link_name,
         )
-        camera_path = f"{hand_path}/{camera_cfg.camera_name}"
+        camera_path = f"{hand_path}/{camera_name}"
 
         y_quat = Gf.Rotation(
             Gf.Vec3d(0.0, 1.0, 0.0),
@@ -1004,7 +1056,7 @@ class SimulationRuntime:
         rtx_camera = RtxCamera(
             path=camera_path,
             translations=np.asarray(
-                camera_cfg.local_position,
+                local_position,
                 dtype=np.float64,
             ),
             orientations=np.asarray(
@@ -1048,8 +1100,8 @@ class SimulationRuntime:
         camera.CreateFStopAttr().Set(0.0)
 
         log(
-            "Hand camera created: "
-            f"offset={camera_cfg.local_position}, "
+            f"{eye_label.capitalize()} RGB eye created: "
+            f"offset={local_position}, "
             f"Y={camera_cfg.local_y_rotation_deg}°, "
             f"roll={camera_cfg.local_roll_deg}°"
         )

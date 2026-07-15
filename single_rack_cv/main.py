@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the single-rack RGB-only eye-in-hand visual-servo demo."""
+"""Run the single-rack synchronized stereo RGB visual-servo demo."""
 
 from __future__ import annotations
 
@@ -172,7 +172,7 @@ try:
     )
 
     from debug import DebugOutputs
-    from perception import process_port
+    from perception import process_stereo_port
     from sim import SimulationRuntime, warn
 
     runtime = SimulationRuntime(
@@ -199,15 +199,18 @@ try:
 
         try:
             frame = runtime.capture()
-            observation = process_port(
+            debug.save_raw(frame)
+            previous_left, previous_right = (
+                runtime.visual_servo_references()
+            )
+            observation = process_stereo_port(
                 frame=frame,
                 cfg=CONFIG.perception,
-                desired_port_camera_usd=(
-                    runtime.desired_port_camera_usd
+                desired_port_virtual_camera_usd=(
+                    runtime.desired_port_virtual_camera_usd
                 ),
-                previous_detection=(
-                    runtime.visual_servo_reference()
-                ),
+                previous_left=previous_left,
+                previous_right=previous_right,
             )
             runtime.observe_visual_servo(observation)
             debug.handle(
@@ -216,16 +219,16 @@ try:
                 capture_index,
             )
         except Exception as exc:
-            # A missed RGB frame holds the current target; repeated misses
+            # A rejected stereo pair holds the current target; repeated misses
             # trigger a clean image-space reacquisition.
             runtime.note_perception_failure()
             warn(
-                f"RGB capture {capture_index} skipped: {exc}"
+                f"RGB stereo capture {capture_index} skipped: {exc}"
             )
 
 except Exception:
     print(
-        "\n[SINGLE RACK RGB SERVO] FATAL ERROR\n"
+        "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n"
         + traceback.format_exc(),
         flush=True,
     )
