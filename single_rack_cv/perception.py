@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure NumPy/OpenCV Ethernet-port perception and 3D geometry."""
+"""Pure NumPy/OpenCV RGB port detection and visual-servo geometry."""
 
 from __future__ import annotations
 
@@ -51,52 +51,40 @@ class CameraModel:
 @dataclass(frozen=True)
 class CameraFrame:
     rgb: np.ndarray
-    depth_m: np.ndarray
     camera: CameraModel
 
 
 @dataclass(frozen=True)
 class PortDetection:
-    """2D candidate data used by geometry, ranking, and debug output."""
-
     bbox_xywh: tuple[int, int, int, int]
-    center_uv: tuple[int, int]
+    center_uv: tuple[float, float]
     shape_score: float
     roi_uv: tuple[int, int, int, int]
     mask: np.ndarray
 
-
-@dataclass(frozen=True)
-class DepthSample:
-    median_depth_m: float
-    patch_bounds_uv: tuple[int, int, int, int]
-
-
-@dataclass(frozen=True)
-class OpeningPlane:
-    depth_m: float
-    recess_depth_m: float
-    ring_bounds_xyxy: tuple[int, int, int, int]
+    @property
+    def scale_px(self) -> float:
+        _, _, width, height = self.bbox_xywh
+        return math.sqrt(float(width * height))
 
 
 @dataclass(frozen=True)
-class PlaneFit:
-    normal_usd_local: np.ndarray
-    rms_residual_m: float
-    camera_angle_deg: float
-
-
-@dataclass(frozen=True)
-class PortEstimate:
+class PortObservation:
     detection: PortDetection
-    cavity: DepthSample
-    opening: OpeningPlane
-    plane: PlaneFit
+    estimated_range_m: float
+    port_camera_usd_m: np.ndarray
+    port_world_xyz_m: np.ndarray
+    desired_port_camera_usd_m: np.ndarray
+    desired_center_uv: tuple[float, float]
+    desired_size_wh_px: tuple[float, float]
+    center_error_px: np.ndarray
+    range_error_m: float
+    correction_world_m: np.ndarray
 
-    cavity_world_xyz_m: np.ndarray
-    opening_world_xyz_m: np.ndarray
-    outward_world_normal: np.ndarray
-    preinsert_world_xyz_m: np.ndarray
+
+# ---------------------------------------------------------------------------
+# Image normalization and candidate detection
+# ---------------------------------------------------------------------------
 
 
 def normalize_rgb(
@@ -135,29 +123,6 @@ def normalize_rgb(
     return np.ascontiguousarray(rgb)
 
 
-def normalize_depth(
-    depth: np.ndarray,
-    resolution_hw: tuple[int, int],
-) -> np.ndarray:
-    """Return contiguous HxW float32 metric depth."""
-    height, width = resolution_hw
-    depth = np.squeeze(np.asarray(depth))
-
-    if depth.ndim == 1:
-        if depth.size != height * width:
-            raise ValueError(
-                f"Cannot reshape flat depth array of size {depth.size}."
-            )
-        depth = depth.reshape(height, width)
-
-    if depth.shape != (height, width):
-        raise ValueError(
-            f"Depth shape {depth.shape} does not match {(height, width)}."
-        )
-
-    return np.ascontiguousarray(depth.astype(np.float32, copy=False))
-
-
 def score_port_shape(
     aspect_ratio: float,
     fill_ratio: float,
@@ -179,10 +144,7 @@ def score_port_shape(
         1.0 - fill_error / cfg.fill_score_tolerance,
     )
 
-    weight_sum = (
-        cfg.aspect_score_weight
-        + cfg.fill_score_weight
-    )
+    weight_sum = cfg.aspect_score_weight + cfg.fill_score_weight
     if weight_sum <= 0.0:
         raise ValueError("Shape-score weights must sum to a positive value.")
 
@@ -195,80 +157,133 @@ def score_port_shape(
     )
 
 
+def _has_bright_surround(
+    gray_roi: np.ndarray,
+    bbox_xywh: tuple[int, int, int, int],
+    cfg: PerceptionConfig,
+) -> bool:
+    """Reject dark grille holes that lack the RJ45 port's bright bezel."""
+    x, y, width, height = bbox_xywh
+    ring_width = cfg.surround_ring_px
+    image_height, image_width = gray_roi.shape
+
+    x0 = max(0, x - ring_width)
+    y0 = max(0, y - ring_width)
+    x1 = min(image_width, x + width + ring_width)
+    y1 = min(image_height, y + height + ring_width)
+
+    patch = gray_roi[y0:y1, x0:x1]
+    ring_mask = np.ones(patch.shape, dtype=bool)
+    inner_x0 = x - x0
+    inner_y0 = y - y0
+    ring_mask[
+        inner_y0:inner_y0 + height,
+        inner_x0:inner_x0 + width,
+    ] = False
+
+    surround = patch[ring_mask]
+    cavity = gray_roi[y:y + height, x:x + width]
+
+    if surround.size == 0 or cavity.size == 0:
+        return False
+
+    surround_mean = float(np.mean(surround))
+    cavity_mean = float(np.mean(cavity))
+
+    return (
+        surround_mean >= cfg.min_surround_mean_gray
+        and surround_mean - cavity_mean
+        >= cfg.min_surround_contrast_gray
+    )
+
+
 def detect_port_candidates(
     rgb: np.ndarray,
     cfg: PerceptionConfig,
 ) -> list[PortDetection]:
-    """Find all RJ45-like dark components across the configured search area."""
+    """Find all dark RJ45-like components across the configured image area."""
     if rgb.ndim != 3 or rgb.shape[2] != 3:
         raise ValueError(f"Expected HxWx3 RGB, got {rgb.shape}.")
 
-    height, width = rgb.shape[:2]
+    image_height, image_width = rgb.shape[:2]
 
     if cfg.roi_uv is None:
-        u0, v0, u1, v1 = 0, 0, width, height
+        u0, v0, u1, v1 = 0, 0, image_width, image_height
     else:
         u0, v0, u1, v1 = cfg.roi_uv
 
-    if not (0 <= u0 < u1 <= width and 0 <= v0 < v1 <= height):
+    if not (
+        0 <= u0 < u1 <= image_width
+        and 0 <= v0 < v1 <= image_height
+    ):
         raise ValueError(
             f"Search area {(u0, v0, u1, v1)} is outside "
-            f"image {width}x{height}."
+            f"image {image_width}x{image_height}."
         )
 
     roi = rgb[v0:v1, u0:u1]
     gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
     binary = cv2.inRange(gray, 0, cfg.max_gray)
 
-    count, _, stats, _ = cv2.connectedComponentsWithStats(
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(
         binary,
         connectivity=8,
     )
 
-    full_mask = np.zeros((height, width), dtype=np.uint8)
+    full_mask = np.zeros((image_height, image_width), dtype=np.uint8)
     full_mask[v0:v1, u0:u1] = binary
 
     candidates: list[PortDetection] = []
 
     for index in range(1, count):
-        x, y, w, h, area = map(int, stats[index])
-        if w <= 0 or h <= 0:
+        x, y, width, height, area = map(int, stats[index])
+        if width <= 0 or height <= 0:
             continue
 
-        gx, gy = u0 + x, v0 + y
-        aspect = w / h
-        fill = area / (w * h)
+        global_x = u0 + x
+        global_y = v0 + y
+        aspect_ratio = width / height
+        fill_ratio = area / (width * height)
 
         touches_edge = (
-            gx < cfg.edge_margin_px
-            or gy < cfg.edge_margin_px
-            or gx + w > width - cfg.edge_margin_px
-            or gy + h > height - cfg.edge_margin_px
+            global_x < cfg.edge_margin_px
+            or global_y < cfg.edge_margin_px
+            or global_x + width > image_width - cfg.edge_margin_px
+            or global_y + height > image_height - cfg.edge_margin_px
         )
 
         accepted = (
             not touches_edge
-            and cfg.min_width_px <= w <= cfg.max_width_px
-            and cfg.min_height_px <= h <= cfg.max_height_px
-            and cfg.min_aspect_ratio <= aspect <= cfg.max_aspect_ratio
+            and cfg.min_width_px <= width <= cfg.max_width_px
+            and cfg.min_height_px <= height <= cfg.max_height_px
+            and cfg.min_aspect_ratio <= aspect_ratio <= cfg.max_aspect_ratio
             and cfg.min_area_px <= area <= cfg.max_area_px
-            and fill >= cfg.min_fill_ratio
+            and fill_ratio >= cfg.min_fill_ratio
+            and _has_bright_surround(
+                gray,
+                (x, y, width, height),
+                cfg,
+            )
         )
         if not accepted:
             continue
 
         shape_score = score_port_shape(
-            aspect_ratio=aspect,
-            fill_ratio=fill,
+            aspect_ratio=aspect_ratio,
+            fill_ratio=fill_ratio,
             cfg=cfg,
         )
         if shape_score < cfg.min_shape_score:
             continue
 
+        local_center_u, local_center_v = centroids[index]
         candidates.append(
             PortDetection(
-                bbox_xywh=(gx, gy, w, h),
-                center_uv=(gx + w // 2, gy + h // 2),
+                bbox_xywh=(global_x, global_y, width, height),
+                center_uv=(
+                    float(u0 + local_center_u),
+                    float(v0 + local_center_v),
+                ),
                 shape_score=shape_score,
                 roi_uv=(u0, v0, u1, v1),
                 mask=full_mask,
@@ -282,120 +297,180 @@ def detect_port_candidates(
     return candidates
 
 
-def sample_center_depth(
-    depth_m: np.ndarray,
-    center_uv: tuple[int, int],
-    patch_size_px: int,
-) -> DepthSample:
-    """Use the median of an odd square patch around the detected center."""
-    if patch_size_px <= 0 or patch_size_px % 2 == 0:
-        raise ValueError("Depth patch size must be a positive odd integer.")
-
-    height, width = depth_m.shape
-    u, v = center_uv
-
-    if not (0 <= u < width and 0 <= v < height):
-        raise ValueError(f"Center {center_uv} is outside depth image.")
-
-    half = patch_size_px // 2
-    u0, u1 = max(0, u - half), min(width, u + half + 1)
-    v0, v1 = max(0, v - half), min(height, v + half + 1)
-
-    patch = depth_m[v0:v1, u0:u1]
-    valid = patch[np.isfinite(patch) & (patch > 0.0)]
-
-    if valid.size == 0:
-        raise RuntimeError("Port-center depth patch contains no valid values.")
-
-    return DepthSample(
-        median_depth_m=float(np.median(valid)),
-        patch_bounds_uv=(u0, v0, u1, v1),
-    )
-
-
-def _ring_samples(
-    depth_m: np.ndarray,
-    bbox_xywh: tuple[int, int, int, int],
-    ring_width_px: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[int, int, int, int]]:
-    """Return U, V, depth samples from a rectangular ring around a box."""
-    x, y, w, h = bbox_xywh
-    image_h, image_w = depth_m.shape
-
-    x0, y0 = max(0, x - ring_width_px), max(0, y - ring_width_px)
-    x1 = min(image_w, x + w + ring_width_px)
-    y1 = min(image_h, y + h + ring_width_px)
-
-    patch = depth_m[y0:y1, x0:x1]
-    ring = np.ones(patch.shape, dtype=bool)
-
-    inner_x0, inner_y0 = x - x0, y - y0
-    ring[
-        inner_y0:inner_y0 + h,
-        inner_x0:inner_x0 + w,
-    ] = False
-
-    local_v, local_u = np.indices(patch.shape)
-    valid = ring & np.isfinite(patch) & (patch > 0.0)
-
-    return (
-        (local_u + x0)[valid].astype(np.float64),
-        (local_v + y0)[valid].astype(np.float64),
-        patch[valid].astype(np.float64),
-        (x0, y0, x1, y1),
-    )
-
-
-def estimate_opening_plane(
-    depth_m: np.ndarray,
-    detection: PortDetection,
-    cavity_depth_m: float,
+def select_port_candidate(
+    candidates: list[PortDetection],
+    previous: PortDetection | None,
     cfg: PerceptionConfig,
-) -> OpeningPlane:
-    """Estimate the front opening depth from the ring around the dark cavity."""
-    _, _, values, bounds = _ring_samples(
-        depth_m,
-        detection.bbox_xywh,
-        cfg.opening_ring_width_px,
-    )
+) -> PortDetection:
+    """Select by shape initially, then keep the same image-space track."""
+    if not candidates:
+        raise RuntimeError("No RGB port candidate passed the shape filters.")
 
-    if values.size < cfg.min_valid_ring_pixels:
-        raise RuntimeError(
-            f"Only {values.size} valid ring pixels; "
-            f"need {cfg.min_valid_ring_pixels}."
+    if previous is None:
+        return candidates[0]
+
+    previous_center = np.asarray(previous.center_uv, dtype=np.float64)
+    previous_scale = previous.scale_px
+    max_log_scale = math.log(cfg.tracking_max_scale_ratio)
+
+    tracked: list[tuple[float, PortDetection]] = []
+
+    for candidate in candidates:
+        center_distance = float(
+            np.linalg.norm(
+                np.asarray(candidate.center_uv, dtype=np.float64)
+                - previous_center
+            )
+        )
+        scale_ratio = max(
+            candidate.scale_px / previous_scale,
+            previous_scale / candidate.scale_px,
         )
 
-    depth = float(np.median(values))
-    recess = float(cavity_depth_m - depth)
+        if center_distance > cfg.tracking_max_center_jump_px:
+            continue
+        if scale_ratio > cfg.tracking_max_scale_ratio:
+            continue
 
-    if not cfg.min_recess_depth_m <= recess <= cfg.max_recess_depth_m:
-        raise RuntimeError(
-            "Implausible port recess: "
-            f"opening={depth:.6f} m, cavity={cavity_depth_m:.6f} m, "
-            f"recess={recess:.6f} m."
+        center_penalty = (
+            cfg.tracking_center_penalty
+            * center_distance
+            / cfg.tracking_max_center_jump_px
+        )
+        scale_penalty = (
+            cfg.tracking_scale_penalty
+            * abs(math.log(scale_ratio))
+            / max_log_scale
+        )
+        tracked.append(
+            (
+                candidate.shape_score
+                - center_penalty
+                - scale_penalty,
+                candidate,
+            )
         )
 
-    return OpeningPlane(
-        depth_m=depth,
-        recess_depth_m=recess,
-        ring_bounds_xyxy=bounds,
+    if not tracked:
+        raise RuntimeError(
+            "RGB port track was lost: no candidate passed the "
+            "center/scale continuity gates."
+        )
+
+    return max(tracked, key=lambda item: item[0])[1]
+
+
+# ---------------------------------------------------------------------------
+# Known-size monocular geometry
+# ---------------------------------------------------------------------------
+
+
+def compute_desired_port_camera_usd(
+    camera_position_hand_m: np.ndarray,
+    hand_from_camera: np.ndarray,
+    tool_center_position_hand_m: np.ndarray,
+    hand_from_tool: np.ndarray,
+    preinsert_standoff_m: float,
+) -> np.ndarray:
+    """Compute where the port should appear in the camera at pre-insert."""
+    camera_position = np.asarray(
+        camera_position_hand_m,
+        dtype=np.float64,
+    ).reshape(3)
+    tool_position = np.asarray(
+        tool_center_position_hand_m,
+        dtype=np.float64,
+    ).reshape(3)
+    hand_from_camera = np.asarray(
+        hand_from_camera,
+        dtype=np.float64,
+    ).reshape(3, 3)
+    hand_from_tool = np.asarray(
+        hand_from_tool,
+        dtype=np.float64,
+    ).reshape(3, 3)
+
+    if not math.isfinite(preinsert_standoff_m) or preinsert_standoff_m <= 0.0:
+        raise ValueError("preinsert_standoff_m must be finite and positive.")
+
+    port_in_tool = np.array(
+        [0.0, 0.0, preinsert_standoff_m],
+        dtype=np.float64,
+    )
+    port_in_hand = tool_position + hand_from_tool @ port_in_tool
+    port_in_camera = (
+        hand_from_camera.T @ (port_in_hand - camera_position)
     )
 
+    if port_in_camera[2] >= 0.0:
+        raise RuntimeError(
+            "Configured pre-insert point is not in front of the camera: "
+            f"{np.round(port_in_camera, 6).tolist()}"
+        )
 
-def deproject_pixel(
-    center_uv: tuple[int, int],
-    depth_m: float,
+    return port_in_camera
+
+
+def estimate_port_point_camera_usd(
+    detection: PortDetection,
     camera: CameraModel,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return the point in OpenCV and USD camera-local coordinates."""
-    u, v = map(float, center_uv)
+    cfg: PerceptionConfig,
+) -> tuple[np.ndarray, float]:
+    """Estimate the port point from its known size and observed pixel box."""
+    _, _, width_px, height_px = detection.bbox_xywh
 
-    x = (u - camera.cx_px) * depth_m / camera.fx_px
-    y = (v - camera.cy_px) * depth_m / camera.fy_px
+    if width_px <= 0 or height_px <= 0:
+        raise ValueError("Detected port size must be positive.")
+    if cfg.port_width_m <= 0.0 or cfg.port_height_m <= 0.0:
+        raise ValueError("Configured port dimensions must be positive.")
 
-    point_cv = np.array([x, y, depth_m], dtype=np.float64)
-    point_usd = np.array([x, -y, -depth_m], dtype=np.float64)
-    return point_cv, point_usd
+    range_from_width = camera.fx_px * cfg.port_width_m / width_px
+    range_from_height = camera.fy_px * cfg.port_height_m / height_px
+    range_m = float(np.median([range_from_width, range_from_height]))
+
+    if not (
+        cfg.min_estimated_range_m
+        <= range_m
+        <= cfg.max_estimated_range_m
+    ):
+        raise RuntimeError(
+            f"Implausible RGB range estimate {range_m:.4f} m; expected "
+            f"[{cfg.min_estimated_range_m:.3f}, "
+            f"{cfg.max_estimated_range_m:.3f}] m."
+        )
+
+    u, v = detection.center_uv
+    x_cv = (u - camera.cx_px) * range_m / camera.fx_px
+    y_cv = (v - camera.cy_px) * range_m / camera.fy_px
+
+    point_usd = np.array(
+        [x_cv, -y_cv, -range_m],
+        dtype=np.float64,
+    )
+    return point_usd, range_m
+
+
+def project_port_feature(
+    point_camera_usd_m: np.ndarray,
+    camera: CameraModel,
+    cfg: PerceptionConfig,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Project a camera-local USD point and known port size into the image."""
+    point = np.asarray(point_camera_usd_m, dtype=np.float64).reshape(3)
+    range_m = -float(point[2])
+
+    if range_m <= 0.0:
+        raise ValueError("Desired port point must be in front of the camera.")
+
+    x_cv = float(point[0])
+    y_cv = -float(point[1])
+
+    u = camera.cx_px + camera.fx_px * x_cv / range_m
+    v = camera.cy_px + camera.fy_px * y_cv / range_m
+    width_px = camera.fx_px * cfg.port_width_m / range_m
+    height_px = camera.fy_px * cfg.port_height_m / range_m
+
+    return (float(u), float(v)), (float(width_px), float(height_px))
 
 
 def transform_point_to_world(
@@ -407,7 +482,10 @@ def transform_point_to_world(
     if matrix.shape != (4, 4):
         raise ValueError(f"Expected a 4x4 camera matrix, got {matrix.shape}.")
 
-    homogeneous = np.append(np.asarray(point_usd_local, dtype=np.float64), 1.0)
+    homogeneous = np.append(
+        np.asarray(point_usd_local, dtype=np.float64),
+        1.0,
+    )
     world = homogeneous @ matrix
 
     if abs(world[3]) > 1.0e-12:
@@ -416,212 +494,122 @@ def transform_point_to_world(
     return world[:3]
 
 
-def transform_direction_to_world(
-    direction_usd_local: np.ndarray,
+def camera_point_error_to_world(
+    current_point_usd: np.ndarray,
+    desired_point_usd: np.ndarray,
     world_from_camera: np.ndarray,
 ) -> np.ndarray:
-    """Rotate a camera-local direction into world coordinates."""
+    """Convert current-minus-desired camera point error into camera motion."""
+    current = np.asarray(current_point_usd, dtype=np.float64).reshape(3)
+    desired = np.asarray(desired_point_usd, dtype=np.float64).reshape(3)
     matrix = np.asarray(world_from_camera, dtype=np.float64)
-    homogeneous = np.append(
-        np.asarray(direction_usd_local, dtype=np.float64),
-        0.0,
-    )
-    world = (homogeneous @ matrix)[:3]
-    norm = np.linalg.norm(world)
 
-    if norm <= 1.0e-12:
-        raise RuntimeError("Camera direction transformed to zero length.")
+    if matrix.shape != (4, 4):
+        raise ValueError(f"Expected a 4x4 camera matrix, got {matrix.shape}.")
 
-    return world / norm
+    # Moving the eye-in-hand camera by this vector makes the observed point
+    # move toward the desired camera-frame coordinates.
+    local_motion = current - desired
+    world_motion = (np.append(local_motion, 0.0) @ matrix)[:3]
+    return np.asarray(world_motion, dtype=np.float64)
 
 
-def fit_opening_normal(
-    depth_m: np.ndarray,
-    detection: PortDetection,
-    camera: CameraModel,
-    cfg: PerceptionConfig,
-) -> PlaneFit:
-    """Robustly fit the front-face ring and orient its normal toward camera."""
-    u, v, z, _ = _ring_samples(
-        depth_m,
-        detection.bbox_xywh,
-        cfg.opening_ring_width_px,
-    )
-
-    if z.size < cfg.plane_min_inlier_points:
-        raise RuntimeError("Too few valid ring samples for a plane fit.")
-
-    median = float(np.median(z))
-    mad = float(np.median(np.abs(z - median)))
-    tolerance = max(
-        cfg.plane_min_depth_tolerance_m,
-        cfg.plane_mad_scale * 1.4826 * mad,
-    )
-
-    keep = np.abs(z - median) <= tolerance
-    u, v, z = u[keep], v[keep], z[keep]
-
-    if z.size < cfg.plane_min_inlier_points:
-        raise RuntimeError("Too few robust depth inliers for a plane fit.")
-
-    x = (u - camera.cx_px) * z / camera.fx_px
-    y = (v - camera.cy_px) * z / camera.fy_px
-    points = np.column_stack((x, y, z))
-
-    centroid = np.mean(points, axis=0)
-    centered = points - centroid
-
-    _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    normal_cv = vh[-1].astype(np.float64)
-    normal_cv /= np.linalg.norm(normal_cv)
-
-    # Outward/toward-camera is -Z in OpenCV coordinates.
-    if normal_cv[2] > 0.0:
-        normal_cv *= -1.0
-
-    residuals = centered @ normal_cv
-    rms = float(np.sqrt(np.mean(residuals**2)))
-
-    if rms > cfg.plane_max_rms_residual_m:
-        raise RuntimeError(
-            f"Plane RMS {rms * 1000.0:.3f} mm exceeds limit."
-        )
-
-    alignment = float(np.clip(np.dot(normal_cv, [0.0, 0.0, -1.0]), -1.0, 1.0))
-    angle = math.degrees(math.acos(alignment))
-
-    if angle > cfg.plane_max_camera_angle_deg:
-        raise RuntimeError(
-            f"Plane normal angle {angle:.2f}° exceeds limit."
-        )
-
-    normal_usd = np.array(
-        [normal_cv[0], -normal_cv[1], -normal_cv[2]],
+def compute_bounded_step(
+    correction_world_m: np.ndarray,
+    gain: float,
+    max_step_m: float,
+) -> np.ndarray:
+    """Scale one visual correction and cap its Euclidean step length."""
+    correction = np.asarray(
+        correction_world_m,
         dtype=np.float64,
-    )
+    ).reshape(3)
 
-    return PlaneFit(
-        normal_usd_local=normal_usd,
-        rms_residual_m=rms,
-        camera_angle_deg=angle,
-    )
+    if not np.all(np.isfinite(correction)):
+        raise ValueError("Visual correction must be finite.")
+    if not math.isfinite(gain) or gain <= 0.0:
+        raise ValueError("Control gain must be finite and positive.")
+    if not math.isfinite(max_step_m) or max_step_m <= 0.0:
+        raise ValueError("Maximum target step must be finite and positive.")
 
+    step = gain * correction
+    norm = float(np.linalg.norm(step))
 
-def _estimate_candidate_geometry(
-    frame: CameraFrame,
-    detection: PortDetection,
-    cfg: PerceptionConfig,
-) -> PortEstimate:
-    """Build one complete 3D estimate or raise when geometry is implausible."""
-    cavity = sample_center_depth(
-        frame.depth_m,
-        detection.center_uv,
-        cfg.depth_patch_size_px,
-    )
+    if norm > max_step_m:
+        step *= max_step_m / norm
 
-    opening = estimate_opening_plane(
-        frame.depth_m,
-        detection,
-        cavity.median_depth_m,
-        cfg,
-    )
-
-    plane = fit_opening_normal(
-        frame.depth_m,
-        detection,
-        frame.camera,
-        cfg,
-    )
-
-    _, cavity_usd = deproject_pixel(
-        detection.center_uv,
-        cavity.median_depth_m,
-        frame.camera,
-    )
-    _, opening_usd = deproject_pixel(
-        detection.center_uv,
-        opening.depth_m,
-        frame.camera,
-    )
-
-    cavity_world = transform_point_to_world(
-        cavity_usd,
-        frame.camera.world_from_camera,
-    )
-    opening_world = transform_point_to_world(
-        opening_usd,
-        frame.camera.world_from_camera,
-    )
-    outward_world = transform_direction_to_world(
-        plane.normal_usd_local,
-        frame.camera.world_from_camera,
-    )
-
-    preinsert = (
-        opening_world
-        + outward_world * cfg.preinsert_standoff_m
-    )
-
-    return PortEstimate(
-        detection=detection,
-        cavity=cavity,
-        opening=opening,
-        plane=plane,
-        cavity_world_xyz_m=cavity_world,
-        opening_world_xyz_m=opening_world,
-        outward_world_normal=outward_world,
-        preinsert_world_xyz_m=preinsert,
-    )
+    return step
 
 
 def process_port(
     frame: CameraFrame,
     cfg: PerceptionConfig,
-) -> PortEstimate:
-    """
-    Scan the full frame, validate every candidate in 3D, then choose shape.
+    desired_port_camera_usd: np.ndarray,
+    previous_detection: PortDetection | None,
+) -> PortObservation:
+    """Detect, track, range, and convert one RGB observation to a correction."""
+    candidates = detect_port_candidates(frame.rgb, cfg)
 
-    Image position is intentionally not part of the ranking. A candidate must
-    first pass cavity-recess and front-plane checks. Among those physically
-    plausible candidates, the highest RJ45 shape score wins.
-    """
-    candidates = detect_port_candidates(
-        frame.rgb,
+    plausible: list[PortDetection] = []
+    for candidate in candidates:
+        try:
+            estimate_port_point_camera_usd(candidate, frame.camera, cfg)
+        except (RuntimeError, ValueError):
+            continue
+        plausible.append(candidate)
+
+    if not plausible:
+        raise RuntimeError(
+            "No RGB port candidate passed the shape and known-size range "
+            "checks."
+        )
+
+    detection = select_port_candidate(
+        plausible,
+        previous_detection,
+        cfg,
+    )
+    port_camera_usd, range_m = estimate_port_point_camera_usd(
+        detection,
+        frame.camera,
         cfg,
     )
 
-    if not candidates:
-        raise RuntimeError(
-            "No port candidate passed the full-screen shape filters."
-        )
-
-    valid: list[PortEstimate] = []
-    rejection_reasons: list[str] = []
-
-    for candidate in candidates:
-        try:
-            valid.append(
-                _estimate_candidate_geometry(
-                    frame=frame,
-                    detection=candidate,
-                    cfg=cfg,
-                )
-            )
-        except (RuntimeError, ValueError) as exc:
-            rejection_reasons.append(
-                f"{candidate.center_uv}: {exc}"
-            )
-
-    if not valid:
-        details = "; ".join(rejection_reasons[:4])
-        raise RuntimeError(
-            f"Found {len(candidates)} full-screen shape candidate(s), "
-            "but none passed depth/geometry validation. "
-            f"{details}"
-        )
-
-    return max(
-        valid,
-        key=lambda estimate: estimate.detection.shape_score,
+    desired = np.asarray(
+        desired_port_camera_usd,
+        dtype=np.float64,
+    ).reshape(3)
+    desired_center, desired_size = project_port_feature(
+        desired,
+        frame.camera,
+        cfg,
     )
 
+    center_error = (
+        np.asarray(detection.center_uv, dtype=np.float64)
+        - np.asarray(desired_center, dtype=np.float64)
+    )
+    desired_range_m = -float(desired[2])
+    range_error_m = range_m - desired_range_m
+
+    correction_world = camera_point_error_to_world(
+        current_point_usd=port_camera_usd,
+        desired_point_usd=desired,
+        world_from_camera=frame.camera.world_from_camera,
+    )
+
+    return PortObservation(
+        detection=detection,
+        estimated_range_m=range_m,
+        port_camera_usd_m=port_camera_usd,
+        port_world_xyz_m=transform_point_to_world(
+            port_camera_usd,
+            frame.camera.world_from_camera,
+        ),
+        desired_port_camera_usd_m=desired,
+        desired_center_uv=desired_center,
+        desired_size_wh_px=desired_size,
+        center_error_px=center_error,
+        range_error_m=float(range_error_m),
+        correction_world_m=correction_world,
+    )

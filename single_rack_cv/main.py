@@ -1,26 +1,176 @@
 #!/usr/bin/env python3
-"""Run the single-rack RGB-D port-perception demo."""
+"""Run the single-rack RGB-only eye-in-hand visual-servo demo."""
 
 from __future__ import annotations
 
+import os
+import sys
+import threading
 import traceback
+from pathlib import Path
 
 from config import CONFIG
 
-# Isaac Sim must start before importing modules that use omni/pxr APIs.
-from isaacsim import SimulationApp
 
-simulation_app = SimulationApp(
-    {
-        "headless": CONFIG.app.headless,
-        "width": CONFIG.app.width,
-        "height": CONFIG.app.height,
-    }
+class RunOutputTee:
+    """
+    Mirror process stdout/stderr to the terminal and one overwrite-on-run file.
+
+    This operates at the OS file-descriptor level, so it captures ordinary
+    Python prints plus native Isaac/RTX output written directly to stdout or
+    stderr.
+    """
+
+    def __init__(self, output_path: Path):
+        self.output_path = Path(output_path)
+
+        self._saved_stdout_fd: int | None = None
+        self._saved_stderr_fd: int | None = None
+        self._log_fd: int | None = None
+        self._pipe_read_fd: int | None = None
+        self._pipe_write_fd: int | None = None
+        self._thread: threading.Thread | None = None
+        self._started = False
+
+    @staticmethod
+    def _write_all(fd: int, data: bytes) -> None:
+        view = memoryview(data)
+
+        while view:
+            written = os.write(fd, view)
+
+            if written <= 0:
+                raise RuntimeError("Console tee write returned no progress.")
+
+            view = view[written:]
+
+    def _copy_output(self) -> None:
+        if (
+            self._pipe_read_fd is None
+            or self._saved_stdout_fd is None
+            or self._log_fd is None
+        ):
+            return
+
+        try:
+            while True:
+                chunk = os.read(self._pipe_read_fd, 65536)
+
+                if not chunk:
+                    break
+
+                self._write_all(self._saved_stdout_fd, chunk)
+                self._write_all(self._log_fd, chunk)
+        except OSError:
+            # Shutdown may close descriptors while the reader is exiting.
+            pass
+
+    def start(self) -> None:
+        if self._started:
+            return
+
+        self.output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        self._saved_stdout_fd = os.dup(1)
+        self._saved_stderr_fd = os.dup(2)
+
+        self._log_fd = os.open(
+            self.output_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o644,
+        )
+
+        (
+            self._pipe_read_fd,
+            self._pipe_write_fd,
+        ) = os.pipe()
+
+        os.dup2(self._pipe_write_fd, 1)
+        os.dup2(self._pipe_write_fd, 2)
+        os.close(self._pipe_write_fd)
+        self._pipe_write_fd = None
+
+        self._thread = threading.Thread(
+            target=self._copy_output,
+            name="run-output-tee",
+            daemon=True,
+        )
+        self._thread.start()
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        if self._saved_stdout_fd is not None:
+            os.dup2(self._saved_stdout_fd, 1)
+
+        if self._saved_stderr_fd is not None:
+            os.dup2(self._saved_stderr_fd, 2)
+
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+
+        descriptors = (
+            self._pipe_read_fd,
+            self._log_fd,
+            self._saved_stdout_fd,
+            self._saved_stderr_fd,
+        )
+
+        for fd in descriptors:
+            if fd is None:
+                continue
+
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+        self._pipe_read_fd = None
+        self._log_fd = None
+        self._saved_stdout_fd = None
+        self._saved_stderr_fd = None
+        self._thread = None
+        self._started = False
+
+
+run_output_path = (
+    CONFIG.camera.output_dir
+    / "run_output_latest.txt"
 )
+run_output_tee = RunOutputTee(run_output_path)
+run_output_tee.start()
 
+simulation_app = None
 runtime = None
 
 try:
+    print(
+        f"[LOG] Saving complete run output to: {run_output_path}",
+        flush=True,
+    )
+
+    # Isaac Sim must start before importing modules that use omni/pxr APIs.
+    from isaacsim import SimulationApp
+
+    simulation_app = SimulationApp(
+        {
+            "headless": CONFIG.app.headless,
+            "width": CONFIG.app.width,
+            "height": CONFIG.app.height,
+        }
+    )
+
     from debug import DebugOutputs
     from perception import process_port
     from sim import SimulationRuntime, warn
@@ -37,8 +187,8 @@ try:
         runtime.step()
 
         try:
-            runtime.update_auto_preinsert_motion()
             runtime.update_ik()
+            runtime.update_visual_servo_completion()
         except Exception as exc:
             warn(f"Motion/IK update failed: {exc}")
 
@@ -49,32 +199,48 @@ try:
 
         try:
             frame = runtime.capture()
-            estimate = process_port(
-                frame,
-                CONFIG.perception,
+            observation = process_port(
+                frame=frame,
+                cfg=CONFIG.perception,
+                desired_port_camera_usd=(
+                    runtime.desired_port_camera_usd
+                ),
+                previous_detection=(
+                    runtime.visual_servo_reference()
+                ),
             )
+            runtime.observe_visual_servo(observation)
             debug.handle(
                 frame,
-                estimate,
+                observation,
                 capture_index,
             )
-            runtime.observe_preinsert_estimate(estimate)
         except Exception as exc:
-            # One bad perception frame should not terminate Isaac Sim.
+            # A missed RGB frame holds the current target; repeated misses
+            # trigger a clean image-space reacquisition.
             runtime.note_perception_failure()
             warn(
-                f"Perception capture {capture_index} skipped: {exc}"
+                f"RGB capture {capture_index} skipped: {exc}"
             )
 
 except Exception:
     print(
-        "\n[SINGLE RACK CV] FATAL ERROR\n"
+        "\n[SINGLE RACK RGB SERVO] FATAL ERROR\n"
         + traceback.format_exc(),
         flush=True,
     )
     raise
 
 finally:
-    if runtime is not None:
-        runtime.stop()
-    simulation_app.close()
+    try:
+        if runtime is not None:
+            runtime.stop()
+
+        if simulation_app is not None:
+            simulation_app.close()
+    finally:
+        print(
+            f"[LOG] Run output saved to: {run_output_path}",
+            flush=True,
+        )
+        run_output_tee.stop()

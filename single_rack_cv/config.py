@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""All user-tunable settings for the single-rack RGB-D demo."""
+"""All user-tunable settings for the single-rack RGB visual-servo demo."""
 
 from __future__ import annotations
 
@@ -53,39 +53,40 @@ class CameraConfig:
     clipping_range_m: tuple[float, float] = (0.01, 10.0)
     focus_distance_m: float = 1.0
 
-    # CameraSensor uses (height, width).
+    # CameraSensor uses (height, width). At 60 Hz physics, every 4 frames
+    # matches the camera's 15 Hz tick rate.
     resolution: tuple[int, int] = (480, 640)
     tick_rate_hz: float = 15.0
-    capture_every_sim_frames: int = 60
+    capture_every_sim_frames: int = 4
 
-    # Save beside this project:
-    # ~/Isaacsim-Scripts/single_rack_cv/camera_output
-    output_dir: Path = (
-        Path(__file__).resolve().parent
-        / "camera_output"
-    )
+    output_dir: Path = Path(__file__).resolve().parent / "camera_output"
 
 
 @dataclass(frozen=True)
 class PerceptionConfig:
-    # None means scan the entire RGB frame. A tuple can still be supplied
-    # later for debugging or a deliberately constrained search.
+    """RGB-only RJ45 cavity detection and known-size ranging."""
+
     roi_uv: tuple[int, int, int, int] | None = None
     max_gray: int = 60
     edge_margin_px: int = 4
 
+    # The box grows as the eye-in-hand camera approaches the port.
     min_width_px: int = 12
-    max_width_px: int = 45
-    min_height_px: int = 12
-    max_height_px: int = 40
+    max_width_px: int = 80
+    min_height_px: int = 10
+    max_height_px: int = 70
     min_aspect_ratio: float = 0.65
     max_aspect_ratio: float = 1.80
     min_area_px: int = 100
-    max_area_px: int = 1200
+    max_area_px: int = 5000
     min_fill_ratio: float = 0.35
 
-    # Shape ranking is deliberately independent of image position. The
-    # winner is the geometry-valid candidate closest to this RJ45 silhouette.
+    # RGB-only replacement for the old depth validation: the dark cavity
+    # must sit inside a noticeably brighter bezel/surround.
+    surround_ring_px: int = 6
+    min_surround_mean_gray: float = 90.0
+    min_surround_contrast_gray: float = 25.0
+
     target_aspect_ratio: float = 1.22
     target_fill_ratio: float = 0.63
     aspect_score_tolerance: float = 0.55
@@ -94,44 +95,37 @@ class PerceptionConfig:
     fill_score_weight: float = 0.30
     min_shape_score: float = 0.25
 
-    depth_patch_size_px: int = 11
-    opening_ring_width_px: int = 4
-    min_valid_ring_pixels: int = 80
-    # Full-screen false positives must pass the same physical checks as
-    # the known port before they are allowed to compete on shape.
-    min_recess_depth_m: float = 0.010
-    max_recess_depth_m: float = 0.016
+    # Calibrated dark-cavity dimensions for the rack asset. These are the
+    # only metric assumptions used by the RGB-only range estimate.
+    port_width_m: float = 0.0114
+    port_height_m: float = 0.0070
+    min_estimated_range_m: float = 0.08
+    max_estimated_range_m: float = 0.35
 
-    plane_mad_scale: float = 3.0
-    plane_min_depth_tolerance_m: float = 0.0005
-    plane_min_inlier_points: int = 100
-    plane_max_rms_residual_m: float = 0.00075
-    plane_max_camera_angle_deg: float = 8.0
-
-    preinsert_standoff_m: float = 0.050
+    # Once acquired, prefer image continuity over an unrelated blob with a
+    # slightly better single-frame shape score.
+    tracking_max_center_jump_px: float = 45.0
+    tracking_max_scale_ratio: float = 1.35
+    tracking_center_penalty: float = 0.35
+    tracking_scale_penalty: float = 0.25
 
 
 @dataclass(frozen=True)
 class IKConfig:
-    # Lula still solves this stable kinematic frame internally.
     end_effector_frame: str = "panda_hand"
 
-    # The draggable target now represents the virtual center between the
-    # fingers, not panda_hand itself.
     target_path: str = "/World/IK_Target"
     target_name: str = "ik_target"
     target_scale: float = 0.08
     target_visible: bool = False
     select_target_on_start: bool = False
 
-    # Frame showing the tool center actually achieved by the robot.
     actual_tool_path: str = "/World/ToolCenter"
     actual_tool_name: str = "tool_center"
     actual_tool_scale: float = 0.05
     actual_tool_visible: bool = False
 
-    # Nominal Franka hand TCP: 103.4 mm along panda_hand local +Z.
-    # This is the grasp/insertion center between the two fingers.
+    # Center between the fingers, 103.4 mm along panda_hand local +Z.
     tool_center_local_position_m: tuple[float, float, float] = (
         0.0,
         0.0,
@@ -142,16 +136,8 @@ class IKConfig:
         float,
         float,
         float,
-    ] = (
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-    )
+    ] = (1.0, 0.0, 0.0, 0.0)
 
-    # These values remain the approved panda_hand observation pose.
-    # The startup IK target is derived from this hand pose so the robot does
-    # not jump when target semantics change from hand to tool center.
     use_fixed_start_pose: bool = True
     initial_position: tuple[float, float, float] = (
         0.9000,
@@ -174,16 +160,9 @@ class IKConfig:
 
 @dataclass(frozen=True)
 class DriveTuningConfig:
-    """
-    Tighten only the seven Franka arm position drives.
-
-    A 4x stiffness increase should reduce the static position bias by
-    roughly the same factor. Damping is scaled by sqrt(4)=2 to preserve
-    approximately the same damping ratio instead of making the arm ring.
-    """
+    """Simulation accuracy settings for the seven Franka arm joints."""
 
     enabled: bool = True
-
     arm_joint_names: tuple[str, ...] = (
         "panda_joint1",
         "panda_joint2",
@@ -193,54 +172,59 @@ class DriveTuningConfig:
         "panda_joint6",
         "panda_joint7",
     )
-
     stiffness_multiplier: float = 4.0
     damping_multiplier: float = 2.0
-
-    # Simulation-only accuracy mode. Disabling gravity on the Franka links
-    # removes the static load that made the position drives settle slightly
-    # away from the IK joint targets. Scene objects keep normal gravity.
     disable_gravity_on_franka: bool = True
 
 
 @dataclass(frozen=True)
-class AutoPreinsertConfig:
-    """Quality gates and timing for the one-shot automatic move."""
+class VisualServoConfig:
+    """Continuous RGB feedback for translation-only pre-insert alignment."""
 
     enabled: bool = True
-    required_stable_samples: int = 5
-    max_sample_spread_m: float = 0.002
+    preinsert_standoff_m: float = 0.050
 
-    move_duration_s: float = 3.0
+    # Do not start perception while the arm/camera is still moving to its
+    # fixed startup pose.
+    startup_settle_tolerance_m: float = 0.0005
+    required_startup_settled_frames: int = 15
 
-    # The interpolated target move is not "complete" until the actual
-    # virtual ToolCenter stays within this distance for several frames.
-    settle_position_tolerance_m: float = 0.0001
+    # Require a short stable image track before the robot is allowed to move.
+    required_acquisition_samples: int = 3
+    max_acquisition_center_spread_px: float = 8.0
+    max_acquisition_scale_spread_ratio: float = 0.12
+    max_consecutive_misses: int = 3
+
+    # Stop-and-look visual servo: issue one small correction, wait until the
+    # ToolCenter reaches that target, then capture the next control image.
+    control_gain: float = 0.35
+    max_target_step_m: float = 0.001
+    target_settle_tolerance_m: float = 0.0005
+
+    # Visual alignment is intentionally looser than physical articulation
+    # tracking because the detected box size is quantized in whole pixels.
+    center_tolerance_px: float = 2.0
+    range_tolerance_m: float = 0.003
+    required_aligned_captures: int = 5
+
+    # The measured physical tracking floor at this pose is about 0.22 mm.
+    # A 0.30 mm gate remains far smaller than the RGB range uncertainty.
+    settle_position_tolerance_m: float = 0.0003
     required_settled_frames: int = 30
     settle_warning_timeout_s: float = 8.0
 
-    freeze_perception_after_latch: bool = True
+    freeze_after_complete: bool = True
 
 
 @dataclass(frozen=True)
 class DebugConfig:
-    cavity_marker_path: str = "/World/DetectedPortPoint"
-    cavity_marker_radius_m: float = 0.006
-    cavity_marker_color: tuple[float, float, float] = (0.0, 1.0, 0.0)
-
-    opening_marker_path: str = "/World/PortOpeningCenter"
-    opening_marker_radius_m: float = 0.007
-    opening_marker_color: tuple[float, float, float] = (0.0, 1.0, 1.0)
-
-    normal_root_path: str = "/World/PortApproachNormal"
-    normal_shaft_radius_m: float = 0.0025
-    normal_tip_radius_m: float = 0.006
-    normal_tip_length_m: float = 0.012
-    normal_color: tuple[float, float, float] = (1.0, 0.5, 0.0)
-
-    preinsert_marker_path: str = "/World/PreInsertPoint"
-    preinsert_marker_radius_m: float = 0.008
-    preinsert_marker_color: tuple[float, float, float] = (1.0, 0.0, 1.0)
+    estimated_port_marker_path: str = "/World/EstimatedPortPoint"
+    estimated_port_marker_radius_m: float = 0.006
+    estimated_port_marker_color: tuple[float, float, float] = (
+        0.0,
+        1.0,
+        0.0,
+    )
 
     crosshair_half_length_px: int = 14
     crosshair_width_px: int = 2
@@ -256,8 +240,8 @@ class Config:
     drive_tuning: DriveTuningConfig = field(
         default_factory=DriveTuningConfig
     )
-    auto_preinsert: AutoPreinsertConfig = field(
-        default_factory=AutoPreinsertConfig
+    visual_servo: VisualServoConfig = field(
+        default_factory=VisualServoConfig
     )
     debug: DebugConfig = field(default_factory=DebugConfig)
 

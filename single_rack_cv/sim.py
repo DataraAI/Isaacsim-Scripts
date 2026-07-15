@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isaac Sim scene, hand-camera, RGB-D capture, and draggable Lula IK."""
+"""Isaac Sim scene, RGB eye-in-hand capture, visual servo, and Lula IK."""
 
 from __future__ import annotations
 
@@ -31,8 +31,10 @@ from config import Config
 from perception import (
     CameraFrame,
     CameraModel,
-    PortEstimate,
-    normalize_depth,
+    PortDetection,
+    PortObservation,
+    compute_bounded_step,
+    compute_desired_port_camera_usd,
     normalize_rgb,
 )
 
@@ -243,12 +245,6 @@ def tool_pose_to_hand_pose(
     return hand_position, hand_orientation
 
 
-def smoothstep01(progress: float) -> float:
-    """Clamp progress to [0, 1] and apply cubic smoothstep."""
-    t = min(1.0, max(0.0, float(progress)))
-    return t * t * (3.0 - 2.0 * t)
-
-
 def update_convergence_counter(
     position_error_m: float,
     tolerance_m: float,
@@ -265,86 +261,44 @@ def update_convergence_counter(
     if current_count < 0:
         raise ValueError("current_count must be nonnegative.")
 
-    if error <= tolerance:
-        return current_count + 1
-
-    return 0
+    return current_count + 1 if error <= tolerance else 0
 
 
-@dataclass
-class StablePreinsertLatch:
-    """Latch the median of one stable window of 3D target samples."""
+def target_is_settled(
+    position_error_m: float,
+    tolerance_m: float,
+) -> bool:
+    """Return whether a physical ToolCenter target is ready for the next step."""
+    error = float(position_error_m)
+    tolerance = float(tolerance_m)
 
-    required_samples: int
-    max_spread_m: float
-    samples: list[np.ndarray] = field(default_factory=list)
+    if not math.isfinite(error) or error < 0.0:
+        raise ValueError("position_error_m must be finite and nonnegative.")
+    if not math.isfinite(tolerance) or tolerance <= 0.0:
+        raise ValueError("tolerance_m must be finite and positive.")
 
-    def __post_init__(self) -> None:
-        if self.required_samples <= 0:
-            raise ValueError("required_samples must be positive.")
-        if self.max_spread_m <= 0.0:
-            raise ValueError("max_spread_m must be positive.")
-
-    def reset(self) -> None:
-        self.samples.clear()
-
-    def add(
-        self,
-        point_m: np.ndarray,
-    ) -> tuple[bool, np.ndarray | None, float]:
-        """
-        Add one point and return (latched, median_target, max_spread).
-
-        The window contains only the most recent required_samples points.
-        """
-        point = np.asarray(point_m, dtype=np.float64)
-
-        if point.shape != (3,) or not np.all(np.isfinite(point)):
-            raise ValueError("Pre-insert point must be a finite 3-vector.")
-
-        self.samples.append(point.copy())
-
-        if len(self.samples) > self.required_samples:
-            self.samples.pop(0)
-
-        if len(self.samples) < self.required_samples:
-            return False, None, math.inf
-
-        stacked = np.vstack(self.samples)
-        median = np.median(stacked, axis=0)
-        spread = float(
-            np.max(
-                np.linalg.norm(
-                    stacked - median,
-                    axis=1,
-                )
-            )
-        )
-
-        if spread > self.max_spread_m:
-            return False, None, spread
-
-        return True, median.astype(np.float64), spread
+    return error <= tolerance
 
 
 @dataclass
-class AutoPreinsertState:
-    latch: StablePreinsertLatch
-    target_latched: bool = False
-    perception_frozen: bool = False
-    moving: bool = False
-    settling: bool = False
+class VisualServoState:
+    """Minimal state for RGB acquisition, tracking, and final settling."""
+
+    startup_ready: bool = False
+    startup_settled_frame_count: int = 0
+
+    reference: PortDetection | None = None
+    acquisition_features: list[np.ndarray] = field(default_factory=list)
+    acquired: bool = False
+    consecutive_misses: int = 0
+
+    aligned_capture_count: int = 0
+    visual_aligned: bool = False
     complete: bool = False
 
-    start_frame: int = 0
-    duration_frames: int = 1
-    settle_start_frame: int = 0
     settled_frame_count: int = 0
+    settle_start_frame: int = 0
     settle_timeout_reported: bool = False
-
-    start_position_m: np.ndarray | None = None
-    target_position_m: np.ndarray | None = None
-    held_orientation_wxyz: np.ndarray | None = None
 
 
 @dataclass
@@ -371,12 +325,9 @@ class SimulationRuntime:
         self.camera_sensor: CameraSensor | None = None
         self.ik: IKRuntime | None = None
 
-        auto_cfg = cfg.auto_preinsert
-        self.auto_preinsert = AutoPreinsertState(
-            latch=StablePreinsertLatch(
-                required_samples=auto_cfg.required_stable_samples,
-                max_spread_m=auto_cfg.max_sample_spread_m,
-            )
+        self.visual_servo = VisualServoState()
+        self.desired_port_camera_usd = (
+            self._compute_desired_port_camera_usd()
         )
 
         self._build_scene()
@@ -393,205 +344,298 @@ class SimulationRuntime:
         self.frame_index += 1
 
     def capture_due(self) -> bool:
-        auto_cfg = self.cfg.auto_preinsert
+        """
+        Capture only when the camera is physically stationary enough to use.
 
-        if (
-            auto_cfg.freeze_perception_after_latch
-            and self.auto_preinsert.perception_frozen
-        ):
+        This creates a simple stop-and-look controller: one RGB correction is
+        issued, the arm settles to that target, then the next control image is
+        captured. It prevents stale images from stacking unfinished commands.
+        """
+        cfg = self.cfg.visual_servo
+        state = self.visual_servo
+
+        if cfg.freeze_after_complete and state.complete:
             return False
+
+        # Once the image target is locked, freeze perception and let the arm
+        # settle onto the final fixed target without further visual jitter.
+        if state.visual_aligned:
+            return False
+
+        if not state.startup_ready:
+            self._update_startup_settle()
+            return False
+
+        if state.acquired:
+            position_error_m = self._tool_target_position_error_m()
+
+            if not target_is_settled(
+                position_error_m,
+                cfg.target_settle_tolerance_m,
+            ):
+                return False
 
         interval = self.cfg.camera.capture_every_sim_frames
         return self.frame_index > 0 and self.frame_index % interval == 0
 
-    def note_perception_failure(self) -> None:
-        """Require stable samples to be consecutive by clearing on failure."""
-        state = self.auto_preinsert
+    def _tool_target_position_error_m(self) -> float:
+        """Measure actual ToolCenter-to-current-target position error."""
+        if self.ik is None:
+            return math.inf
 
-        if state.target_latched or not state.latch.samples:
+        self._update_actual_tool_frame(self.ik)
+        target_position, _ = self.ik.target.get_world_pose()
+        actual_position, _ = self.ik.actual_tool.get_world_pose()
+
+        target = np.asarray(target_position, dtype=np.float64)
+        actual = np.asarray(actual_position, dtype=np.float64)
+
+        return float(np.linalg.norm(actual - target))
+
+    def _update_startup_settle(self) -> None:
+        """Wait for a stationary eye-in-hand camera before RGB acquisition."""
+        state = self.visual_servo
+        cfg = self.cfg.visual_servo
+
+        if state.startup_ready or self.ik is None:
             return
 
-        state.latch.reset()
-        log("Auto pre-insert sample window reset after perception failure.")
+        position_error_m = self._tool_target_position_error_m()
 
-    def observe_preinsert_estimate(
-        self,
-        estimate: PortEstimate,
-    ) -> bool:
-        """
-        Validate and accumulate one estimate; latch and start one move.
-
-        Returns True only on the frame where the automatic target is latched.
-        """
-        cfg = self.cfg.auto_preinsert
-        state = self.auto_preinsert
-
-        if not cfg.enabled or state.target_latched:
-            return False
-
-        latched, target_position, spread = state.latch.add(
-            estimate.preinsert_world_xyz_m
+        state.startup_settled_frame_count = update_convergence_counter(
+            position_error_m=position_error_m,
+            tolerance_m=cfg.startup_settle_tolerance_m,
+            current_count=state.startup_settled_frame_count,
         )
-
-        sample_count = len(state.latch.samples)
-
-        log(
-            "Auto pre-insert sample "
-            f"{sample_count}/{cfg.required_stable_samples}: "
-            f"point={np.round(estimate.preinsert_world_xyz_m, 5).tolist()}"
-        )
-
-        if not latched or target_position is None:
-            if math.isfinite(spread):
-                log(
-                    "Auto pre-insert window spread: "
-                    f"{spread * 1000.0:.3f} mm "
-                    f"(limit {cfg.max_sample_spread_m * 1000.0:.3f} mm)"
-                )
-            return False
-
-        if self.ik is None:
-            raise RuntimeError("Cannot start automatic motion before IK exists.")
-
-        current_position, current_orientation = (
-            self.ik.target.get_world_pose()
-        )
-
-        duration_frames = max(
-            1,
-            int(round(cfg.move_duration_s / self.cfg.scene.physics_dt)),
-        )
-
-        state.target_latched = True
-        state.perception_frozen = cfg.freeze_perception_after_latch
-        state.moving = True
-        state.settling = False
-        state.complete = False
-        state.start_frame = self.frame_index
-        state.duration_frames = duration_frames
-        state.settle_start_frame = 0
-        state.settled_frame_count = 0
-        state.settle_timeout_reported = False
-        state.start_position_m = np.asarray(
-            current_position,
-            dtype=np.float64,
-        ).copy()
-        state.target_position_m = np.asarray(
-            target_position,
-            dtype=np.float64,
-        ).copy()
-        state.held_orientation_wxyz = _normalize_quaternion_wxyz(
-            np.asarray(
-                current_orientation,
-                dtype=np.float64,
-            )
-        )
-
-        log(
-            "AUTO PRE-INSERT TARGET LATCHED\n"
-            f"  samples:      {cfg.required_stable_samples}\n"
-            f"  max spread:   {spread * 1000.0:.3f} mm\n"
-            f"  start:        "
-            f"{np.round(state.start_position_m, 5).tolist()}\n"
-            f"  target:       "
-            f"{np.round(state.target_position_m, 5).tolist()}\n"
-            f"  move duration:{cfg.move_duration_s:.2f} s\n"
-            f"  perception:   "
-            f"{'frozen' if state.perception_frozen else 'running'}"
-        )
-
-        return True
-
-    def update_auto_preinsert_motion(self) -> None:
-        """
-        Move the desired tool target, then wait for the actual ToolCenter.
-
-        The target endpoint never moves backward to meet the robot. Lula keeps
-        solving the fixed endpoint until the achieved ToolCenter is inside the
-        configured tolerance for the required number of consecutive frames.
-        """
-        state = self.auto_preinsert
-        cfg = self.cfg.auto_preinsert
-
-        if not state.moving and not state.settling:
-            return
-
-        if self.ik is None:
-            raise RuntimeError("Automatic motion requires initialized IK.")
 
         if (
-            state.start_position_m is None
-            or state.target_position_m is None
-            or state.held_orientation_wxyz is None
+            state.startup_settled_frame_count
+            < cfg.required_startup_settled_frames
         ):
-            raise RuntimeError("Automatic motion state is incomplete.")
-
-        if state.moving:
-            elapsed = max(0, self.frame_index - state.start_frame)
-            progress = min(1.0, elapsed / state.duration_frames)
-            blend = smoothstep01(progress)
-
-            target_position = (
-                state.start_position_m
-                + blend
-                * (
-                    state.target_position_m
-                    - state.start_position_m
-                )
-            )
-
-            self.ik.target.set_world_pose(
-                position=target_position,
-                orientation=state.held_orientation_wxyz,
-            )
-
-            if progress < 1.0:
-                return
-
-            # Hold the exact detected endpoint throughout convergence.
-            self.ik.target.set_world_pose(
-                position=state.target_position_m,
-                orientation=state.held_orientation_wxyz,
-            )
-
-            state.moving = False
-            state.settling = True
-            state.complete = False
-            state.settle_start_frame = self.frame_index
-            state.settled_frame_count = 0
-            state.settle_timeout_reported = False
-
-            log(
-                "AUTO PRE-INSERT TARGET MOTION FINISHED\n"
-                f"  fixed tool target: "
-                f"{np.round(state.target_position_m, 5).tolist()}\n"
-                f"  convergence tolerance: "
-                f"{cfg.settle_position_tolerance_m * 1000.0:.3f} mm\n"
-                f"  required settled frames: "
-                f"{cfg.required_settled_frames}"
-            )
-
             return
 
-        # Settling phase: never move the desired target away from its exact
-        # endpoint. Only the robot is allowed to converge toward it.
-        self.ik.target.set_world_pose(
-            position=state.target_position_m,
-            orientation=state.held_orientation_wxyz,
+        state.startup_ready = True
+
+        log(
+            "RGB VISUAL SERVO STARTUP SETTLED\n"
+            f"  ToolCenter error: {position_error_m * 1000.0:.3f} mm\n"
+            f"  stable frames: {state.startup_settled_frame_count}/"
+            f"{cfg.required_startup_settled_frames}\n"
+            "  next action: begin RGB acquisition"
         )
 
-        actual_tool_position, _ = self.ik.actual_tool.get_world_pose()
-        actual_tool_position = np.asarray(
-            actual_tool_position,
+    def visual_servo_reference(self) -> PortDetection | None:
+        """Return the previous image-space detection for continuity tracking."""
+        return self.visual_servo.reference
+
+    def note_perception_failure(self) -> None:
+        """Hold position on a missed frame and reacquire after repeated misses."""
+        state = self.visual_servo
+        cfg = self.cfg.visual_servo
+
+        if state.complete:
+            return
+
+        state.consecutive_misses += 1
+        state.aligned_capture_count = 0
+        state.visual_aligned = False
+        state.settled_frame_count = 0
+        state.settle_timeout_reported = False
+
+        if state.consecutive_misses < cfg.max_consecutive_misses:
+            return
+
+        had_track = state.reference is not None or state.acquired
+        state.reference = None
+        state.acquisition_features.clear()
+        state.acquired = False
+        state.consecutive_misses = 0
+
+        if had_track:
+            log("RGB visual track lost; holding position and reacquiring.")
+
+    def observe_visual_servo(
+        self,
+        observation: PortObservation,
+    ) -> None:
+        """Apply one small translation-only ToolCenter correction from RGB."""
+        cfg = self.cfg.visual_servo
+        state = self.visual_servo
+
+        if not cfg.enabled or state.complete:
+            return
+        if self.ik is None:
+            raise RuntimeError("Visual servo requires initialized IK.")
+
+        state.reference = observation.detection
+        state.consecutive_misses = 0
+
+        if not state.acquired:
+            self._update_visual_acquisition(observation)
+            if not state.acquired:
+                return
+
+        center_error_px = float(
+            np.linalg.norm(observation.center_error_px)
+        )
+        range_error_m = abs(float(observation.range_error_m))
+
+        visually_aligned = (
+            center_error_px <= cfg.center_tolerance_px
+            and range_error_m <= cfg.range_tolerance_m
+        )
+
+        if visually_aligned:
+            state.aligned_capture_count += 1
+
+            if (
+                state.aligned_capture_count
+                >= cfg.required_aligned_captures
+                and not state.visual_aligned
+            ):
+                state.visual_aligned = True
+                state.settled_frame_count = 0
+                state.settle_start_frame = self.frame_index
+                state.settle_timeout_reported = False
+
+                log(
+                    "RGB VISUAL ALIGNMENT LOCKED\n"
+                    f"  center error: {center_error_px:.3f} px\n"
+                    f"  range error: {range_error_m * 1000.0:.3f} mm\n"
+                    f"  aligned captures: "
+                    f"{state.aligned_capture_count}/"
+                    f"{cfg.required_aligned_captures}"
+                )
+            return
+
+        state.aligned_capture_count = 0
+        state.visual_aligned = False
+        state.settled_frame_count = 0
+        state.settle_timeout_reported = False
+
+        self._update_actual_tool_frame(self.ik)
+        target_position, target_orientation = self.ik.target.get_world_pose()
+        actual_position, _ = self.ik.actual_tool.get_world_pose()
+
+        target_position = np.asarray(target_position, dtype=np.float64)
+        actual_position = np.asarray(actual_position, dtype=np.float64)
+        target_lead_m = float(
+            np.linalg.norm(target_position - actual_position)
+        )
+
+        if not target_is_settled(
+            target_lead_m,
+            cfg.target_settle_tolerance_m,
+        ):
+            return
+
+        step_world_m = compute_bounded_step(
+            correction_world_m=observation.correction_world_m,
+            gain=cfg.control_gain,
+            max_step_m=cfg.max_target_step_m,
+        )
+
+        self.ik.target.set_world_pose(
+            position=target_position + step_world_m,
+            orientation=target_orientation,
+        )
+
+    def _update_visual_acquisition(
+        self,
+        observation: PortObservation,
+    ) -> None:
+        """Require a short stable image track before allowing motion."""
+        state = self.visual_servo
+        cfg = self.cfg.visual_servo
+        detection = observation.detection
+
+        feature = np.array(
+            [
+                detection.center_uv[0],
+                detection.center_uv[1],
+                math.log(detection.scale_px),
+            ],
             dtype=np.float64,
         )
+        state.acquisition_features.append(feature)
 
-        position_error_m = float(
-            np.linalg.norm(
-                actual_tool_position
-                - state.target_position_m
+        if (
+            len(state.acquisition_features)
+            > cfg.required_acquisition_samples
+        ):
+            state.acquisition_features.pop(0)
+
+        count = len(state.acquisition_features)
+        if count < cfg.required_acquisition_samples:
+            log(
+                "RGB visual acquisition "
+                f"{count}/{cfg.required_acquisition_samples}: "
+                f"pixel={tuple(round(value, 1) for value in detection.center_uv)}"
+            )
+            return
+
+        samples = np.vstack(state.acquisition_features)
+        center_median = np.median(samples[:, :2], axis=0)
+        center_spread_px = float(
+            np.max(
+                np.linalg.norm(
+                    samples[:, :2] - center_median,
+                    axis=1,
+                )
             )
         )
+        log_scale_median = float(np.median(samples[:, 2]))
+        scale_spread_ratio = float(
+            np.max(
+                np.exp(
+                    np.abs(samples[:, 2] - log_scale_median)
+                )
+                - 1.0
+            )
+        )
+
+        stable = (
+            center_spread_px
+            <= cfg.max_acquisition_center_spread_px
+            and scale_spread_ratio
+            <= cfg.max_acquisition_scale_spread_ratio
+        )
+
+        if not stable:
+            log(
+                "RGB visual acquisition not stable: "
+                f"center spread={center_spread_px:.2f} px, "
+                f"scale spread={scale_spread_ratio * 100.0:.1f}%"
+            )
+            return
+
+        state.acquired = True
+        state.acquisition_features.clear()
+
+        log(
+            "RGB VISUAL TRACK ACQUIRED\n"
+            f"  center spread: {center_spread_px:.3f} px\n"
+            f"  scale spread: {scale_spread_ratio * 100.0:.3f}%\n"
+            "  controller: bounded translation-only feedback"
+        )
+
+    def update_visual_servo_completion(self) -> None:
+        """Verify that the actual ToolCenter reaches the final visual target."""
+        state = self.visual_servo
+        cfg = self.cfg.visual_servo
+
+        if not state.visual_aligned or state.complete:
+            return
+        if self.ik is None:
+            return
+
+        self._update_actual_tool_frame(self.ik)
+        target_position, _ = self.ik.target.get_world_pose()
+        actual_position, _ = self.ik.actual_tool.get_world_pose()
+
+        target_position = np.asarray(target_position, dtype=np.float64)
+        actual_position = np.asarray(actual_position, dtype=np.float64)
+        position_error_m = self._tool_target_position_error_m()
 
         state.settled_frame_count = update_convergence_counter(
             position_error_m=position_error_m,
@@ -600,23 +644,21 @@ class SimulationRuntime:
         )
 
         if state.settled_frame_count >= cfg.required_settled_frames:
-            state.settling = False
             state.complete = True
 
             log(
-                "AUTO PRE-INSERT CONVERGED\n"
-                f"  target tool center: "
-                f"{np.round(state.target_position_m, 6).tolist()}\n"
-                f"  actual tool center: "
-                f"{np.round(actual_tool_position, 6).tolist()}\n"
-                f"  final position error: "
+                "RGB VISUAL SERVO COMPLETE\n"
+                f"  final ToolCenter target: "
+                f"{np.round(target_position, 6).tolist()}\n"
+                f"  actual ToolCenter: "
+                f"{np.round(actual_position, 6).tolist()}\n"
+                f"  physical tracking error: "
                 f"{position_error_m * 1000.0:.3f} mm\n"
                 f"  settled frames: "
                 f"{state.settled_frame_count}/"
                 f"{cfg.required_settled_frames}\n"
                 "  next action: hold; no insertion is commanded."
             )
-
             return
 
         timeout_frames = max(
@@ -629,26 +671,70 @@ class SimulationRuntime:
             ),
         )
 
-        settle_elapsed_frames = (
-            self.frame_index
-            - state.settle_start_frame
-        )
-
         if (
-            settle_elapsed_frames >= timeout_frames
+            self.frame_index - state.settle_start_frame
+            >= timeout_frames
             and not state.settle_timeout_reported
         ):
             state.settle_timeout_reported = True
-
             warn(
-                "ToolCenter has not converged within the warning timeout. "
-                "The target remains fixed and IK will keep trying.\n"
-                f"  current position error: "
+                "RGB alignment is stable, but ToolCenter has not settled "
+                "within the warning timeout.\n"
+                f"  current physical error: "
                 f"{position_error_m * 1000.0:.3f} mm\n"
                 f"  required: "
                 f"{cfg.settle_position_tolerance_m * 1000.0:.3f} mm"
             )
 
+    def _compute_desired_port_camera_usd(self) -> np.ndarray:
+        """Return the port point seen by the camera at the desired standoff."""
+        camera_cfg = self.cfg.camera
+        ik_cfg = self.cfg.ik
+        servo_cfg = self.cfg.visual_servo
+
+        y_quat = Gf.Rotation(
+            Gf.Vec3d(0.0, 1.0, 0.0),
+            camera_cfg.local_y_rotation_deg,
+        ).GetQuat()
+        roll_quat = Gf.Rotation(
+            Gf.Vec3d(0.0, 0.0, 1.0),
+            camera_cfg.local_roll_deg,
+        ).GetQuat()
+        camera_quat = y_quat * roll_quat
+        camera_imag = camera_quat.GetImaginary()
+        camera_orientation_wxyz = np.array(
+            [
+                camera_quat.GetReal(),
+                camera_imag[0],
+                camera_imag[1],
+                camera_imag[2],
+            ],
+            dtype=np.float64,
+        )
+
+        hand_from_camera = quaternion_wxyz_to_matrix(
+            camera_orientation_wxyz
+        )
+        hand_from_tool = quaternion_wxyz_to_matrix(
+            np.asarray(
+                ik_cfg.tool_center_local_orientation_wxyz,
+                dtype=np.float64,
+            )
+        )
+
+        return compute_desired_port_camera_usd(
+            camera_position_hand_m=np.asarray(
+                camera_cfg.local_position,
+                dtype=np.float64,
+            ),
+            hand_from_camera=hand_from_camera,
+            tool_center_position_hand_m=np.asarray(
+                ik_cfg.tool_center_local_position_m,
+                dtype=np.float64,
+            ),
+            hand_from_tool=hand_from_tool,
+            preinsert_standoff_m=servo_cfg.preinsert_standoff_m,
+        )
 
     def update_ik(self) -> None:
         """
@@ -756,20 +842,13 @@ class SimulationRuntime:
         )
 
     def capture(self) -> CameraFrame:
+        """Capture one RGB frame and the current camera calibration/pose."""
         if self.camera_sensor is None:
             raise RuntimeError("CameraSensor is not initialized.")
 
         rgb_data, _ = self.camera_sensor.get_data("rgb")
-        depth_data, _ = self.camera_sensor.get_data(
-            "distance_to_image_plane"
-        )
-
         rgb = normalize_rgb(
             self._sensor_to_numpy(rgb_data, "rgb"),
-            self.cfg.camera.resolution,
-        )
-        depth_m = normalize_depth(
-            self._sensor_to_numpy(depth_data, "depth"),
             self.cfg.camera.resolution,
         )
 
@@ -799,11 +878,7 @@ class SimulationRuntime:
             ),
         )
 
-        return CameraFrame(
-            rgb=rgb,
-            depth_m=depth_m,
-            camera=model,
-        )
+        return CameraFrame(rgb=rgb, camera=model)
 
     def stop(self) -> None:
         try:
@@ -871,10 +946,7 @@ class SimulationRuntime:
         self.camera_sensor = CameraSensor(
             rtx_camera,
             resolution=self.cfg.camera.resolution,
-            annotators=[
-                "rgb",
-                "distance_to_image_plane",
-            ],
+            annotators=["rgb"],
         )
         self.cfg.camera.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -899,11 +971,15 @@ class SimulationRuntime:
             f"  Franka:     pos={scene.franka_position}, "
             f"yaw={scene.franka_yaw_deg}°\n"
             f"  hand camera:{self.camera_path}\n"
+            f"  sensor:     RGB only at "
+            f"{self.cfg.camera.tick_rate_hz:.1f} Hz\n"
             f"  tool target:{self.cfg.ik.target_path}\n"
             f"  actual tool:{self.cfg.ik.actual_tool_path}\n"
-            f"  auto move:  "
-            f"{self.cfg.auto_preinsert.required_stable_samples} stable "
-            f"samples, {self.cfg.auto_preinsert.move_duration_s:.1f} s"
+            f"  visual servo: "
+            f"{self.cfg.visual_servo.max_target_step_m * 1000.0:.1f} "
+            "mm max step, 50 mm pre-insert standoff\n"
+            f"  desired port in camera: "
+            f"{np.round(self.desired_port_camera_usd, 5).tolist()}"
         )
 
     def _create_hand_camera(self) -> tuple[str, RtxCamera]:
