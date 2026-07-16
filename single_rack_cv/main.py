@@ -172,7 +172,7 @@ try:
     )
 
     from debug import DebugOutputs
-    from perception import process_stereo_port
+    from perception import YOLOEPortDetector, process_stereo_port
     from sim import SimulationRuntime, warn
 
     runtime = SimulationRuntime(
@@ -180,6 +180,13 @@ try:
         cfg=CONFIG,
     )
     debug = DebugOutputs(CONFIG)
+    detector = YOLOEPortDetector(CONFIG.yoloe)
+    detector.initialize()
+    print(
+        "[YOLOE] Visual prompt initialized once; "
+        "full-frame stereo inference is active.",
+        flush=True,
+    )
 
     capture_index = 0
 
@@ -211,6 +218,7 @@ try:
                 ),
                 previous_left=previous_left,
                 previous_right=previous_right,
+                detector=detector,
             )
             runtime.observe_visual_servo(observation)
             debug.handle(

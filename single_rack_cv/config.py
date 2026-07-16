@@ -79,69 +79,106 @@ class CameraConfig:
     output_dir: Path = Path(__file__).resolve().parent / "camera_output"
 
 
+
+
+@dataclass(frozen=True)
+class YOLOEConfig:
+    """One-time multiscale visual prompt plus full-frame stereo inference."""
+
+    enabled: bool = True
+
+    # Use the large checkpoint because the runtime port is only about 25-30 px
+    # wide in the original 640x480 eye images.
+    model_name: str = "yoloe-26l-seg.pt"
+    reference_image_path: Path = (
+        Path(__file__).resolve().parent
+        / "yoloe_reference_port_atlas.png"
+    )
+
+    # Five tight views of the same dark RJ45 cavity at different scales.
+    # Repeating class ID 0 tells YOLOE these are examples of one class.
+    reference_boxes_xyxy: tuple[
+        tuple[float, float, float, float],
+        ...,
+    ] = (
+        (58.0, 70.0, 175.0, 165.0),
+        (271.6, 85.1, 353.5, 151.6),
+        (434.0, 95.5, 492.5, 143.0),
+        (558.3, 102.55, 599.25, 135.8),
+        (659.5, 107.25, 688.75, 131.0),
+    )
+    reference_class_ids: tuple[int, ...] = (0, 0, 0, 0, 0)
+
+    # Small-object inference. Confidence stays low because visual-prompt scores
+    # are not calibrated like a closed-set detector; stereo geometry and local
+    # cavity refinement reject false positives.
+    imgsz: int = 1280
+    confidence: float = 0.005
+    iou: float = 0.80
+    device: int | str = 0
+    quantize: int | str | None = 32
+    max_detections: int = 100
+    retina_masks: bool = False
+    verbose: bool = False
+
+    # Coarse YOLOE proposal limits before local cavity refinement.
+    min_proposal_area_px: int = 36
+    min_proposal_width_px: int = 6
+    min_proposal_height_px: int = 6
+    max_proposal_width_px: int = 180
+    max_proposal_height_px: int = 150
+
+    # YOLOE finds the object globally. These settings only refine the precise
+    # dark opening inside the YOLOE proposal for metric stereo measurement.
+    refine_expand_ratio: float = 0.35
+    refine_min_margin_px: int = 6
+    refine_percentiles: tuple[float, ...] = (
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+    )
+    refine_min_gray: int = 30
+    refine_max_gray: int = 95
+    refine_min_width_px: int = 8
+    refine_min_height_px: int = 8
+    refine_max_width_px: int = 140
+    refine_max_height_px: int = 110
+    refine_min_aspect_ratio: float = 0.85
+    refine_max_aspect_ratio: float = 2.10
+    refine_target_aspect_ratio: float = 1.50
+    refine_min_fill_ratio: float = 0.22
+    refine_max_fill_ratio: float = 1.00
+    refine_max_center_distance_ratio: float = 0.80
+    refine_morph_kernel_px: int = 3
+
+
 @dataclass(frozen=True)
 class PerceptionConfig:
-    """Strict per-eye RJ45 detection plus calibrated stereo geometry."""
+    """YOLOE instance pairing plus calibrated stereo geometry."""
 
-    roi_uv: tuple[int, int, int, int] | None = None
-    max_gray: int = 60
-    edge_margin_px: int = 4
-
-    # The box grows as the eye-in-hand camera approaches the port.
-    min_width_px: int = 12
-    max_width_px: int = 80
-    min_height_px: int = 10
-    max_height_px: int = 70
-    min_aspect_ratio: float = 0.65
-    max_aspect_ratio: float = 1.80
-    min_area_px: int = 100
-    max_area_px: int = 5000
-    min_fill_ratio: float = 0.35
-
-    # RGB-only replacement for the old depth validation: the dark cavity
-    # must sit inside a noticeably brighter bezel/surround.
-    surround_ring_px: int = 6
-    min_surround_mean_gray: float = 90.0
-    min_surround_contrast_gray: float = 25.0
-
-    target_aspect_ratio: float = 1.22
-    target_fill_ratio: float = 0.63
-    aspect_score_tolerance: float = 0.55
-    fill_score_tolerance: float = 0.35
-    aspect_score_weight: float = 0.70
-    fill_score_weight: float = 0.30
-    min_shape_score: float = 0.25
-
-    # Opening dimensions are validation bounds and overlay scale only.
-    # Stereo disparity, not known-size ranging, determines control depth.
+    # Physical dimensions validate a stereo pair and size the desired overlay.
+    # Disparity, not known-size ranging, determines control depth.
     port_width_m: float = 0.0114
     port_height_m: float = 0.0070
     min_estimated_range_m: float = 0.08
     max_estimated_range_m: float = 0.35
 
-
-    # Stereo matching and corner refinement.
-    stereo_corner_refine_window_px: int = 5
-    stereo_max_corner_refine_shift_px: float = 6.0
+    # Stereo matching and triangulated-center validation.
     stereo_max_epipolar_error_px: float = 3.0
     stereo_max_scale_ratio: float = 1.30
     stereo_min_abs_disparity_px: float = 4.0
     stereo_max_ray_gap_m: float = 0.0020
     stereo_max_reprojection_rms_px: float = 1.0
     stereo_max_reprojection_px: float = 2.0
-    stereo_max_plane_residual_m: float = 0.00075
     stereo_min_width_m: float = 0.008
     stereo_max_width_m: float = 0.015
     stereo_min_height_m: float = 0.005
     stereo_max_height_m: float = 0.010
-    stereo_max_opposite_edge_ratio: float = 1.20
 
-    # Once acquired, prefer image continuity over an unrelated blob with a
-    # slightly better single-frame shape score.
+    # Once acquired, reject YOLOE masks that jump to another rack feature.
     tracking_max_center_jump_px: float = 45.0
     tracking_max_scale_ratio: float = 1.35
-    tracking_center_penalty: float = 0.35
-    tracking_scale_penalty: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -267,6 +304,7 @@ class DebugConfig:
 @dataclass(frozen=True)
 class Config:
     app: AppConfig = field(default_factory=AppConfig)
+    yoloe: YOLOEConfig = field(default_factory=YOLOEConfig)
     scene: SceneConfig = field(default_factory=SceneConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
