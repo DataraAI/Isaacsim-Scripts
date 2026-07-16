@@ -8,8 +8,9 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+from PIL import Image
 
-from config import PerceptionConfig
+from config import PerceptionConfig, YOLOEConfig
 
 
 @dataclass(frozen=True)
@@ -181,7 +182,7 @@ class StereoPortObservation:
 
 
 # ---------------------------------------------------------------------------
-# Image normalization and strict per-eye candidate detection
+# Image normalization and YOLOE full-frame visual-prompt detection
 # ---------------------------------------------------------------------------
 
 
@@ -221,190 +222,528 @@ def normalize_rgb(
     return np.ascontiguousarray(rgb)
 
 
-def score_port_shape(
-    aspect_ratio: float,
-    fill_ratio: float,
-    cfg: PerceptionConfig,
-) -> float:
-    aspect_error = (
-        abs(aspect_ratio - cfg.target_aspect_ratio)
-        / cfg.target_aspect_ratio
-    )
-    fill_error = abs(fill_ratio - cfg.target_fill_ratio)
-    aspect_score = max(
-        0.0,
-        1.0 - aspect_error / cfg.aspect_score_tolerance,
-    )
-    fill_score = max(
-        0.0,
-        1.0 - fill_error / cfg.fill_score_tolerance,
-    )
-    weight_sum = cfg.aspect_score_weight + cfg.fill_score_weight
-    if weight_sum <= 0.0:
-        raise ValueError("Shape-score weights must sum to a positive value.")
-    return float(
-        (
-            cfg.aspect_score_weight * aspect_score
-            + cfg.fill_score_weight * fill_score
-        )
-        / weight_sum
-    )
+def _tensor_to_numpy(value) -> np.ndarray:
+    """Convert an Ultralytics/Torch result tensor or array to NumPy."""
+    if value is None:
+        return np.empty((0,), dtype=np.float32)
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value)
 
 
-def _has_bright_surround(
-    gray_roi: np.ndarray,
-    bbox_xywh: tuple[int, int, int, int],
-    cfg: PerceptionConfig,
+
+def _component_touches_border(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    image_width: int,
+    image_height: int,
 ) -> bool:
-    x, y, width, height = bbox_xywh
-    ring_width = cfg.surround_ring_px
-    image_height, image_width = gray_roi.shape
-    x0 = max(0, x - ring_width)
-    y0 = max(0, y - ring_width)
-    x1 = min(image_width, x + width + ring_width)
-    y1 = min(image_height, y + height + ring_width)
-    patch = gray_roi[y0:y1, x0:x1]
-    ring_mask = np.ones(patch.shape, dtype=bool)
-    inner_x0 = x - x0
-    inner_y0 = y - y0
-    ring_mask[
-        inner_y0:inner_y0 + height,
-        inner_x0:inner_x0 + width,
-    ] = False
-    surround = patch[ring_mask]
-    cavity = gray_roi[y:y + height, x:x + width]
-    if surround.size == 0 or cavity.size == 0:
-        return False
-    surround_mean = float(np.mean(surround))
-    cavity_mean = float(np.mean(cavity))
     return (
-        surround_mean >= cfg.min_surround_mean_gray
-        and surround_mean - cavity_mean
-        >= cfg.min_surround_contrast_gray
+        x <= 0
+        or y <= 0
+        or x + width >= image_width
+        or y + height >= image_height
     )
 
 
-def detect_port_candidates(
+def refine_detection_to_dark_cavity(
     rgb: np.ndarray,
-    cfg: PerceptionConfig,
-) -> list[PortDetection]:
-    if rgb.ndim != 3 or rgb.shape[2] != 3:
-        raise ValueError(f"Expected HxWx3 RGB, got {rgb.shape}.")
-    image_height, image_width = rgb.shape[:2]
-    if cfg.roi_uv is None:
-        u0, v0, u1, v1 = 0, 0, image_width, image_height
-    else:
-        u0, v0, u1, v1 = cfg.roi_uv
-    if not (
-        0 <= u0 < u1 <= image_width
-        and 0 <= v0 < v1 <= image_height
-    ):
-        raise ValueError(
-            f"Search area {(u0, v0, u1, v1)} is outside "
-            f"image {image_width}x{image_height}."
-        )
-    roi = rgb[v0:v1, u0:u1]
-    gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
-    binary = cv2.inRange(gray, 0, cfg.max_gray)
-    count, _, stats, centroids = cv2.connectedComponentsWithStats(
-        binary,
-        connectivity=8,
-    )
-    full_mask = np.zeros((image_height, image_width), dtype=np.uint8)
-    full_mask[v0:v1, u0:u1] = binary
-    candidates: list[PortDetection] = []
-    for index in range(1, count):
-        x, y, width, height, area = map(int, stats[index])
-        if width <= 0 or height <= 0:
-            continue
-        global_x = u0 + x
-        global_y = v0 + y
-        aspect_ratio = width / height
-        fill_ratio = area / (width * height)
-        touches_edge = (
-            global_x < cfg.edge_margin_px
-            or global_y < cfg.edge_margin_px
-            or global_x + width > image_width - cfg.edge_margin_px
-            or global_y + height > image_height - cfg.edge_margin_px
-        )
-        accepted = (
-            not touches_edge
-            and cfg.min_width_px <= width <= cfg.max_width_px
-            and cfg.min_height_px <= height <= cfg.max_height_px
-            and cfg.min_aspect_ratio <= aspect_ratio <= cfg.max_aspect_ratio
-            and cfg.min_area_px <= area <= cfg.max_area_px
-            and fill_ratio >= cfg.min_fill_ratio
-            and _has_bright_surround(gray, (x, y, width, height), cfg)
-        )
-        if not accepted:
-            continue
-        shape_score = score_port_shape(aspect_ratio, fill_ratio, cfg)
-        if shape_score < cfg.min_shape_score:
-            continue
-        local_center_u, local_center_v = centroids[index]
-        candidates.append(
-            PortDetection(
-                bbox_xywh=(global_x, global_y, width, height),
-                center_uv=(
-                    float(u0 + local_center_u),
-                    float(v0 + local_center_v),
-                ),
-                shape_score=shape_score,
-                roi_uv=(u0, v0, u1, v1),
-                mask=full_mask,
-            )
-        )
-    candidates.sort(key=lambda item: item.shape_score, reverse=True)
-    return candidates
-
-
-def select_port_candidate(
-    candidates: list[PortDetection],
-    previous: PortDetection | None,
-    cfg: PerceptionConfig,
+    coarse: PortDetection,
+    cfg: YOLOEConfig,
 ) -> PortDetection:
-    if not candidates:
-        raise RuntimeError("No RGB port candidate passed the shape filters.")
-    if previous is None:
-        return candidates[0]
-    previous_center = np.asarray(previous.center_uv, dtype=np.float64)
-    previous_scale = previous.scale_px
-    max_log_scale = math.log(cfg.tracking_max_scale_ratio)
-    tracked: list[tuple[float, PortDetection]] = []
-    for candidate in candidates:
-        center_distance = float(
-            np.linalg.norm(
-                np.asarray(candidate.center_uv, dtype=np.float64)
-                - previous_center
+    """Refine one semantic YOLOE proposal to the physical dark RJ45 opening.
+
+    YOLOE remains responsible for the full-frame object search. This function
+    only measures the dark cavity inside a returned proposal so stereo width,
+    height, and center refer to the opening rather than the white bezel.
+    """
+    rgb = np.asarray(rgb)
+    if rgb.ndim != 3 or rgb.shape[2] != 3:
+        raise ValueError(f"Expected HxWx3 RGB image, got {rgb.shape}.")
+
+    image_height, image_width = rgb.shape[:2]
+    x, y, width, height = map(int, coarse.bbox_xywh)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("YOLOE proposal has zero area.")
+
+    margin = max(
+        int(cfg.refine_min_margin_px),
+        int(round(cfg.refine_expand_ratio * max(width, height))),
+    )
+    crop_x0 = max(0, x - margin)
+    crop_y0 = max(0, y - margin)
+    crop_x1 = min(image_width, x + width + margin)
+    crop_y1 = min(image_height, y + height + margin)
+    if crop_x1 - crop_x0 < 3 or crop_y1 - crop_y0 < 3:
+        raise RuntimeError("YOLOE proposal is too close to the image boundary.")
+
+    crop_rgb = np.ascontiguousarray(
+        rgb[crop_y0:crop_y1, crop_x0:crop_x1]
+    )
+    gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0.0)
+
+    thresholds = []
+    for percentile in cfg.refine_percentiles:
+        value = int(round(float(np.percentile(gray, percentile))))
+        value = int(np.clip(
+            value,
+            cfg.refine_min_gray,
+            cfg.refine_max_gray,
+        ))
+        if value not in thresholds:
+            thresholds.append(value)
+
+    kernel_size = max(1, int(cfg.refine_morph_kernel_px))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+
+    coarse_center = np.asarray(coarse.center_uv, dtype=np.float64)
+    coarse_diagonal = max(
+        1.0,
+        math.hypot(float(width), float(height)),
+    )
+    coarse_area = max(1.0, float(width * height))
+
+    candidates: list[
+        tuple[float, tuple[int, int, int, int], np.ndarray]
+    ] = []
+    rejection_counts = {
+        "border": 0,
+        "size": 0,
+        "aspect": 0,
+        "fill": 0,
+        "center": 0,
+    }
+
+    for threshold in thresholds:
+        binary = np.where(gray <= threshold, 255, 0).astype(np.uint8)
+        binary = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_CLOSE,
+            kernel,
+            iterations=1,
+        )
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            binary,
+            connectivity=8,
+        )
+
+        for label_index in range(1, count):
+            local_x, local_y, candidate_width, candidate_height, area = map(
+                int,
+                stats[label_index],
             )
-        )
-        scale_ratio = max(
-            candidate.scale_px / previous_scale,
-            previous_scale / candidate.scale_px,
-        )
-        if center_distance > cfg.tracking_max_center_jump_px:
-            continue
-        if scale_ratio > cfg.tracking_max_scale_ratio:
-            continue
-        center_penalty = (
-            cfg.tracking_center_penalty
-            * center_distance
-            / cfg.tracking_max_center_jump_px
-        )
-        scale_penalty = (
-            cfg.tracking_scale_penalty
-            * abs(math.log(scale_ratio))
-            / max_log_scale
-        )
-        tracked.append(
-            (candidate.shape_score - center_penalty - scale_penalty, candidate)
-        )
-    if not tracked:
+            if _component_touches_border(
+                local_x,
+                local_y,
+                candidate_width,
+                candidate_height,
+                binary.shape[1],
+                binary.shape[0],
+            ):
+                rejection_counts["border"] += 1
+                continue
+            if not (
+                cfg.refine_min_width_px
+                <= candidate_width
+                <= cfg.refine_max_width_px
+                and cfg.refine_min_height_px
+                <= candidate_height
+                <= cfg.refine_max_height_px
+            ):
+                rejection_counts["size"] += 1
+                continue
+
+            aspect = candidate_width / max(1.0, float(candidate_height))
+            if not (
+                cfg.refine_min_aspect_ratio
+                <= aspect
+                <= cfg.refine_max_aspect_ratio
+            ):
+                rejection_counts["aspect"] += 1
+                continue
+
+            fill_ratio = area / max(
+                1.0,
+                float(candidate_width * candidate_height),
+            )
+            if not (
+                cfg.refine_min_fill_ratio
+                <= fill_ratio
+                <= cfg.refine_max_fill_ratio
+            ):
+                rejection_counts["fill"] += 1
+                continue
+
+            absolute_x = crop_x0 + local_x
+            absolute_y = crop_y0 + local_y
+            center = np.asarray(
+                [
+                    absolute_x + 0.5 * candidate_width,
+                    absolute_y + 0.5 * candidate_height,
+                ],
+                dtype=np.float64,
+            )
+            center_distance_ratio = (
+                float(np.linalg.norm(center - coarse_center))
+                / coarse_diagonal
+            )
+            if (
+                center_distance_ratio
+                > cfg.refine_max_center_distance_ratio
+            ):
+                rejection_counts["center"] += 1
+                continue
+
+            component_pixels = gray[labels == label_index]
+            mean_gray = (
+                float(np.mean(component_pixels))
+                if component_pixels.size
+                else 255.0
+            )
+            darkness_score = 1.0 - min(1.0, mean_gray / 255.0)
+            center_score = max(
+                0.0,
+                1.0
+                - center_distance_ratio
+                / max(1.0e-6, cfg.refine_max_center_distance_ratio),
+            )
+            aspect_score = math.exp(
+                -abs(
+                    math.log(
+                        max(1.0e-6, aspect)
+                        / cfg.refine_target_aspect_ratio
+                    )
+                )
+            )
+            fill_score = max(
+                0.0,
+                1.0 - abs(fill_ratio - 0.65) / 0.65,
+            )
+            area_ratio = (
+                candidate_width * candidate_height / coarse_area
+            )
+            size_score = math.exp(
+                -abs(math.log(max(1.0e-6, area_ratio) / 0.40))
+            )
+            score = (
+                0.33 * center_score
+                + 0.25 * aspect_score
+                + 0.17 * darkness_score
+                + 0.15 * fill_score
+                + 0.10 * size_score
+                + 0.10 * float(coarse.shape_score)
+            )
+
+            component_mask = np.zeros(
+                (image_height, image_width),
+                dtype=np.uint8,
+            )
+            local_component = labels == label_index
+            component_mask[
+                crop_y0:crop_y1,
+                crop_x0:crop_x1,
+            ][local_component] = 255
+            candidates.append(
+                (
+                    score,
+                    (
+                        absolute_x,
+                        absolute_y,
+                        candidate_width,
+                        candidate_height,
+                    ),
+                    component_mask,
+                )
+            )
+
+    if not candidates:
         raise RuntimeError(
-            "RGB port track was lost: no candidate passed the "
-            "center/scale continuity gates."
+            "no dark RJ45 cavity was found inside YOLOE proposal "
+            f"{coarse.bbox_xywh}; thresholds={thresholds}; "
+            f"rejections={rejection_counts}"
         )
-    return max(tracked, key=lambda item: item[0])[1]
+
+    score, bbox, mask = max(candidates, key=lambda item: item[0])
+    refined_x, refined_y, refined_width, refined_height = bbox
+    return PortDetection(
+        bbox_xywh=bbox,
+        center_uv=(
+            refined_x + 0.5 * refined_width,
+            refined_y + 0.5 * refined_height,
+        ),
+        shape_score=float(
+            np.clip(
+                0.75 * coarse.shape_score + 0.25 * score,
+                0.0,
+                1.0,
+            )
+        ),
+        roi_uv=(0, 0, image_width, image_height),
+        mask=mask,
+    )
+
+
+class YOLOEPortDetector:
+    """Long-lived full-frame YOLOE detector with local cavity measurement."""
+
+    def __init__(self, cfg: YOLOEConfig):
+        self.cfg = cfg
+        self._model = None
+        self._initialized = False
+        self._last_diagnostics: dict[str, str] = {}
+
+    def validate_reference_prompt(self) -> None:
+        path = self.cfg.reference_image_path
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"YOLOE reference image not found: {path}"
+            )
+        with Image.open(path) as image:
+            width, height = image.size
+
+        boxes = np.asarray(
+            self.cfg.reference_boxes_xyxy,
+            dtype=np.float64,
+        )
+        classes = np.asarray(
+            self.cfg.reference_class_ids,
+            dtype=np.int64,
+        )
+        if boxes.ndim != 2 or boxes.shape[1] != 4 or boxes.shape[0] < 1:
+            raise ValueError(
+                "YOLOE reference_boxes_xyxy must contain one or more XYXY boxes."
+            )
+        if classes.shape != (boxes.shape[0],):
+            raise ValueError(
+                "YOLOE reference boxes and class IDs must have equal length."
+            )
+        if set(map(int, classes.tolist())) != {0}:
+            raise ValueError(
+                "All multiscale examples must use the same sequential class ID 0."
+            )
+        if not np.all(np.isfinite(boxes)):
+            raise ValueError("YOLOE reference boxes must be finite.")
+        if np.any(boxes[:, 2] <= boxes[:, 0]) or np.any(
+            boxes[:, 3] <= boxes[:, 1]
+        ):
+            raise ValueError("YOLOE reference boxes must have positive area.")
+        if (
+            np.any(boxes[:, 0] < 0.0)
+            or np.any(boxes[:, 1] < 0.0)
+            or np.any(boxes[:, 2] > width)
+            or np.any(boxes[:, 3] > height)
+        ):
+            raise ValueError(
+                "A YOLOE reference box is outside reference image "
+                f"{width}x{height}: {boxes.tolist()}"
+            )
+
+    def initialize(self) -> None:
+        """Load weights and cache one multiscale visual class embedding."""
+        if self._initialized:
+            return
+        if not self.cfg.enabled:
+            raise RuntimeError("YOLOE detector is disabled in config.")
+        self.validate_reference_prompt()
+        try:
+            from ultralytics import YOLOE
+            from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
+        except ImportError as exc:
+            raise RuntimeError(
+                "Ultralytics with YOLOE support is not installed in the "
+                "Isaac Sim Python environment. Install/upgrade ultralytics "
+                "before running this script."
+            ) from exc
+
+        self._model = YOLOE(self.cfg.model_name)
+        visual_prompts = {
+            "bboxes": np.asarray(
+                self.cfg.reference_boxes_xyxy,
+                dtype=np.float32,
+            ),
+            "cls": np.asarray(
+                self.cfg.reference_class_ids,
+                dtype=np.int64,
+            ),
+        }
+        reference = str(self.cfg.reference_image_path)
+        self._model.predict(
+            source=reference,
+            refer_image=reference,
+            visual_prompts=visual_prompts,
+            predictor=YOLOEVPSegPredictor,
+            **self._predict_kwargs(),
+        )
+        self._initialized = True
+
+    def _predict_kwargs(self) -> dict[str, object]:
+        return {
+            "imgsz": self.cfg.imgsz,
+            "conf": self.cfg.confidence,
+            "iou": self.cfg.iou,
+            "device": self.cfg.device,
+            "quantize": self.cfg.quantize,
+            "max_det": self.cfg.max_detections,
+            "retina_masks": self.cfg.retina_masks,
+            "verbose": self.cfg.verbose,
+        }
+
+    def _predict_batch(self, rgb_images: list[np.ndarray]):
+        if self._model is None:
+            raise RuntimeError("YOLOE model has not been initialized.")
+        bgr_images = [
+            np.ascontiguousarray(image[:, :, ::-1])
+            for image in rgb_images
+        ]
+        return self._model.predict(
+            source=bgr_images,
+            **self._predict_kwargs(),
+        )
+
+    def diagnostic(self, eye_name: str) -> str:
+        return self._last_diagnostics.get(
+            eye_name,
+            "no YOLOE diagnostics were recorded",
+        )
+
+    def detections_from_result(
+        self,
+        result,
+        rgb: np.ndarray,
+        eye_name: str,
+    ) -> list[PortDetection]:
+        """Convert full-frame YOLOE proposals to refined dark-port openings."""
+        image_height, image_width = map(int, rgb.shape[:2])
+        boxes = getattr(result, "boxes", None)
+        if boxes is None:
+            self._last_diagnostics[eye_name] = "raw_boxes=0"
+            return []
+
+        xyxy = _tensor_to_numpy(getattr(boxes, "xyxy", None))
+        confidences = _tensor_to_numpy(
+            getattr(boxes, "conf", None)
+        ).reshape(-1)
+        if xyxy.size == 0 or confidences.size == 0:
+            self._last_diagnostics[eye_name] = "raw_boxes=0"
+            return []
+        xyxy = np.asarray(xyxy, dtype=np.float64).reshape(-1, 4)
+
+        count = min(xyxy.shape[0], confidences.shape[0])
+        detections: list[PortDetection] = []
+        rejections: list[str] = []
+        raw_summaries: list[str] = []
+
+        for index in range(count):
+            box = np.asarray(xyxy[index], dtype=np.float64)
+            confidence = float(confidences[index])
+            if not np.all(np.isfinite(box)):
+                rejections.append(f"#{index}: non-finite box")
+                continue
+
+            x1f = float(np.clip(box[0], 0.0, float(image_width)))
+            y1f = float(np.clip(box[1], 0.0, float(image_height)))
+            x2f = float(np.clip(box[2], 0.0, float(image_width)))
+            y2f = float(np.clip(box[3], 0.0, float(image_height)))
+            if x2f <= x1f or y2f <= y1f:
+                rejections.append(f"#{index}: zero-area box")
+                continue
+
+            x0 = max(0, min(image_width - 1, int(math.floor(x1f))))
+            y0 = max(0, min(image_height - 1, int(math.floor(y1f))))
+            x1 = max(x0 + 1, min(image_width, int(math.ceil(x2f))))
+            y1 = max(y0 + 1, min(image_height, int(math.ceil(y2f))))
+            width = x1 - x0
+            height = y1 - y0
+            raw_summaries.append(
+                f"#{index} conf={confidence:.4f} "
+                f"box=({x0},{y0},{width},{height})"
+            )
+
+            if width * height < self.cfg.min_proposal_area_px:
+                rejections.append(f"#{index}: proposal area too small")
+                continue
+            if not (
+                self.cfg.min_proposal_width_px
+                <= width
+                <= self.cfg.max_proposal_width_px
+                and self.cfg.min_proposal_height_px
+                <= height
+                <= self.cfg.max_proposal_height_px
+            ):
+                rejections.append(f"#{index}: proposal dimensions rejected")
+                continue
+
+            proposal_mask = np.zeros(
+                (image_height, image_width),
+                dtype=np.uint8,
+            )
+            proposal_mask[y0:y1, x0:x1] = 255
+            coarse = PortDetection(
+                bbox_xywh=(x0, y0, width, height),
+                center_uv=(
+                    0.5 * (x1f + x2f),
+                    0.5 * (y1f + y2f),
+                ),
+                shape_score=confidence,
+                roi_uv=(0, 0, image_width, image_height),
+                mask=proposal_mask,
+            )
+            try:
+                detections.append(
+                    refine_detection_to_dark_cavity(
+                        rgb,
+                        coarse,
+                        self.cfg,
+                    )
+                )
+            except RuntimeError as exc:
+                rejections.append(f"#{index}: {exc}")
+
+        detections.sort(key=lambda item: item.shape_score, reverse=True)
+        raw_text = "; ".join(raw_summaries[:8]) or "none"
+        rejection_text = "; ".join(rejections[:8]) or "none"
+        self._last_diagnostics[eye_name] = (
+            f"raw_boxes={count}; refined={len(detections)}; "
+            f"raw=[{raw_text}]; rejected=[{rejection_text}]"
+        )
+        return detections
+
+    def detect_stereo(
+        self,
+        left_rgb: np.ndarray,
+        right_rgb: np.ndarray,
+    ) -> tuple[list[PortDetection], list[PortDetection]]:
+        """Run one full-frame batch while preserving left/right result order."""
+        if not self._initialized:
+            self.initialize()
+        if left_rgb.shape[:2] != right_rgb.shape[:2]:
+            raise ValueError("Stereo eye images must have identical dimensions.")
+        results = list(self._predict_batch([left_rgb, right_rgb]))
+        if len(results) != 2:
+            raise RuntimeError(
+                f"YOLOE stereo batch returned {len(results)} results, expected 2."
+            )
+        return (
+            self.detections_from_result(
+                results[0],
+                left_rgb,
+                eye_name="left",
+            ),
+            self.detections_from_result(
+                results[1],
+                right_rgb,
+                eye_name="right",
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -743,58 +1082,8 @@ def triangulate_port_corners(
 
 
 # ---------------------------------------------------------------------------
-# Four-corner extraction and stereo processing
+# YOLOE stereo processing
 # ---------------------------------------------------------------------------
-
-
-def refine_port_corners(
-    rgb: np.ndarray,
-    detection: PortDetection,
-    cfg: PerceptionConfig,
-) -> PortCorners:
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    x, y, width, height = detection.bbox_xywh
-    seeds = np.array(
-        [
-            [x, y],
-            [x + width - 1, y],
-            [x + width - 1, y + height - 1],
-            [x, y + height - 1],
-        ],
-        dtype=np.float32,
-    )
-    refined = seeds.reshape(-1, 1, 2).copy()
-    window = int(cfg.stereo_corner_refine_window_px)
-    cv2.cornerSubPix(
-        gray,
-        refined,
-        (window, window),
-        (-1, -1),
-        (
-            cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-            40,
-            0.01,
-        ),
-    )
-    corners = refined.reshape(4, 2).astype(np.float64)
-    shifts = np.linalg.norm(corners - seeds.astype(np.float64), axis=1)
-    if float(np.max(shifts)) > cfg.stereo_max_corner_refine_shift_px:
-        raise RuntimeError("corner refinement moved outside the port boundary")
-    image_height, image_width = gray.shape
-    if (
-        np.any(corners[:, 0] < 0.0)
-        or np.any(corners[:, 0] >= image_width)
-        or np.any(corners[:, 1] < 0.0)
-        or np.any(corners[:, 1] >= image_height)
-    ):
-        raise RuntimeError("refined corner left the image")
-    contour = np.round(corners).astype(np.int32).reshape(-1, 1, 2)
-    if not cv2.isContourConvex(contour):
-        raise RuntimeError("refined port corners are not convex")
-    area = abs(float(cv2.contourArea(contour)))
-    if area < cfg.min_area_px * 0.5:
-        raise RuntimeError("refined port quadrilateral is too small")
-    return PortCorners(detection=detection, corners_uv=corners)
 
 
 def _candidate_continuity_ok(
@@ -834,43 +1123,44 @@ def _validate_stereo_result(
             "stereo range is outside the configured working distance",
         ),
         (
-            result.reprojection_rms_px
-            <= cfg.stereo_max_reprojection_rms_px,
+            result.reprojection_rms_px <= cfg.stereo_max_reprojection_rms_px,
             "stereo reprojection RMS is too high",
         ),
         (
             result.max_reprojection_px <= cfg.stereo_max_reprojection_px,
-            "stereo corner reprojection error is too high",
+            "stereo center reprojection error is too high",
         ),
         (
             result.max_ray_gap_m <= cfg.stereo_max_ray_gap_m,
             "stereo rays do not intersect closely enough",
         ),
         (
-            result.plane_residual_m <= cfg.stereo_max_plane_residual_m,
-            "triangulated corners are not coplanar",
-        ),
-        (
-            cfg.stereo_min_width_m
-            <= result.width_m
-            <= cfg.stereo_max_width_m,
+            cfg.stereo_min_width_m <= result.width_m <= cfg.stereo_max_width_m,
             "triangulated port width is implausible",
         ),
         (
-            cfg.stereo_min_height_m
-            <= result.height_m
-            <= cfg.stereo_max_height_m,
+            cfg.stereo_min_height_m <= result.height_m <= cfg.stereo_max_height_m,
             "triangulated port height is implausible",
-        ),
-        (
-            result.opposite_edge_ratio
-            <= cfg.stereo_max_opposite_edge_ratio,
-            "triangulated opposite edges disagree",
         ),
     )
     for accepted, reason in checks:
         if not accepted:
             raise RuntimeError(reason)
+
+
+def _box_port_corners(detection: PortDetection) -> PortCorners:
+    """Provide deterministic box corners for overlays; depth uses mask centers."""
+    x, y, width, height = detection.bbox_xywh
+    corners = np.asarray(
+        [
+            [x, y],
+            [x + width - 1, y],
+            [x + width - 1, y + height - 1],
+            [x, y + height - 1],
+        ],
+        dtype=np.float64,
+    )
+    return PortCorners(detection=detection, corners_uv=corners)
 
 
 def process_stereo_port(
@@ -879,68 +1169,60 @@ def process_stereo_port(
     desired_port_virtual_camera_usd: np.ndarray,
     previous_left: PortDetection | None,
     previous_right: PortDetection | None,
+    detector: YOLOEPortDetector,
 ) -> StereoPortObservation:
-    """Require both eyes, triangulate the matched port center, and compute one correction."""
-    left_candidates = detect_port_candidates(frame.left.rgb, cfg)
+    """Require YOLOE in both full eye views and compute one stereo correction."""
+    left_candidates, right_candidates = detector.detect_stereo(
+        frame.left.rgb,
+        frame.right.rgb,
+    )
+    left_candidates = [
+        candidate
+        for candidate in left_candidates
+        if _candidate_continuity_ok(candidate, previous_left, cfg)
+    ]
+    right_candidates = [
+        candidate
+        for candidate in right_candidates
+        if _candidate_continuity_ok(candidate, previous_right, cfg)
+    ]
     if not left_candidates:
-        raise RuntimeError("left eye did not detect a valid RGB port")
-    right_candidates = detect_port_candidates(frame.right.rgb, cfg)
+        raise RuntimeError(
+            "left eye did not return a refined YOLOE port: "
+            + detector.diagnostic("left")
+        )
     if not right_candidates:
-        raise RuntimeError("right eye did not detect a valid RGB port")
-
-    left_corners: list[PortCorners] = []
-    right_corners: list[PortCorners] = []
-    left_corner_errors: list[str] = []
-    right_corner_errors: list[str] = []
-    for candidate in left_candidates:
-        if not _candidate_continuity_ok(candidate, previous_left, cfg):
-            continue
-        try:
-            left_corners.append(refine_port_corners(frame.left.rgb, candidate, cfg))
-        except (RuntimeError, cv2.error) as exc:
-            left_corner_errors.append(str(exc))
-            continue
-    for candidate in right_candidates:
-        if not _candidate_continuity_ok(candidate, previous_right, cfg):
-            continue
-        try:
-            right_corners.append(refine_port_corners(frame.right.rgb, candidate, cfg))
-        except (RuntimeError, cv2.error) as exc:
-            right_corner_errors.append(str(exc))
-            continue
-    if not left_corners:
-        detail = left_corner_errors[-1] if left_corner_errors else "no candidate"
-        raise RuntimeError(f"left eye corner refinement failed: {detail}")
-    if not right_corners:
-        detail = right_corner_errors[-1] if right_corner_errors else "no candidate"
-        raise RuntimeError(f"right eye corner refinement failed: {detail}")
+        raise RuntimeError(
+            "right eye did not return a refined YOLOE port: "
+            + detector.diagnostic("right")
+        )
 
     pair_results: list[
         tuple[float, PortCorners, PortCorners, StereoTriangulation]
     ] = []
     pair_rejections: list[str] = []
-    for left in left_corners:
-        for right in right_corners:
+    for left_detection in left_candidates:
+        for right_detection in right_candidates:
             vertical_error = abs(
-                left.detection.center_uv[1] - right.detection.center_uv[1]
+                left_detection.center_uv[1] - right_detection.center_uv[1]
             )
             if vertical_error > cfg.stereo_max_epipolar_error_px:
                 continue
             scale_ratio = max(
-                left.detection.scale_px / right.detection.scale_px,
-                right.detection.scale_px / left.detection.scale_px,
+                left_detection.scale_px / right_detection.scale_px,
+                right_detection.scale_px / left_detection.scale_px,
             )
             if scale_ratio > cfg.stereo_max_scale_ratio:
                 continue
             disparity = abs(
-                left.detection.center_uv[0] - right.detection.center_uv[0]
+                left_detection.center_uv[0] - right_detection.center_uv[0]
             )
             if disparity < cfg.stereo_min_abs_disparity_px:
                 continue
             try:
                 result = triangulate_detection_centers(
-                    left.detection,
-                    right.detection,
+                    left_detection,
+                    right_detection,
                     frame.left.camera,
                     frame.right.camera,
                     frame.virtual_camera,
@@ -954,20 +1236,27 @@ def process_stereo_port(
                 + abs(result.height_m - cfg.port_height_m) / cfg.port_height_m
             )
             score = (
-                left.detection.shape_score
-                + right.detection.shape_score
+                left_detection.shape_score
+                + right_detection.shape_score
                 - 0.05 * vertical_error
                 - 0.75 * dimension_error
                 - result.reprojection_rms_px
             )
-            pair_results.append((score, left, right, result))
+            pair_results.append(
+                (
+                    score,
+                    _box_port_corners(left_detection),
+                    _box_port_corners(right_detection),
+                    result,
+                )
+            )
 
     if not pair_results:
         detail = pair_rejections[-1] if pair_rejections else (
             "epipolar, scale, or disparity gate rejected every pair"
         )
         raise RuntimeError(
-            "no left/right port pair passed stereo correspondence and "
+            "no left/right YOLOE port pair passed stereo correspondence and "
             f"geometry checks: {detail}"
         )
     _, left, right, result = max(pair_results, key=lambda item: item[0])

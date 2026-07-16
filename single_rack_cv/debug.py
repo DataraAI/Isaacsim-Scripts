@@ -88,14 +88,14 @@ class DebugOutputs:
             observation.left,
             observation.desired_left_center_uv,
             observation.desired_size_wh_px,
-            "LEFT EYE",
+            "YOLOE LEFT EYE",
         )
         right_overlay = self._draw_eye_overlay(
             frame.right.rgb,
             observation.right,
             observation.desired_right_center_uv,
             observation.desired_size_wh_px,
-            "RIGHT EYE",
+            "YOLOE RIGHT EYE",
         )
 
         Image.fromarray(frame.left.rgb, mode="RGB").save(
@@ -191,7 +191,9 @@ class DebugOutputs:
             f"reproj={observation.reprojection_rms_px:.3f}px  "
             f"size={observation.width_m * 1000.0:.2f}x"
             f"{observation.height_m * 1000.0:.2f}mm  "
-            f"center_err={center_error:.2f}px"
+            f"center_err={center_error:.2f}px  "
+            f"conf={observation.left.detection.shape_score:.2f}/"
+            f"{observation.right.detection.shape_score:.2f}"
         )
         self._label(draw, (10, height - 24), label)
         return np.asarray(image, dtype=np.uint8).copy()
@@ -248,6 +250,8 @@ class DebugOutputs:
             f"{observation.height_m * 1000.0:.2f}mm "
             f"reproj={observation.reprojection_rms_px:.3f}px "
             f"ray_gap={observation.max_ray_gap_m * 1000.0:.3f}mm "
-            f"raw_correction={correction * 1000.0:.2f}mm",
+            f"raw_correction={correction * 1000.0:.2f}mm "
+            f"yoloe_conf={observation.left.detection.shape_score:.3f}/"
+            f"{observation.right.detection.shape_score:.3f}",
             flush=True,
         )
