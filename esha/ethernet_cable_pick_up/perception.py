@@ -34,16 +34,19 @@ class PerceptionConfig:
     # bounds stay loose; fill_ratio (how much of the bbox the blob actually
     # fills) is the more trustworthy elongation signal here, since a thin
     # shape fills only a small fraction of its bbox at almost any angle.
-    min_width_px: int = 6
+    # Slightly lowered for farther approaches: at longer range the connector
+    # blob shrinks in the image, so a 6 px / 60 area floor was rejecting
+    # otherwise-valid detections.
+    min_width_px: int = 4
     max_width_px: int = 620
-    min_height_px: int = 6
+    min_height_px: int = 4
     max_height_px: int = 460
     # Aspect ratio (oriented long/short side) is a loose sanity gate only -
     # a cable segment's apparent length varies hugely with distance and
     # framing, so there's no single "correct" ratio to target.
     min_aspect_ratio: float = 1.5
     max_aspect_ratio: float = 60.0
-    min_area_px: int = 60
+    min_area_px: int = 40
     max_area_px: int = 60000
     # Fill ratio (blob area / oriented-bbox area) is the real elongation
     # signal here: a genuinely solid, rectangle-like blob fills close to
@@ -70,7 +73,7 @@ class PerceptionConfig:
     #
     # PROVISIONAL: the detected blob is actually the whole RJ45 connector
     # body + mounting clip (visible in the reference photos), not a bare
-    # cable cross-section. A back-of-envelope estimate from the camera's
+    # cable cross-section. Estimate from the camera's
     # known optics (18mm focal length, 640px width) and the detector's
     # consistently-measured ~80px short axis at our ~0.15-0.18m working
     # range gives roughly 22-26mm - not the 7mm a bare cable would be.
@@ -80,13 +83,19 @@ class PerceptionConfig:
     # than re-estimated.
     cable_length_m: float = 0.0300
     cable_thickness_m: float = 0.0220
-    min_estimated_range_m: float = 0.08
-    max_estimated_range_m: float = 0.35
+    # Widened a bit so a higher start pose (farther camera) still passes
+    # the stereo range sanity check after triangulation.
+    min_estimated_range_m: float = 0.07
+    max_estimated_range_m: float = 0.45
 
     # Stereo matching and corner refinement.
     stereo_corner_refine_window_px: int = 5
     stereo_max_corner_refine_shift_px: float = 6.0
-    stereo_max_epipolar_error_px: float = 3.0
+    # Softened from 3 px so a small hand Y offset (~10-20 mm) can still
+    # form stereo pairs when left/right centers differ by ~10-15 px.
+    # Geometry checks (height/width/reproj/ray_gap) remain the hard filter
+    # against mismatched tip-vs-boot correspondences.
+    stereo_max_epipolar_error_px: float = 12.0
     stereo_max_scale_ratio: float = 1.30
     stereo_min_abs_disparity_px: float = 4.0
     stereo_max_ray_gap_m: float = 0.0020
@@ -98,8 +107,10 @@ class PerceptionConfig:
     # port's fixed opening. Height (thickness) widened to comfortably
     # cover the connector+clip assembly estimate above, pending a real
     # calibrated number from the now-detailed rejection log messages.
-    stereo_min_width_m: float = 0.010
-    stereo_max_width_m: float = 0.300
+    # Farther views may only lock onto a shorter visible segment, so the
+    # min is slightly lower; max nudged up for partial connector+boot blobs.
+    stereo_min_width_m: float = 0.008
+    stereo_max_width_m: float = 0.350
     stereo_min_height_m: float = 0.005
     stereo_max_height_m: float = 0.035
     stereo_max_opposite_edge_ratio: float = 1.20
