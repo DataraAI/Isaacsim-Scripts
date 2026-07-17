@@ -28,9 +28,34 @@ class SceneConfig:
     cable_root_path: str = "/World/NetworkCable"
     tracked_connector_path: str = "/World/NetworkCable/E_crystal_head1_45"
 
-    # Where the connector's bbox center should land on the ground plane.
-    cable_spawn_xy: tuple[float, float] = (0.5, 0.0)
+    # Where the tracked connector should sit in XY.
+    # +240 mm in X vs the original (0.5, 0).
+    cable_spawn_xy: tuple[float, float] = (0.74, 0.0)
+    # Gap between support surface and the cable/connector lowest point.
     ground_clearance: float = 0.002
+
+    # Raise the tracked connector on a visible static block for grasp
+    # clearance (pattern from network_cable_on_block_spawn.py). Soft
+    # cable stays off; only the root xform is translated so the plug
+    # bottom sits on the block top.
+    cable_support_enabled: bool = True
+    cable_support_path: str = "/World/CableSupportBlock"
+    # Full edge lengths in meters (X, Y, Z). Y is the cross-cable width —
+    # kept slightly under the ~22 mm connector/cable thickness so the plug
+    # overhangs the pedestal a bit for finger access. Z is stand height.
+    cable_support_size_m: tuple[float, float, float] = (
+        0.080,
+        0.018,
+        0.040,
+    )
+    # Warm orange — clear against the gray ground, not blue.
+    cable_support_color: tuple[float, float, float] = (
+        0.85,
+        0.45,
+        0.15,
+    )
+    # Extra gap between plug bottom and block top.
+    cable_support_plug_clearance_m: float = 0.004
 
     franka_path: str = "/World/Franka"
     franka_asset_path: str = "/World/Franka/Robot"
@@ -39,12 +64,12 @@ class SceneConfig:
     franka_yaw_deg: float = 0.0
 
     physics_dt: float = 1.0 / 60.0
-    # Soft-cable deformables require GPU dynamics. When enable_gpu_dynamics
-    # is True and device is still "cpu", sim.py upgrades to "cuda".
-    device: str = "cuda"
+    # Soft-cable deformables require GPU PhysX. When True, sim upgrades
+    # device=cpu → cuda and reloads the cable after GPU dynamics is on.
+    # Expect more wobble during stereo servo than with rigid placement.
+    device: str = "cpu"
     enable_gpu_dynamics: bool = True
-    # Extra settle frames after play so the deformable can rest on the
-    # ground before the first stereo capture.
+    # Settle frames after play() so the soft wire can rest on the block.
     deformable_settle_frames: int = 60
     light_intensity: float = 1000.0
     # Plain, untextured ground color - the default grid texture confuses
@@ -52,8 +77,8 @@ class SceneConfig:
     ground_plane_color: tuple[float, float, float] = (0.6, 0.6, 0.6)
 
     # Tuned for a tabletop-height pickup scene rather than a tall rack.
-    viewport_eye: tuple[float, float, float] = (1.3, 1.1, 0.9)
-    viewport_target: tuple[float, float, float] = (0.5, 0.0, 0.05)
+    viewport_eye: tuple[float, float, float] = (1.54, 1.1, 0.95)
+    viewport_target: tuple[float, float, float] = (0.74, 0.0, 0.08)
 
 
 @dataclass(frozen=True)
@@ -141,10 +166,12 @@ class IKConfig:
     use_fixed_start_pose: bool = True
 
     # can incrementally change arm position to get a better view of the cable
+    # Z includes cable_support_size_m height (0.04). Hand X matches
+    # cable_spawn_xy (0.54) so the raised plug stays in the stereo FOV.
     initial_position: tuple[float, float, float] = (
-        0.4600,
+        0.7200,
         0.0000, #need to loosen/rework the epipolar matching
-        0.3000,
+        0.3400,
     )
     initial_orientation_wxyz: tuple[float, float, float, float] = (
         0.0,
@@ -184,16 +211,16 @@ class VisualServoConfig:
     """Continuous RGB feedback for translation-only pre-grasp alignment."""
 
     enabled: bool = True
-    # Increased from 0.050: at the tighter standoff, the gripper geometry
-    # (a fixed distance from the camera regardless of range-to-table) grew
-    # to occupy enough of the frame to clip/merge with the detected blob
-    # near the bottom edge - not a detector bug, just not enough clearance.
-    # This gives the alignment phase more room before anything descends.
-    grasp_standoff_m: float = 0.120
+    # Pre-grasp hold range along tool Z. Reduced from 0.120 for a slightly
+    # closer final hold after visual alignment.
+    grasp_standoff_m: float = 0.100
 
     # Do not start perception while the arm/camera is still moving to its
-    # fixed startup pose.
+    # fixed startup pose. 0.5 mm works on CPU PhysX; GPU soft-cable dynamics
+    # add enough Franka tracking noise that the counter never reaches
+    # required_startup_settled_frames (stereo never starts).
     startup_settle_tolerance_m: float = 0.0005
+    gpu_startup_settle_tolerance_m: float = 0.002
     # This originally only waited for the *arm* to stop moving (a quarter
     # second), never for the RTX render itself to converge to a clean,
     # low-noise image. On a long static hold, early frames can still be
@@ -201,6 +228,8 @@ class VisualServoConfig:
     # visually fine by the time you look at it. Bumped way up (~5s at 60Hz)
     # to test whether waiting longer before the first capture fixes it.
     required_startup_settled_frames: int = 300
+    # Log if startup settle stays incomplete this long.
+    startup_settle_warn_s: float = 4.0
 
     # Require a short stable image track before the robot is allowed to move.
     required_acquisition_samples: int = 3
@@ -215,6 +244,7 @@ class VisualServoConfig:
     control_gain: float = 0.35
     max_target_step_m: float = 0.003
     target_settle_tolerance_m: float = 0.0005
+    gpu_target_settle_tolerance_m: float = 0.002
 
     # Visual alignment is intentionally looser than physical articulation
     # tracking because the detected box size is quantized in whole pixels.
@@ -229,6 +259,26 @@ class VisualServoConfig:
     settle_warning_timeout_s: float = 8.0
 
     freeze_after_complete: bool = True
+
+
+@dataclass(frozen=True)
+class PreGraspConfig:
+    """After visual servo hold: tip approach, then open fingers (no close)."""
+
+    enabled: bool = True
+    # Remaining tip-to-cable gap after descend along tool +Z.
+    tip_clearance_m: float = 0.012
+    # Extra open gap per side beyond measured cable half-width.
+    side_allowance_m: float = 0.002
+    fallback_cable_half_width_m: float = 0.011
+    finger_joint_names: tuple[str, str] = (
+        "panda_finger_joint1",
+        "panda_finger_joint2",
+    )
+    finger_max_open_m: float = 0.04
+    block_safety_margin_m: float = 0.002
+    # Keep commanding the open pose for this many frames after settle.
+    open_hold_frames: int = 60
 
 
 @dataclass(frozen=True)
@@ -258,6 +308,7 @@ class Config:
     visual_servo: VisualServoConfig = field(
         default_factory=VisualServoConfig
     )
+    pre_grasp: PreGraspConfig = field(default_factory=PreGraspConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 

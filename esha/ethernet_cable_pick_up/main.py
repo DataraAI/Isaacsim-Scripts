@@ -65,6 +65,11 @@ try:
         except Exception as exc:
             warn(f"Motion/IK update failed: {exc}")
 
+        try:
+            runtime.update_pre_grasp()
+        except Exception as exc:
+            warn(f"Pre-grasp update failed: {exc}")
+
         if not runtime.capture_due():
             continue
 

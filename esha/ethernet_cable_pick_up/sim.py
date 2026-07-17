@@ -21,6 +21,7 @@ from isaacsim.core.experimental.objects import DomeLight
 from isaacsim.core.prims import SingleArticulation as Articulation
 from isaacsim.core.prims import SingleXFormPrim as XFormPrim
 from isaacsim.core.simulation_manager import SimulationManager
+from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.robot_motion.motion_generation import (
     ArticulationKinematicsSolver,
     LulaKinematicsSolver,
@@ -285,11 +286,25 @@ def target_is_settled(
 
 
 @dataclass
+class PreGraspState:
+    """One-shot tip approach + finger open-around after servo hold."""
+
+    phase: str = "idle"  # idle | descend | open | done
+    cable_half_width_m: float | None = None
+    cable_point_world_m: np.ndarray | None = None
+    descend_settled_frames: int = 0
+    open_frames: int = 0
+    finger_half_gap_m: float = 0.0
+    started: bool = False
+
+
+@dataclass
 class VisualServoState:
     """Minimal state for RGB acquisition, tracking, and final settling."""
 
     startup_ready: bool = False
     startup_settled_frame_count: int = 0
+    last_startup_warn_frame: int = -1_000_000
 
     left_reference: CableDetection | None = None
     right_reference: CableDetection | None = None
@@ -318,6 +333,27 @@ class IKRuntime:
     last_warning_frame: int = -1_000_000
 
 
+class _LulaCpuArticulation:
+    """
+    Adapt SingleArticulation for Lula when PhysX runs on CUDA.
+
+    Soft-cable GPU dynamics forces SimulationManager device=cuda, so
+    get_joint_positions() returns cuda tensors. Lula's CCD IK only
+    accepts list[np.ndarray]; without this bridge every IK update fails
+    and the arm never moves to the start pose.
+    """
+
+    def __init__(self, articulation: Articulation):
+        self._articulation = articulation
+
+    def get_joint_positions(self, *args, **kwargs):
+        positions = self._articulation.get_joint_positions(*args, **kwargs)
+        return SimulationRuntime._as_cpu_numpy(positions).reshape(-1)
+
+    def __getattr__(self, name):
+        return getattr(self._articulation, name)
+
+
 class SimulationRuntime:
     """Small public interface around the Isaac Sim-specific implementation."""
 
@@ -333,6 +369,8 @@ class SimulationRuntime:
         self.ik: IKRuntime | None = None
 
         self.visual_servo = VisualServoState()
+        self.pre_grasp = PreGraspState()
+        self._finger_dof_indices: list[int] = []
         self.desired_cable_virtual_camera_usd = (
             self._compute_desired_cable_camera_usd()
         )
@@ -378,12 +416,24 @@ class SimulationRuntime:
 
             if not target_is_settled(
                 position_error_m,
-                cfg.target_settle_tolerance_m,
+                self._target_settle_tolerance_m(),
             ):
                 return False
 
         interval = self.cfg.camera.capture_every_sim_frames
         return self.frame_index > 0 and self.frame_index % interval == 0
+
+    def _startup_settle_tolerance_m(self) -> float:
+        cfg = self.cfg.visual_servo
+        if self.cfg.scene.enable_gpu_dynamics:
+            return float(cfg.gpu_startup_settle_tolerance_m)
+        return float(cfg.startup_settle_tolerance_m)
+
+    def _target_settle_tolerance_m(self) -> float:
+        cfg = self.cfg.visual_servo
+        if self.cfg.scene.enable_gpu_dynamics:
+            return float(cfg.gpu_target_settle_tolerance_m)
+        return float(cfg.target_settle_tolerance_m)
 
     def _tool_target_position_error_m(self) -> float:
         """Measure actual ToolCenter-to-current-target position error."""
@@ -391,13 +441,108 @@ class SimulationRuntime:
             return math.inf
 
         self._update_actual_tool_frame(self.ik)
-        target_position, _ = self.ik.target.get_world_pose()
-        actual_position, _ = self.ik.actual_tool.get_world_pose()
+        target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+        actual_position, _ = self._tool_pose_from_hand()
+        return float(np.linalg.norm(actual_position - target_position))
 
-        target = np.asarray(target_position, dtype=np.float64)
-        actual = np.asarray(actual_position, dtype=np.float64)
+    def _tool_pose_from_hand(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Tool-center pose from articulation joints + Lula FK.
 
-        return float(np.linalg.norm(actual - target))
+        With CUDA PhysX / GPU dynamics, UsdGeom hand xforms often stay at the
+        Franka rest pose while the simulated arm moves. Joint-state FK matches
+        the visual robot.
+        """
+        if self.ik is None:
+            raise RuntimeError("IK runtime is not initialized.")
+        cfg = self.cfg.ik
+        hand_position, hand_orientation = self._hand_pose_from_articulation()
+        return hand_pose_to_tool_pose(
+            hand_position_m=hand_position,
+            hand_orientation_wxyz=hand_orientation,
+            tool_local_position_m=np.asarray(
+                cfg.tool_center_local_position_m,
+                dtype=np.float64,
+            ),
+            tool_local_orientation_wxyz=np.asarray(
+                cfg.tool_center_local_orientation_wxyz,
+                dtype=np.float64,
+            ),
+        )
+
+    def _hand_pose_from_articulation(self) -> tuple[np.ndarray, np.ndarray]:
+        """panda_hand pose from Lula FK on current articulation joints."""
+        if self.ik is None:
+            raise RuntimeError("IK runtime is not initialized.")
+
+        base_position, base_orientation = self._world_pose_numpy(
+            self.ik.articulation
+        )
+        self.ik.kinematics_solver.set_robot_base_pose(
+            base_position,
+            base_orientation,
+        )
+
+        translation, rotation = (
+            self.ik.articulation_solver.compute_end_effector_pose()
+        )
+        if translation is None or rotation is None:
+            raise RuntimeError(
+                "Lula forward kinematics failed for panda_hand."
+            )
+
+        hand_position = np.asarray(
+            translation,
+            dtype=np.float64,
+        ).reshape(3)
+        hand_orientation = matrix_to_quaternion_wxyz(
+            np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+        )
+        return hand_position, hand_orientation
+
+    def _hand_camera_local_matrix(
+        self,
+        local_position: tuple[float, float, float],
+    ) -> np.ndarray:
+        """Hand←camera transform matching _create_hand_camera (row-vector 4x4)."""
+        camera_cfg = self.cfg.camera
+        y_quat = Gf.Rotation(
+            Gf.Vec3d(0.0, 1.0, 0.0),
+            camera_cfg.local_y_rotation_deg,
+        ).GetQuat()
+        roll_quat = Gf.Rotation(
+            Gf.Vec3d(0.0, 0.0, 1.0),
+            camera_cfg.local_roll_deg,
+        ).GetQuat()
+        local_quat = y_quat * roll_quat
+        imag = local_quat.GetImaginary()
+        orientation = _normalize_quaternion_wxyz(
+            np.array(
+                [
+                    local_quat.GetReal(),
+                    imag[0],
+                    imag[1],
+                    imag[2],
+                ],
+                dtype=np.float64,
+            )
+        )
+        # Column rotation R maps hand←camera offsets; CameraModel / USD Gf
+        # matrices use row vectors, so store R.T in the upper 3x3.
+        rotation = quaternion_wxyz_to_matrix(orientation)
+        matrix = np.eye(4, dtype=np.float64)
+        matrix[:3, :3] = rotation.T
+        matrix[3, :3] = np.asarray(local_position, dtype=np.float64)
+        return matrix
+
+    def _world_from_hand_matrix(self) -> np.ndarray:
+        """Row-vector 4x4 world←hand from articulation FK."""
+        position, orientation = self._hand_pose_from_articulation()
+        rotation = quaternion_wxyz_to_matrix(orientation)
+        matrix = np.eye(4, dtype=np.float64)
+        matrix[:3, :3] = rotation.T
+        matrix[3, :3] = position
+        return matrix
 
     def _update_startup_settle(self) -> None:
         """Wait for a stationary eye-in-hand camera before RGB acquisition."""
@@ -408,10 +553,11 @@ class SimulationRuntime:
             return
 
         position_error_m = self._tool_target_position_error_m()
+        settle_tol_m = self._startup_settle_tolerance_m()
 
         state.startup_settled_frame_count = update_convergence_counter(
             position_error_m=position_error_m,
-            tolerance_m=cfg.startup_settle_tolerance_m,
+            tolerance_m=settle_tol_m,
             current_count=state.startup_settled_frame_count,
         )
 
@@ -419,6 +565,32 @@ class SimulationRuntime:
             state.startup_settled_frame_count
             < cfg.required_startup_settled_frames
         ):
+            warn_every = max(
+                1,
+                int(
+                    round(
+                        cfg.startup_settle_warn_s
+                        / self.cfg.scene.physics_dt
+                    )
+                ),
+            )
+            if (
+                self.frame_index - state.last_startup_warn_frame
+                >= warn_every
+            ):
+                state.last_startup_warn_frame = self.frame_index
+                warn(
+                    "Waiting for startup settle before stereo capture:\n"
+                    f"  ToolCenter error: "
+                    f"{position_error_m * 1000.0:.3f} mm "
+                    f"(need <= {settle_tol_m * 1000.0:.3f} mm)\n"
+                    f"  target={np.round(self._get_world_pose(self.cfg.ik.target_path)[0], 4).tolist()}\n"
+                    f"  actual={np.round(self._tool_pose_from_hand()[0], 4).tolist()}\n"
+                    f"  stable frames: "
+                    f"{state.startup_settled_frame_count}/"
+                    f"{cfg.required_startup_settled_frames}\n"
+                    f"  gpu_dynamics={self.cfg.scene.enable_gpu_dynamics}"
+                )
             return
 
         state.startup_ready = True
@@ -426,6 +598,7 @@ class SimulationRuntime:
         log(
             "RGB STEREO VISUAL SERVO STARTUP SETTLED\n"
             f"  ToolCenter error: {position_error_m * 1000.0:.3f} mm\n"
+            f"  settle tolerance: {settle_tol_m * 1000.0:.3f} mm\n"
             f"  stable frames: {state.startup_settled_frame_count}/"
             f"{cfg.required_startup_settled_frames}\n"
             "  next action: begin synchronized stereo acquisition"
@@ -486,6 +659,12 @@ class SimulationRuntime:
         state.right_reference = observation.right.detection
         state.consecutive_misses = 0
 
+        self.pre_grasp.cable_half_width_m = 0.5 * float(observation.width_m)
+        self.pre_grasp.cable_point_world_m = np.asarray(
+            observation.center_world_xyz_m,
+            dtype=np.float64,
+        ).reshape(3)
+
         if not state.acquired:
             self._update_visual_acquisition(observation)
             if not state.acquired:
@@ -530,18 +709,18 @@ class SimulationRuntime:
         state.settle_timeout_reported = False
 
         self._update_actual_tool_frame(self.ik)
-        target_position, target_orientation = self.ik.target.get_world_pose()
-        actual_position, _ = self.ik.actual_tool.get_world_pose()
+        target_position, target_orientation = self._get_world_pose(
+            self.cfg.ik.target_path
+        )
+        actual_position, _ = self._tool_pose_from_hand()
 
-        target_position = np.asarray(target_position, dtype=np.float64)
-        actual_position = np.asarray(actual_position, dtype=np.float64)
         target_lead_m = float(
             np.linalg.norm(target_position - actual_position)
         )
 
         if not target_is_settled(
             target_lead_m,
-            cfg.target_settle_tolerance_m,
+            self._target_settle_tolerance_m(),
         ):
             return
 
@@ -636,12 +815,12 @@ class SimulationRuntime:
             return
 
         self._update_actual_tool_frame(self.ik)
-        target_position, _ = self.ik.target.get_world_pose()
-        actual_position, _ = self.ik.actual_tool.get_world_pose()
+        target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+        actual_position, _ = self._tool_pose_from_hand()
 
-        target_position = np.asarray(target_position, dtype=np.float64)
-        actual_position = np.asarray(actual_position, dtype=np.float64)
-        position_error_m = self._tool_target_position_error_m()
+        position_error_m = float(
+            np.linalg.norm(actual_position - target_position)
+        )
 
         state.settled_frame_count = update_convergence_counter(
             position_error_m=position_error_m,
@@ -652,6 +831,11 @@ class SimulationRuntime:
         if state.settled_frame_count >= cfg.required_settled_frames:
             state.complete = True
 
+            next_action = (
+                "begin pre-grasp tip approach"
+                if self.cfg.pre_grasp.enabled
+                else "hold; no grasping is commanded"
+            )
             log(
                 "RGB STEREO VISUAL SERVO COMPLETE\n"
                 f"  final ToolCenter target: "
@@ -663,8 +847,10 @@ class SimulationRuntime:
                 f"  settled frames: "
                 f"{state.settled_frame_count}/"
                 f"{cfg.required_settled_frames}\n"
-                "  next action: hold; no insertion is commanded."
+                f"  next action: {next_action}."
             )
+            if self.cfg.pre_grasp.enabled:
+                self._begin_pre_grasp_descend()
             return
 
         timeout_frames = max(
@@ -690,6 +876,186 @@ class SimulationRuntime:
                 f"{position_error_m * 1000.0:.3f} mm\n"
                 f"  required: "
                 f"{cfg.settle_position_tolerance_m * 1000.0:.3f} mm"
+            )
+
+    def update_pre_grasp(self) -> None:
+        """Descend tip toward cable while opening fingers around it (no close)."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+
+        if not cfg.enabled or self.ik is None:
+            return
+        if state.phase in ("idle", "done"):
+            if state.phase == "done":
+                self._apply_finger_open(state.finger_half_gap_m)
+            return
+
+        # Open during descend so the fingers clear the cable as the tip drops.
+        if state.phase in ("descend", "open"):
+            self._apply_finger_open(state.finger_half_gap_m)
+
+        if state.phase == "descend":
+            position_error_m = self._tool_target_position_error_m()
+            state.descend_settled_frames = update_convergence_counter(
+                position_error_m=position_error_m,
+                tolerance_m=self._target_settle_tolerance_m(),
+                current_count=state.descend_settled_frames,
+            )
+            if state.descend_settled_frames < (
+                self.cfg.visual_servo.required_settled_frames
+            ):
+                return
+
+            state.phase = "open"
+            state.open_frames = 0
+            log(
+                "PRE-GRASP OPEN HOLD (no close)\n"
+                f"  tip settled; keeping fingers open at "
+                f"{state.finger_half_gap_m * 1000.0:.1f} mm per side"
+            )
+            return
+
+        if state.phase == "open":
+            state.open_frames += 1
+            if state.open_frames < cfg.open_hold_frames:
+                return
+            state.phase = "done"
+            log(
+                "PRE-GRASP DONE\n"
+                f"  tip_clearance_m={cfg.tip_clearance_m:.4f}\n"
+                f"  fingers held open at "
+                f"{state.finger_half_gap_m * 1000.0:.1f} mm per side\n"
+                "  next action: hold open; no close commanded."
+            )
+
+    def _compute_finger_half_gap_m(self) -> float:
+        cfg = self.cfg.pre_grasp
+        half_width = self.pre_grasp.cable_half_width_m
+        if half_width is None or not math.isfinite(float(half_width)):
+            half_width = cfg.fallback_cable_half_width_m
+        return min(
+            float(half_width) + cfg.side_allowance_m,
+            cfg.finger_max_open_m,
+        )
+
+    def _begin_pre_grasp_descend(self) -> None:
+        """Move IK_Target down the tool axis to the configured tip clearance."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if state.started or self.ik is None:
+            return
+        state.started = True
+        state.finger_half_gap_m = self._compute_finger_half_gap_m()
+
+        cable_point = state.cable_point_world_m
+        if cable_point is None:
+            plug_min, plug_max = self._world_bounds(
+                self.cfg.scene.tracked_connector_path
+            )
+            cable_point = 0.5 * (plug_min + plug_max)
+            state.cable_point_world_m = cable_point
+
+        target_position, target_orientation = self._get_world_pose(
+            self.cfg.ik.target_path
+        )
+        rotation = quaternion_wxyz_to_matrix(target_orientation)
+        tool_z = rotation[:, 2]
+        tool_z_norm = float(np.linalg.norm(tool_z))
+        if tool_z_norm <= 1.0e-9:
+            warn("Pre-grasp descend aborted: invalid tool Z axis.")
+            state.phase = "done"
+            return
+        approach = tool_z / tool_z_norm
+
+        # Cable lies along +tool Z from the tool center (grasp_standoff).
+        desired_tool = np.asarray(cable_point, dtype=np.float64) - (
+            cfg.tip_clearance_m * approach
+        )
+        desired_tool[0] = float(target_position[0])
+        desired_tool[1] = float(target_position[1])
+
+        block_top = self._cable_support_top_z_m()
+        # Keep tool center above block top + tip clearance as a floor.
+        min_z = block_top + cfg.tip_clearance_m + cfg.block_safety_margin_m
+        if desired_tool[2] < min_z:
+            desired_tool[2] = min_z
+
+        self.ik.target.set_world_pose(
+            position=desired_tool,
+            orientation=target_orientation,
+        )
+        state.phase = "descend"
+        state.descend_settled_frames = 0
+        log(
+            "PRE-GRASP DESCEND + OPEN\n"
+            f"  cable_point={np.round(cable_point, 4).tolist()}\n"
+            f"  tip_clearance_m={cfg.tip_clearance_m:.4f}\n"
+            f"  new IK_Target={np.round(desired_tool, 4).tolist()}\n"
+            f"  finger_half_gap_m={state.finger_half_gap_m:.4f}\n"
+            f"  side_allowance_m={cfg.side_allowance_m:.4f}"
+        )
+        self._apply_finger_open(state.finger_half_gap_m)
+
+    def _apply_finger_open(self, half_gap_m: float) -> None:
+        """Command both finger joints to an open half-gap (no close)."""
+        if self.ik is None or not self._finger_dof_indices:
+            return
+        gap = float(
+            min(
+                max(half_gap_m, 0.0),
+                self.cfg.pre_grasp.finger_max_open_m,
+            )
+        )
+        # CUDA PhysX backend: ArticulationAction joint_indices must be a
+        # torch tensor (or list). A NumPy array hits resolve_indices().to()
+        # and raises AttributeError.
+        try:
+            import torch
+
+            device = getattr(self.ik.articulation, "_device", None)
+            if device is None:
+                device = (
+                    "cuda:0"
+                    if self.cfg.scene.enable_gpu_dynamics
+                    else "cpu"
+                )
+            joint_positions = torch.tensor(
+                [gap, gap],
+                dtype=torch.float32,
+                device=device,
+            )
+            joint_indices = torch.tensor(
+                self._finger_dof_indices,
+                dtype=torch.long,
+                device=device,
+            )
+        except Exception:
+            joint_positions = np.array([gap, gap], dtype=np.float64)
+            joint_indices = list(self._finger_dof_indices)
+
+        action = ArticulationAction(
+            joint_positions=joint_positions,
+            joint_indices=joint_indices,
+        )
+        self.ik.articulation.apply_action(action)
+
+    def _resolve_finger_dof_indices(self, articulation: Articulation) -> None:
+        """Map configured finger joint names to articulation DOF indices."""
+        names = list(articulation.dof_names)
+        indices: list[int] = []
+        for joint_name in self.cfg.pre_grasp.finger_joint_names:
+            if joint_name not in names:
+                warn(
+                    f"Finger joint '{joint_name}' not found in articulation "
+                    f"DOFs: {names}"
+                )
+                continue
+            indices.append(int(names.index(joint_name)))
+        self._finger_dof_indices = indices
+        if len(indices) == 2:
+            log(
+                "Pre-grasp finger DOFs: "
+                f"{list(self.cfg.pre_grasp.finger_joint_names)} -> {indices}"
             )
 
     def _compute_desired_cable_camera_usd(self) -> np.ndarray:
@@ -764,7 +1130,7 @@ class SimulationRuntime:
             return
 
         desired_tool_position, desired_tool_orientation = (
-            runtime.target.get_world_pose()
+            self._get_world_pose(cfg.target_path)
         )
 
         hand_target_position, hand_target_orientation = (
@@ -782,8 +1148,8 @@ class SimulationRuntime:
             )
         )
 
-        base_position, base_orientation = (
-            runtime.articulation.get_world_pose()
+        base_position, base_orientation = self._world_pose_numpy(
+            runtime.articulation
         )
 
         runtime.kinematics_solver.set_robot_base_pose(
@@ -823,25 +1189,9 @@ class SimulationRuntime:
         runtime: IKRuntime,
     ) -> None:
         """Move /World/ToolCenter to the tool pose achieved by the robot."""
-        cfg = self.cfg.ik
-
-        hand_position, hand_orientation = self._get_world_pose(
-            runtime.hand_path
-        )
-
-        tool_position, tool_orientation = hand_pose_to_tool_pose(
-            hand_position_m=hand_position,
-            hand_orientation_wxyz=hand_orientation,
-            tool_local_position_m=np.asarray(
-                cfg.tool_center_local_position_m,
-                dtype=np.float64,
-            ),
-            tool_local_orientation_wxyz=np.asarray(
-                cfg.tool_center_local_orientation_wxyz,
-                dtype=np.float64,
-            ),
-        )
-
+        tool_position, tool_orientation = self._tool_pose_from_hand()
+        # Keep the debug marker in sync. Settle / IK math uses USD hand pose
+        # directly and does not depend on this round-trip.
         runtime.actual_tool.set_world_pose(
             position=tool_position,
             orientation=tool_orientation,
@@ -867,11 +1217,19 @@ class SimulationRuntime:
 
         left_frame = CameraFrame(
             rgb=left_rgb,
-            camera=self._camera_model(self.left_camera_path, left_rgb),
+            camera=self._camera_model(
+                self.left_camera_path,
+                left_rgb,
+                self.cfg.camera.left_local_position,
+            ),
         )
         right_frame = CameraFrame(
             rgb=right_rgb,
-            camera=self._camera_model(self.right_camera_path, right_rgb),
+            camera=self._camera_model(
+                self.right_camera_path,
+                right_rgb,
+                self.cfg.camera.right_local_position,
+            ),
         )
         virtual_camera = build_virtual_camera_model(
             left_frame.camera,
@@ -887,13 +1245,32 @@ class SimulationRuntime:
         self,
         camera_path: str,
         rgb: np.ndarray,
+        local_position: tuple[float, float, float],
     ) -> CameraModel:
         stage = omni.usd.get_context().get_stage()
         camera_prim = stage.GetPrimAtPath(camera_path)
         camera = UsdGeom.Camera(camera_prim)
-        camera_world = UsdGeom.Xformable(
-            camera_prim
-        ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+
+        # CUDA PhysX does not keep child USD xforms in sync with the moving
+        # hand. Compose world←camera from articulation FK + the known local
+        # eye offset so stereo geometry matches the rendered images.
+        if (
+            self.ik is not None
+            and self.cfg.scene.enable_gpu_dynamics
+        ):
+            world_from_camera = (
+                self._hand_camera_local_matrix(local_position)
+                @ self._world_from_hand_matrix()
+            )
+        else:
+            camera_world = UsdGeom.Xformable(
+                camera_prim
+            ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            world_from_camera = np.asarray(
+                camera_world,
+                dtype=np.float64,
+            )
+
         return CameraModel(
             image_height_px=rgb.shape[0],
             image_width_px=rgb.shape[1],
@@ -904,7 +1281,7 @@ class SimulationRuntime:
             vertical_aperture_mm=float(
                 camera.GetVerticalApertureAttr().Get()
             ),
-            world_from_camera=np.asarray(camera_world, dtype=np.float64),
+            world_from_camera=world_from_camera,
         )
 
     def stop(self) -> None:
@@ -943,6 +1320,8 @@ class SimulationRuntime:
         light = DomeLight("/World/DomeLight")
         light.set_intensities(scene.light_intensity)
 
+        if scene.cable_support_enabled:
+            self._create_cable_support_block()
         self._load_cable()
 
         assets_root = get_assets_root_path()
@@ -1045,7 +1424,9 @@ class SimulationRuntime:
             f"  actual tool:{self.cfg.ik.actual_tool_path}\n"
             f"  visual servo: "
             f"{self.cfg.visual_servo.max_target_step_m * 1000.0:.1f} "
-            "mm max step, 50 mm pre-insert standoff\n"
+            "mm max step, "
+            f"{self.cfg.visual_servo.grasp_standoff_m * 1000.0:.0f} "
+            "mm pre-insert standoff\n"
             f"  desired cable in virtual center eye: "
             f"{np.round(self.desired_cable_virtual_camera_usd, 5).tolist()}"
         )
@@ -1418,6 +1799,8 @@ class SimulationRuntime:
                 "Franka articulation handles did not initialize."
             )
 
+        self._resolve_finger_dof_indices(articulation)
+
         lula_config = (
             interface_config_loader
             .load_supported_lula_kinematics_solver_config(
@@ -1452,7 +1835,7 @@ class SimulationRuntime:
         ]
 
         solver = ArticulationKinematicsSolver(
-            articulation,
+            _LulaCpuArticulation(articulation),
             kinematics,
             cfg.end_effector_frame,
         )
@@ -1551,8 +1934,8 @@ class SimulationRuntime:
             except Exception:
                 pass
 
-        base_position, base_orientation = (
-            articulation.get_world_pose()
+        base_position, base_orientation = self._world_pose_numpy(
+            articulation
         )
 
         kinematics.set_robot_base_pose(
@@ -1723,7 +2106,7 @@ class SimulationRuntime:
         )
 
     def _load_cable(self) -> None:
-        """Reference the network cable asset and drop it flat on the ground."""
+        """Reference the network cable and place the tracked plug."""
         scene = self.cfg.scene
         stage = omni.usd.get_context().get_stage()
 
@@ -1731,14 +2114,134 @@ class SimulationRuntime:
             stage.RemovePrim(scene.cable_root_path)
 
         self._add_reference(scene.cable_usd_path, scene.cable_root_path)
-        self._place_cable_on_ground()
+        if scene.cable_support_enabled:
+            self._place_tracked_plug_on_support()
+        else:
+            self._place_cable_on_ground()
+
+    def _create_cable_support_block(self) -> None:
+        """
+        Visible static pedestal at cable_spawn_xy.
+
+        Uses the same XY as the cable spawn so a +40 mm X shift moves both,
+        but the block is not re-parented or snapped after cable placement.
+        """
+        scene = self.cfg.scene
+        path = scene.cable_support_path
+        size_x, size_y, size_z = (float(v) for v in scene.cable_support_size_m)
+        if min(size_x, size_y, size_z) <= 0.0:
+            raise ValueError(
+                "cable_support_size_m must be positive in every axis."
+            )
+
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(path).IsValid():
+            stage.RemovePrim(path)
+
+        cube = UsdGeom.Cube.Define(stage, Sdf.Path(path))
+        cube.CreateSizeAttr(1.0)
+        cube.CreateDisplayColorAttr(
+            [Gf.Vec3f(*scene.cable_support_color)]
+        )
+
+        # Translate then scale — same order as network_cable_on_block_spawn.py.
+        # Scale-then-translate scaled the spawn XY toward the origin and put
+        # the orange box near the far connector instead of under the plug.
+        center = Gf.Vec3d(
+            scene.cable_spawn_xy[0],
+            scene.cable_spawn_xy[1],
+            size_z / 2.0,
+        )
+        xform = UsdGeom.Xformable(cube.GetPrim())
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(center)
+        xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(
+            Gf.Vec3d(size_x, size_y, size_z)
+        )
+
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+        top_z = float(center[2] + 0.5 * size_z)
+        log(
+            f"Cable support block created at {path}: "
+            f"xy=({float(center[0]):.4f}, {float(center[1]):.4f}), "
+            f"size_mm=({size_x * 1000.0:.1f}, {size_y * 1000.0:.1f}, "
+            f"{size_z * 1000.0:.1f}), top_z={top_z:.4f} m"
+        )
+
+    def _cable_support_top_z_m(self) -> float:
+        scene = self.cfg.scene
+        if not scene.cable_support_enabled:
+            return 0.0
+        return float(scene.cable_support_size_m[2])
+
+    def _set_prim_world_translate(
+        self,
+        prim_path: str,
+        translation: np.ndarray,
+    ) -> None:
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            raise RuntimeError(f"Missing prim: {prim_path}")
+
+        value = Gf.Vec3d(*np.asarray(translation, dtype=np.float64).tolist())
+        xform = UsdGeom.Xformable(prim)
+        for op in xform.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
+                op.Set(value)
+                return
+        xform.AddTranslateOp().Set(value)
+
+    def _place_tracked_plug_on_support(self) -> None:
+        """
+        Translate only /World/NetworkCable so the tracked plug rests on the
+        block. Do not move individual heads — that detaches them from the
+        wire when deformables are off.
+        """
+        scene = self.cfg.scene
+        block_top_z = self._cable_support_top_z_m()
+        plug_min, plug_max = self._world_bounds(scene.tracked_connector_path)
+        plug_center = 0.5 * (plug_min + plug_max)
+        root_position, _ = self._get_world_pose(scene.cable_root_path)
+
+        desired_plug_min_z = (
+            block_top_z + scene.cable_support_plug_clearance_m
+        )
+        delta = np.array(
+            [
+                scene.cable_spawn_xy[0] - plug_center[0],
+                scene.cable_spawn_xy[1] - plug_center[1],
+                desired_plug_min_z - plug_min[2],
+            ],
+            dtype=np.float64,
+        )
+        translation = root_position + delta
+        self._set_prim_world_translate(scene.cable_root_path, translation)
+        self._update_app(10)
+
+        plug_min, plug_max = self._world_bounds(scene.tracked_connector_path)
+        plug_center = 0.5 * (plug_min + plug_max)
+        root_min, _ = self._world_bounds(scene.cable_root_path)
+        log(
+            "Cable plug placed on support:\n"
+            f"  plug_center={np.round(plug_center, 4).tolist()}\n"
+            f"  plug_min_z={plug_min[2]:.4f} "
+            f"(block_top={block_top_z:.4f})\n"
+            f"  root_min_z={root_min[2]:.4f}\n"
+            f"  translation={np.round(translation, 4).tolist()}"
+        )
+        if root_min[2] < -0.002:
+            warn(
+                "Part of the cable root bbox is below ground; the far "
+                "end of the wire may clip initially."
+            )
 
     def _place_cable_on_ground(self) -> None:
         """
         Align the connector's bbox center over cable_spawn_xy, and drop the
         whole cable so its lowest point sits at ground_clearance above the
-        ground plane. Mirrors place_cable_on_ground() from
-        network_connector_pickup.py, adapted to this file's helper style.
+        ground plane. Root-only translate keeps both heads attached.
         """
         scene = self.cfg.scene
         root_min, _ = self._world_bounds(scene.cable_root_path)
@@ -1746,9 +2249,6 @@ class SimulationRuntime:
             scene.tracked_connector_path
         )
         connector_center = (connector_min + connector_max) / 2.0
-
-        stage = omni.usd.get_context().get_stage()
-        root_prim = stage.GetPrimAtPath(scene.cable_root_path)
         root_position, _ = self._get_world_pose(scene.cable_root_path)
 
         delta = np.array(
@@ -1760,25 +2260,11 @@ class SimulationRuntime:
             dtype=np.float64,
         )
         translation = root_position + delta
-
-        xform = UsdGeom.Xformable(root_prim)
-        for op in xform.GetOrderedXformOps():
-            if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
-                op.Set(Gf.Vec3d(*translation.tolist()))
-                self._update_app(10)
-                log(
-                    "Cable placed: "
-                    f"connector_center={np.round(connector_center, 4).tolist()}, "
-                    f"translation={np.round(translation, 4).tolist()}"
-                )
-                return
-
-        xform.AddTranslateOp(
-            UsdGeom.XformOp.PrecisionDouble
-        ).Set(Gf.Vec3d(*translation.tolist()))
+        self._set_prim_world_translate(scene.cable_root_path, translation)
         self._update_app(10)
         log(
-            "Cable placed (new translate op): "
+            "Cable placed on ground: "
+            f"connector_center={np.round(connector_center, 4).tolist()}, "
             f"translation={np.round(translation, 4).tolist()}"
         )
 
@@ -1856,6 +2342,29 @@ class SimulationRuntime:
             raise RuntimeError(f"{label} annotator returned an empty array.")
 
         return array
+
+    @staticmethod
+    def _as_cpu_numpy(value, dtype=np.float64) -> np.ndarray:
+        """Copy Isaac pose/tensors to host NumPy (needed when device=cuda)."""
+        if value is None:
+            raise RuntimeError("Expected a pose value, got None.")
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+        if hasattr(value, "numpy"):
+            array = np.asarray(value.numpy(), dtype=dtype)
+        else:
+            array = np.asarray(value, dtype=dtype)
+        return np.array(array, dtype=dtype, copy=True)
+
+    def _world_pose_numpy(self, prim) -> tuple[np.ndarray, np.ndarray]:
+        """get_world_pose() as host float64 arrays for Lula / NumPy math."""
+        position, orientation = prim.get_world_pose()
+        return (
+            self._as_cpu_numpy(position).reshape(3),
+            self._as_cpu_numpy(orientation).reshape(4),
+        )
 
     def _set_external_view(self) -> None:
         try:
