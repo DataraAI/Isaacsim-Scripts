@@ -1,0 +1,2 @@
+capture=7
+reason=left eye corner refinement failed: corner refinement moved outside the cable boundary
