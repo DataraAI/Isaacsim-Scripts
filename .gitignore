@@ -3,4 +3,5 @@ __pycache__/
 .cursorignore
 detailedInsertion/datahall/debug_logs/
 single_rack_cv/camera_output/
-test/camera_output/
+test/camera_output
+single_rack_cv/yoloe-26l-seg.pt
