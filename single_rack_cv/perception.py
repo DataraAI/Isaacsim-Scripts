@@ -473,13 +473,21 @@ def refine_detection_to_dark_cavity(
         )
 
     score, bbox, mask = max(candidates, key=lambda item: item[0])
-    refined_x, refined_y, refined_width, refined_height = bbox
+
+    mask_rows, mask_columns = np.nonzero(mask > 0)
+    if mask_columns.size == 0:
+        raise RuntimeError(
+            "Refined port mask contains no foreground pixels."
+        )
+
+    mask_center_uv = (
+        float(np.mean(mask_columns)),
+        float(np.mean(mask_rows)),
+    )
+
     return PortDetection(
         bbox_xywh=bbox,
-        center_uv=(
-            refined_x + 0.5 * refined_width,
-            refined_y + 0.5 * refined_height,
-        ),
+        center_uv=mask_center_uv,
         shape_score=float(
             np.clip(
                 0.75 * coarse.shape_score + 0.25 * score,

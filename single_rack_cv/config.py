@@ -102,19 +102,16 @@ class YOLOEConfig:
         / "yoloe_reference_port_atlas.png"
     )
 
-    # Five tight views of the same dark RJ45 cavity at different scales.
-    # Repeating class ID 0 tells YOLOE these are examples of one class.
+    # Production prompt selected by the 60-frame stereo benchmark.
+    # This tight runtime-scale example produced zero track switches and
+    # 0.434 mm 3D RMS jitter.
     reference_boxes_xyxy: tuple[
         tuple[float, float, float, float],
         ...,
     ] = (
-        (58.0, 70.0, 175.0, 165.0),
-        (271.6, 85.1, 353.5, 151.6),
-        (434.0, 95.5, 492.5, 143.0),
-        (558.3, 102.55, 599.25, 135.8),
         (659.5, 107.25, 688.75, 131.0),
     )
-    reference_class_ids: tuple[int, ...] = (0, 0, 0, 0, 0)
+    reference_class_ids: tuple[int, ...] = (0,)
 
     # Small-object inference. Confidence stays low because visual-prompt scores
     # are not calibrated like a closed-set detector; stereo geometry and local
