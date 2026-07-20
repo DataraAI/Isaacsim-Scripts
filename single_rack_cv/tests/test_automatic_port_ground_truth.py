@@ -11,9 +11,34 @@ from automatic_port_ground_truth import (
     intersect_ray_with_plane,
     offset_rim_samples_outward,
 )
+from tools.extract_front_rim_ground_truth import _bbox_side_samples
 
 
 class AutomaticGroundTruthTests(unittest.TestCase):
+    def test_bbox_side_samples_follow_refined_cavity_box(self) -> None:
+        samples = _bbox_side_samples(
+            (10, 20, 21, 11),
+            samples_per_side=3,
+            corner_trim_fraction=0.0,
+        )
+        self.assertEqual(samples.shape, (4, 3, 2))
+        np.testing.assert_allclose(
+            samples[0],
+            np.array([[10.0, 20.0], [20.0, 20.0], [30.0, 20.0]]),
+        )
+        np.testing.assert_allclose(
+            samples[1],
+            np.array([[30.0, 20.0], [30.0, 25.0], [30.0, 30.0]]),
+        )
+        np.testing.assert_allclose(
+            samples[2],
+            np.array([[10.0, 30.0], [20.0, 30.0], [30.0, 30.0]]),
+        )
+        np.testing.assert_allclose(
+            samples[3],
+            np.array([[10.0, 20.0], [10.0, 25.0], [10.0, 30.0]]),
+        )
+
     def test_offsets_each_side_away_from_center(self) -> None:
         samples = np.array(
             [
