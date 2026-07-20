@@ -223,7 +223,7 @@ class FrontRimConfig:
     plane_max_residual_m: float = 0.0005
     min_plane_inliers: int = 20
 
-    normal_min_camera_dot: float = 0.20
+    normal_min_camera_cosine: float = 0.20
 
 
 @dataclass(frozen=True)
