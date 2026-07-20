@@ -23,6 +23,15 @@ class FrontRimBenchmarkTests(unittest.TestCase):
         self.assertIn('bash tools/run_front_rim_ground_truth.sh', source)
         self.assertIn('if [[ ! -s "$GROUND_TRUTH" ]]', source)
 
+    def test_launcher_uses_summary_to_set_final_exit_status(self) -> None:
+        source = (
+            PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('SUMMARY="camera_output/front_rim_benchmark_v1/summary.json"', source)
+        self.assertIn('"QUALIFIED": true', source)
+        self.assertIn("exit 2", source)
+        self.assertNotIn('exec "$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py', source)
+
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
             point_world_m=np.array([0.0, 0.0, 0.002]),
