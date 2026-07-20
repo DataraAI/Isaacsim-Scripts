@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start Isaac before CUDA/OpenCV imports, then run the frozen benchmark."""
+"""Start Isaac before CUDA/OpenCV imports, then run epipolar benchmark."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ import traceback
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.py"
-BENCHMARK_PATH = PROJECT_ROOT / "benchmarks" / "front_rim_benchmark.py"
+BENCHMARK_PATH = (
+    PROJECT_ROOT / "benchmarks" / "front_rim_benchmark_epipolar.py"
+)
 
 
 def _load_path(name: str, path: Path):
