@@ -18,8 +18,9 @@ unset CONDA_PREFIX
 unset VIRTUAL_ENV
 
 GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"
+SUMMARY="camera_output/front_rim_benchmark_v1/summary.json"
 
-printf '[FRONT RIM BENCHMARK] mode=frozen-60-pair-v2\n'
+printf '[FRONT RIM BENCHMARK] mode=cavity-anchored-bezel-v3\n'
 
 if [[ ! -s "$GROUND_TRUTH" ]]; then
   printf '[FRONT RIM BENCHMARK] ground truth missing; generating automatically\n'
@@ -32,4 +33,23 @@ if [[ ! -s "$GROUND_TRUTH" ]]; then
 fi
 
 printf '[FRONT RIM BENCHMARK] ground truth ready: %s\n' "$GROUND_TRUTH"
-exec "$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py
+rm -f "$SUMMARY"
+
+set +e
+"$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py
+python_status=$?
+set -e
+
+if [[ ! -s "$SUMMARY" ]]; then
+  printf 'ERROR: benchmark did not create %s (python status=%s)\n' \
+    "$SUMMARY" "$python_status" >&2
+  exit 1
+fi
+
+if grep -q '"QUALIFIED": true' "$SUMMARY"; then
+  printf '[FRONT RIM BENCHMARK] QUALIFIED=true\n'
+  exit 0
+fi
+
+printf '[FRONT RIM BENCHMARK] QUALIFIED=false\n' >&2
+exit 2
