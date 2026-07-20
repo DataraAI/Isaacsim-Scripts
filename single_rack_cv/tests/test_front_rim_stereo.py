@@ -62,33 +62,46 @@ def empty_line() -> RimLine2D:
     )
 
 
-def make_rim(samples: np.ndarray) -> FrontRim2D:
-    corners = np.array(
-        [
-            samples[0, 0],
-            samples[0, -1],
-            samples[2, -1],
-            samples[2, 0],
-        ],
-        dtype=np.float64,
-    )
-    center = np.mean(corners, axis=0)
+def make_rim(
+    samples: np.ndarray,
+    *,
+    corners: np.ndarray | None = None,
+    center_uv: tuple[float, float] | None = None,
+) -> FrontRim2D:
+    if corners is None:
+        corners = np.array(
+            [
+                samples[0, 0],
+                samples[0, -1],
+                samples[2, -1],
+                samples[2, 0],
+            ],
+            dtype=np.float64,
+        )
+    if center_uv is None:
+        center = np.mean(corners, axis=0)
+        center_uv = (float(center[0]), float(center[1]))
     return FrontRim2D(
         roi_uv=(0, 0, 640, 480),
         corners_uv=corners,
-        center_uv=(float(center[0]), float(center[1])),
+        center_uv=center_uv,
         side_lines=(empty_line(), empty_line(), empty_line(), empty_line()),
         side_samples_uv=samples,
     )
 
 
-def rectangle_samples_world() -> np.ndarray:
+def rectangle_samples_world(
+    *,
+    center_x_m: float = 0.0,
+    half_width_m: float = 0.0057,
+    half_height_m: float = 0.0035,
+) -> np.ndarray:
     corners = np.array(
         [
-            [-0.0057, +0.0035, -0.13],
-            [+0.0057, +0.0035, -0.13],
-            [+0.0057, -0.0035, -0.13],
-            [-0.0057, -0.0035, -0.13],
+            [center_x_m - half_width_m, +half_height_m, -0.13],
+            [center_x_m + half_width_m, +half_height_m, -0.13],
+            [center_x_m + half_width_m, -half_height_m, -0.13],
+            [center_x_m - half_width_m, -half_height_m, -0.13],
         ],
         dtype=np.float64,
     )
@@ -135,6 +148,63 @@ class FrontRimStereoTests(unittest.TestCase):
         self.assertEqual(result.accepted_sample_count, 28)
         self.assertLess(result.max_ray_gap_m, 1.0e-9)
         self.assertLess(result.plane_residual_m, 1.0e-9)
+
+    def test_center_comes_from_opening_rays_not_shifted_bezel_ring(self) -> None:
+        left = SyntheticCamera((-0.02, 0.0, 0.0))
+        right = SyntheticCamera((+0.02, 0.0, 0.0))
+
+        shifted_bezel = rectangle_samples_world(
+            center_x_m=0.002,
+            half_width_m=0.0065,
+            half_height_m=0.0043,
+        )
+        opening_corners = np.array(
+            [
+                [-0.0057, +0.0035, -0.13],
+                [+0.0057, +0.0035, -0.13],
+                [+0.0057, -0.0035, -0.13],
+                [-0.0057, -0.0035, -0.13],
+            ],
+            dtype=np.float64,
+        )
+        opening_center = np.array([0.0, 0.0, -0.13])
+
+        left_samples = np.stack(
+            [[left.project_world(point) for point in side] for side in shifted_bezel]
+        )
+        right_samples = np.stack(
+            [[right.project_world(point) for point in side] for side in shifted_bezel]
+        )
+        left_corners = np.stack(
+            [left.project_world(point) for point in opening_corners]
+        )
+        right_corners = np.stack(
+            [right.project_world(point) for point in opening_corners]
+        )
+
+        result = triangulate_front_rims(
+            left_rim=make_rim(
+                left_samples,
+                corners=left_corners,
+                center_uv=tuple(left.project_world(opening_center)),
+            ),
+            right_rim=make_rim(
+                right_samples,
+                corners=right_corners,
+                center_uv=tuple(right.project_world(opening_center)),
+            ),
+            left_camera=left,
+            right_camera=right,
+            cfg=FrontRimConfig(),
+        )
+
+        np.testing.assert_allclose(
+            result.center_world_m,
+            opening_center,
+            atol=1.0e-8,
+        )
+        self.assertAlmostEqual(result.width_m, 0.0114, places=7)
+        self.assertAlmostEqual(result.height_m, 0.0070, places=7)
 
     def test_rejects_too_few_stereo_pairs(self) -> None:
         left = SyntheticCamera((-0.02, 0.0, 0.0))
