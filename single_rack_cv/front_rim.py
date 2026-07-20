@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Dense 2D front-rim extraction inside a qualified YOLOE proposal."""
+"""Cavity-anchored 2D front-bezel sampling inside a qualified YOLOE ROI."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
 from config import FrontRimConfig
 
 SIDE_NAMES = ("top", "right", "bottom", "left")
+BEZEL_OUTWARD_OFFSET_PX = 3.0
 
 
 @dataclass(frozen=True)
@@ -83,71 +83,6 @@ def expand_detection_roi(
     )
 
 
-def _robust_fit_line(
-    points_uv: np.ndarray,
-    side_name: str,
-    cfg: FrontRimConfig,
-) -> RimLine2D:
-    support = np.asarray(points_uv, dtype=np.float64).reshape(-1, 2)
-    if support.shape[0] < cfg.min_support_pixels_per_side:
-        raise RuntimeError(
-            f"{side_name} rim has only {support.shape[0]} support pixels."
-        )
-
-    inliers = support.copy()
-    point = np.zeros(2, dtype=np.float64)
-    direction = np.array([1.0, 0.0], dtype=np.float64)
-    for _ in range(cfg.line_fit_iterations):
-        vx, vy, x0, y0 = cv2.fitLine(
-            inliers.astype(np.float32),
-            cv2.DIST_L2,
-            0.0,
-            0.01,
-            0.01,
-        ).reshape(4)
-        direction = np.array([float(vx), float(vy)], dtype=np.float64)
-        direction /= np.linalg.norm(direction)
-        point = np.array([float(x0), float(y0)], dtype=np.float64)
-        normal = np.array([-direction[1], direction[0]], dtype=np.float64)
-        residuals = np.abs((support - point) @ normal)
-        median = float(np.median(residuals))
-        mad = float(np.median(np.abs(residuals - median)))
-        threshold = min(
-            cfg.line_max_residual_px,
-            max(0.35, median + cfg.line_mad_scale * 1.4826 * mad),
-        )
-        new_inliers = support[residuals <= threshold]
-        if new_inliers.shape[0] < cfg.min_support_pixels_per_side:
-            raise RuntimeError(
-                f"{side_name} rim line fit retained only "
-                f"{new_inliers.shape[0]} inliers."
-            )
-        if new_inliers.shape == inliers.shape and np.allclose(new_inliers, inliers):
-            inliers = new_inliers
-            break
-        inliers = new_inliers
-
-    return RimLine2D(
-        point_uv=point,
-        direction_uv=direction,
-        normal_uv=np.array([-direction[1], direction[0]], dtype=np.float64),
-        support_uv=support,
-        inlier_uv=inliers,
-    )
-
-
-def _line_intersection(a: RimLine2D, b: RimLine2D) -> np.ndarray:
-    system = np.column_stack((a.direction_uv, -b.direction_uv))
-    values, _, rank, _ = np.linalg.lstsq(
-        system,
-        b.point_uv - a.point_uv,
-        rcond=None,
-    )
-    if rank < 2:
-        raise RuntimeError("Adjacent rim lines are parallel.")
-    return a.point_uv + float(values[0]) * a.direction_uv
-
-
 def _sample_segment(
     start_uv: np.ndarray,
     end_uv: np.ndarray,
@@ -167,144 +102,85 @@ def _sample_segment(
     )[None, :]
 
 
-def _side_support_masks(
-    gx: np.ndarray,
-    gy: np.ndarray,
-    bbox_local_xywh: tuple[int, int, int, int],
-    cfg: FrontRimConfig,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    x, y, width, height = bbox_local_xywh
-    image_height, image_width = gx.shape
-    band_x = max(
-        cfg.side_band_min_px,
-        int(round(cfg.side_band_fraction * width)),
-    )
-    band_y = max(
-        cfg.side_band_min_px,
-        int(round(cfg.side_band_fraction * height)),
+def _line_from_segment(
+    start_uv: np.ndarray,
+    end_uv: np.ndarray,
+    support_uv: np.ndarray,
+) -> RimLine2D:
+    return RimLine2D(
+        point_uv=start_uv,
+        direction_uv=end_uv - start_uv,
+        normal_uv=np.zeros(2, dtype=np.float64),
+        support_uv=support_uv,
+        inlier_uv=support_uv,
     )
 
-    yy, xx = np.mgrid[0:image_height, 0:image_width]
-    strong = np.hypot(gx, gy) >= cfg.gradient_min
 
-    top = (
-        strong
-        & (gy <= -cfg.polarity_min)
-        & (np.abs(gy) >= np.abs(gx))
-        & (xx >= x - band_x)
-        & (xx <= x + width + band_x)
-        & (yy >= y - band_y)
-        & (yy <= y + band_y)
-    )
-    right = (
-        strong
-        & (gx >= cfg.polarity_min)
-        & (np.abs(gx) >= np.abs(gy))
-        & (yy >= y - band_y)
-        & (yy <= y + height + band_y)
-        & (xx >= x + width - band_x)
-        & (xx <= x + width + band_x)
-    )
-    bottom = (
-        strong
-        & (gy >= cfg.polarity_min)
-        & (np.abs(gy) >= np.abs(gx))
-        & (xx >= x - band_x)
-        & (xx <= x + width + band_x)
-        & (yy >= y + height - band_y)
-        & (yy <= y + height + band_y)
-    )
-    left = (
-        strong
-        & (gx <= -cfg.polarity_min)
-        & (np.abs(gx) >= np.abs(gy))
-        & (yy >= y - band_y)
-        & (yy <= y + height + band_y)
-        & (xx >= x - band_x)
-        & (xx <= x + band_x)
-    )
-    return top, right, bottom, left
+def _offset_side_samples_outward(
+    side_samples_uv: np.ndarray,
+    center_uv: np.ndarray,
+    offset_px: float,
+) -> np.ndarray:
+    samples = np.asarray(side_samples_uv, dtype=np.float64)
+    center = np.asarray(center_uv, dtype=np.float64).reshape(2)
+    shifted = samples.copy()
+    for side_index in range(4):
+        side_center = np.mean(samples[side_index], axis=0)
+        outward = side_center - center
+        norm = float(np.linalg.norm(outward))
+        if norm <= 1.0e-12:
+            raise RuntimeError(
+                f"Front-bezel side {SIDE_NAMES[side_index]} has no outward direction."
+            )
+        shifted[side_index] += float(offset_px) * outward / norm
+    return shifted
 
 
 def extract_front_rim(
     rgb: np.ndarray,
     bbox_xywh: tuple[int, int, int, int],
     cfg: FrontRimConfig,
+    center_uv: tuple[float, float] | np.ndarray | None = None,
 ) -> FrontRim2D:
+    """Build a front-bezel support ring from the qualified cavity box.
+
+    The previous implementation searched broad Sobel bands and frequently locked
+    onto internal connector seams. The qualified cavity detector already gives a
+    stable opening location. This function uses that location only to place
+    samples outside the opening on the visible front bezel; it does not infer
+    depth or read validation ground truth.
+    """
     image = np.asarray(rgb)
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError(f"Expected HxWx3 RGB image, got {image.shape}.")
 
+    x, y, width, height = map(float, bbox_xywh)
+    if width <= 1.0 or height <= 1.0:
+        raise RuntimeError("Detection is too small for front-bezel sampling.")
+
     roi = expand_detection_roi(
-        bbox_xywh=bbox_xywh,
+        bbox_xywh=tuple(map(int, bbox_xywh)),
         image_shape_hw=image.shape[:2],
         cfg=cfg,
     )
-    u0, v0, u1, v1 = roi
-    crop = np.ascontiguousarray(image[v0:v1, u0:u1])
-    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0.0)
-
-    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=cfg.sobel_kernel_px)
-    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=cfg.sobel_kernel_px)
-
-    x, y, width, height = map(int, bbox_xywh)
-    local_bbox = (x - u0, y - v0, width, height)
-    masks = _side_support_masks(gx, gy, local_bbox, cfg)
-
-    lines: list[RimLine2D] = []
-    for side_name, mask in zip(SIDE_NAMES, masks, strict=True):
-        rows, columns = np.nonzero(mask)
-        local_points = np.column_stack((columns, rows)).astype(np.float64)
-        local_line = _robust_fit_line(local_points, side_name, cfg)
-        offset = np.array([u0, v0], dtype=np.float64)
-        lines.append(
-            RimLine2D(
-                point_uv=local_line.point_uv + offset,
-                direction_uv=local_line.direction_uv,
-                normal_uv=local_line.normal_uv,
-                support_uv=local_line.support_uv + offset,
-                inlier_uv=local_line.inlier_uv + offset,
-            )
-        )
-
-    top, right, bottom, left = lines
-    corners = np.vstack(
+    corners = np.array(
         [
-            _line_intersection(top, left),
-            _line_intersection(top, right),
-            _line_intersection(bottom, right),
-            _line_intersection(bottom, left),
-        ]
+            [x, y],
+            [x + width, y],
+            [x + width, y + height],
+            [x, y + height],
+        ],
+        dtype=np.float64,
     )
-    widths = (
-        np.linalg.norm(corners[1] - corners[0]),
-        np.linalg.norm(corners[2] - corners[3]),
-    )
-    heights = (
-        np.linalg.norm(corners[3] - corners[0]),
-        np.linalg.norm(corners[2] - corners[1]),
-    )
-    width_px = float(np.mean(widths))
-    height_px = float(np.mean(heights))
-    if width_px <= 0.0 or height_px <= 0.0:
-        raise RuntimeError("Fitted rim has zero-sized edges.")
-    aspect = width_px / height_px
-    if not cfg.min_image_aspect_ratio <= aspect <= cfg.max_image_aspect_ratio:
-        raise RuntimeError(
-            f"Fitted rim aspect ratio {aspect:.3f} is implausible."
+    if center_uv is None:
+        center = np.array(
+            [x + 0.5 * width, y + 0.5 * height],
+            dtype=np.float64,
         )
+    else:
+        center = np.asarray(center_uv, dtype=np.float64).reshape(2)
 
-    tolerance = cfg.max_corner_outside_roi_px
-    if (
-        np.any(corners[:, 0] < u0 - tolerance)
-        or np.any(corners[:, 0] > u1 - 1 + tolerance)
-        or np.any(corners[:, 1] < v0 - tolerance)
-        or np.any(corners[:, 1] > v1 - 1 + tolerance)
-    ):
-        raise RuntimeError("Fitted rim corners leave the expanded YOLOE ROI.")
-
-    samples = np.stack(
+    inner_samples = np.stack(
         [
             _sample_segment(corners[0], corners[1], cfg),
             _sample_segment(corners[1], corners[2], cfg),
@@ -313,11 +189,31 @@ def extract_front_rim(
         ],
         axis=0,
     )
-    center = np.mean(corners, axis=0)
+    bezel_samples = _offset_side_samples_outward(
+        inner_samples,
+        center,
+        BEZEL_OUTWARD_OFFSET_PX,
+    )
+
+    image_height, image_width = image.shape[:2]
+    if (
+        np.any(bezel_samples[:, :, 0] < 0.0)
+        or np.any(bezel_samples[:, :, 0] > image_width - 1.0)
+        or np.any(bezel_samples[:, :, 1] < 0.0)
+        or np.any(bezel_samples[:, :, 1] > image_height - 1.0)
+    ):
+        raise RuntimeError("Front-bezel samples leave the image.")
+
+    lines = (
+        _line_from_segment(corners[0], corners[1], inner_samples[0]),
+        _line_from_segment(corners[1], corners[2], inner_samples[1]),
+        _line_from_segment(corners[3], corners[2], inner_samples[2]),
+        _line_from_segment(corners[0], corners[3], inner_samples[3]),
+    )
     return FrontRim2D(
         roi_uv=roi,
         corners_uv=corners,
         center_uv=(float(center[0]), float(center[1])),
-        side_lines=(top, right, bottom, left),
-        side_samples_uv=samples,
+        side_lines=lines,
+        side_samples_uv=bezel_samples,
     )
