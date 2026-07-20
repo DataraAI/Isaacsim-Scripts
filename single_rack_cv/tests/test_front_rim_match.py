@@ -155,10 +155,9 @@ class FrontRimEpipolarMatcherTests(unittest.TestCase):
             max_epipolar_error_px=2.0,
         )
         invalid = ~result.valid_mask
-        vertical_gap = np.abs(
-            matched_rim.side_samples_uv[invalid, 1]
-            - left_rim.side_samples_uv[invalid, 1]
-        )
+        matched_invalid = matched_rim.side_samples_uv[invalid]
+        left_invalid = left_rim.side_samples_uv[invalid]
+        vertical_gap = np.abs(matched_invalid[:, 1] - left_invalid[:, 1])
         self.assertTrue(np.all(vertical_gap > 2.0))
 
 
