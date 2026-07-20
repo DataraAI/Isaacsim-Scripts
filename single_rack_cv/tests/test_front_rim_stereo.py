@@ -65,19 +65,10 @@ def empty_line() -> RimLine2D:
 def make_rim(
     samples: np.ndarray,
     *,
-    corners: np.ndarray | None = None,
+    corners: np.ndarray,
     center_uv: tuple[float, float] | None = None,
 ) -> FrontRim2D:
-    if corners is None:
-        corners = np.array(
-            [
-                samples[0, 0],
-                samples[0, -1],
-                samples[2, -1],
-                samples[2, 0],
-            ],
-            dtype=np.float64,
-        )
+    corners = np.asarray(corners, dtype=np.float64).reshape(4, 2)
     if center_uv is None:
         center = np.mean(corners, axis=0)
         center_uv = (float(center[0]), float(center[1]))
@@ -90,13 +81,13 @@ def make_rim(
     )
 
 
-def rectangle_samples_world(
+def rectangle_corners_world(
     *,
     center_x_m: float = 0.0,
     half_width_m: float = 0.0057,
     half_height_m: float = 0.0035,
 ) -> np.ndarray:
-    corners = np.array(
+    return np.array(
         [
             [center_x_m - half_width_m, +half_height_m, -0.13],
             [center_x_m + half_width_m, +half_height_m, -0.13],
@@ -104,6 +95,19 @@ def rectangle_samples_world(
             [center_x_m - half_width_m, -half_height_m, -0.13],
         ],
         dtype=np.float64,
+    )
+
+
+def rectangle_samples_world(
+    *,
+    center_x_m: float = 0.0,
+    half_width_m: float = 0.0057,
+    half_height_m: float = 0.0035,
+) -> np.ndarray:
+    corners = rectangle_corners_world(
+        center_x_m=center_x_m,
+        half_width_m=half_width_m,
+        half_height_m=half_height_m,
     )
     values = np.linspace(0.15, 0.85, 7)
     return np.stack(
@@ -117,10 +121,15 @@ def rectangle_samples_world(
     )
 
 
+def project_points(camera: SyntheticCamera, points: np.ndarray) -> np.ndarray:
+    return np.stack([camera.project_world(point) for point in points])
+
+
 class FrontRimStereoTests(unittest.TestCase):
     def test_recovers_planar_rectangle_center(self) -> None:
         left = SyntheticCamera((-0.02, 0.0, 0.0))
         right = SyntheticCamera((+0.02, 0.0, 0.0))
+        world_corners = rectangle_corners_world()
         world_samples = rectangle_samples_world()
         left_samples = np.stack(
             [[left.project_world(point) for point in side] for side in world_samples]
@@ -130,8 +139,14 @@ class FrontRimStereoTests(unittest.TestCase):
         )
 
         result = triangulate_front_rims(
-            left_rim=make_rim(left_samples),
-            right_rim=make_rim(right_samples),
+            left_rim=make_rim(
+                left_samples,
+                corners=project_points(left, world_corners),
+            ),
+            right_rim=make_rim(
+                right_samples,
+                corners=project_points(right, world_corners),
+            ),
             left_camera=left,
             right_camera=right,
             cfg=FrontRimConfig(),
@@ -158,15 +173,7 @@ class FrontRimStereoTests(unittest.TestCase):
             half_width_m=0.0065,
             half_height_m=0.0043,
         )
-        opening_corners = np.array(
-            [
-                [-0.0057, +0.0035, -0.13],
-                [+0.0057, +0.0035, -0.13],
-                [+0.0057, -0.0035, -0.13],
-                [-0.0057, -0.0035, -0.13],
-            ],
-            dtype=np.float64,
-        )
+        opening_corners = rectangle_corners_world()
         opening_center = np.array([0.0, 0.0, -0.13])
 
         left_samples = np.stack(
@@ -175,12 +182,8 @@ class FrontRimStereoTests(unittest.TestCase):
         right_samples = np.stack(
             [[right.project_world(point) for point in side] for side in shifted_bezel]
         )
-        left_corners = np.stack(
-            [left.project_world(point) for point in opening_corners]
-        )
-        right_corners = np.stack(
-            [right.project_world(point) for point in opening_corners]
-        )
+        left_corners = project_points(left, opening_corners)
+        right_corners = project_points(right, opening_corners)
 
         result = triangulate_front_rims(
             left_rim=make_rim(
@@ -209,6 +212,7 @@ class FrontRimStereoTests(unittest.TestCase):
     def test_rejects_too_few_stereo_pairs(self) -> None:
         left = SyntheticCamera((-0.02, 0.0, 0.0))
         right = SyntheticCamera((+0.02, 0.0, 0.0))
+        world_corners = rectangle_corners_world()
         world_samples = rectangle_samples_world()
         left_samples = np.stack(
             [[left.project_world(point) for point in side] for side in world_samples]
@@ -220,8 +224,14 @@ class FrontRimStereoTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "dense rim pairs"):
             triangulate_front_rims(
-                left_rim=make_rim(left_samples),
-                right_rim=make_rim(right_samples),
+                left_rim=make_rim(
+                    left_samples,
+                    corners=project_points(left, world_corners),
+                ),
+                right_rim=make_rim(
+                    right_samples,
+                    corners=project_points(right, world_corners),
+                ),
                 left_camera=left,
                 right_camera=right,
                 cfg=FrontRimConfig(),
