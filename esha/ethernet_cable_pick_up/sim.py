@@ -31,6 +31,7 @@ from isaacsim.sensors.experimental.rtx import CameraSensor, RtxCamera
 from isaacsim.storage.native import get_assets_root_path
 
 from config import Config
+from grasp_control import resolve_tool_orientation
 from perception import (
     CameraFrame,
     CameraModel,
@@ -996,13 +997,18 @@ class SimulationRuntime:
             target_position, target_orientation = self._get_world_pose(
                 self.cfg.ik.target_path
             )
+            commanded_orientation = resolve_tool_orientation(
+                target_orientation,
+                state.grasp_orientation_wxyz,
+                grasp_active=True,
+            )
             log(
                 "GRASP LIFT DONE\n"
                 f"  lift_z_m={cfg.lift_z_m:.4f}\n"
                 f"  orientation held (no post-grasp rotate)\n"
                 f"  IK_Target={np.round(target_position, 4).tolist()}\n"
-                f"  IK_Target_ori_wxyz="
-                f"{np.round(target_orientation, 4).tolist()}\n"
+                f"  commanded_grasp_ori_wxyz="
+                f"{np.round(commanded_orientation, 4).tolist()}\n"
                 f"  fingers held closed at "
                 f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
             )
@@ -1015,7 +1021,11 @@ class SimulationRuntime:
         _, target_orientation = self._get_world_pose(self.cfg.ik.target_path)
         _, actual_orientation = self._tool_pose_from_hand()
         qa = _normalize_quaternion_wxyz(actual_orientation)
-        qt = _normalize_quaternion_wxyz(target_orientation)
+        qt = resolve_tool_orientation(
+            target_orientation,
+            self.pre_grasp.grasp_orientation_wxyz,
+            grasp_active=self.pre_grasp.phase != "idle",
+        )
         dot = abs(float(np.dot(qa, qt)))
         dot = min(1.0, max(0.0, dot))
         return float(2.0 * math.acos(dot))
@@ -1394,6 +1404,11 @@ class SimulationRuntime:
 
         desired_tool_position, desired_tool_orientation = (
             self._get_world_pose(cfg.target_path)
+        )
+        desired_tool_orientation = resolve_tool_orientation(
+            desired_tool_orientation,
+            self.pre_grasp.grasp_orientation_wxyz,
+            grasp_active=self.pre_grasp.phase != "idle",
         )
 
         hand_target_position, hand_target_orientation = (

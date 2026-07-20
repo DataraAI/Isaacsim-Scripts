@@ -170,7 +170,7 @@ class IKConfig:
     # cable_spawn_xy (0.54) so the raised plug stays in the stereo FOV.
     initial_position: tuple[float, float, float] = (
         0.7200,
-        0.0100,
+        0.0500,
         0.3400,
     )
     initial_orientation_wxyz: tuple[float, float, float, float] = (
