@@ -79,8 +79,6 @@ class CameraConfig:
     output_dir: Path = Path(__file__).resolve().parent / "camera_output"
 
 
-
-
 @dataclass(frozen=True)
 class YOLOEConfig:
     """One-time multiscale visual prompt plus full-frame stereo inference."""
@@ -183,6 +181,49 @@ class PerceptionConfig:
     # Once acquired, reject YOLOE masks that jump to another rack feature.
     tracking_max_center_jump_px: float = 45.0
     tracking_max_scale_ratio: float = 1.35
+
+
+@dataclass(frozen=True)
+class FrontRimConfig:
+    """Dense front-opening rim estimation inside a qualified YOLOE ROI."""
+
+    # Keep the working cavity-center controller active until the rim path
+    # independently passes the offline and live qualification gates.
+    enabled: bool = False
+
+    roi_expand_ratio: float = 0.50
+    roi_min_margin_px: int = 8
+
+    sobel_kernel_px: int = 3
+    gradient_min: float = 18.0
+    polarity_min: float = 6.0
+
+    side_band_fraction: float = 0.40
+    side_band_min_px: int = 5
+    min_support_pixels_per_side: int = 12
+
+    line_fit_iterations: int = 4
+    line_mad_scale: float = 2.5
+    line_max_residual_px: float = 1.5
+
+    min_image_aspect_ratio: float = 1.00
+    max_image_aspect_ratio: float = 2.20
+    max_corner_outside_roi_px: float = 1.0
+
+    samples_per_side: int = 7
+    sample_corner_trim_fraction: float = 0.15
+
+    sample_max_epipolar_error_px: float = 2.0
+    sample_max_ray_gap_m: float = 0.0005
+    sample_max_reprojection_px: float = 1.0
+    min_accepted_sample_pairs: int = 20
+
+    plane_fit_iterations: int = 4
+    plane_mad_scale: float = 2.5
+    plane_max_residual_m: float = 0.0005
+    min_plane_inliers: int = 20
+
+    normal_min_camera_dot: float = 0.20
 
 
 @dataclass(frozen=True)
@@ -312,6 +353,7 @@ class Config:
     scene: SceneConfig = field(default_factory=SceneConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
+    front_rim: FrontRimConfig = field(default_factory=FrontRimConfig)
     ik: IKConfig = field(default_factory=IKConfig)
     drive_tuning: DriveTuningConfig = field(
         default_factory=DriveTuningConfig
