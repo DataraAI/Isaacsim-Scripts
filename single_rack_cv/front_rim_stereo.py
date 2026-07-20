@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dense stereo triangulation and 3D plane fitting for front-rim samples."""
+"""Dense stereo triangulation and 3D fitting for cavity-anchored bezel samples."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ class FrontRim3D:
 def _unit_vector(value: np.ndarray, name: str) -> np.ndarray:
     vector = np.asarray(value, dtype=np.float64).reshape(3)
     norm = float(np.linalg.norm(vector))
-    if not np.isfinite(norm) or norm <= 1.0e-12:
+    if not np.all(np.isfinite(vector)) or norm <= 1.0e-12:
         raise ValueError(f"{name} must be finite and nonzero.")
     return vector / norm
 
@@ -124,7 +124,7 @@ def _robust_plane_fit(
     points = np.asarray(points_world_m, dtype=np.float64).reshape(-1, 3)
     if points.shape[0] < cfg.min_plane_inliers:
         raise RuntimeError(
-            f"Only {points.shape[0]} stereo rim points reached plane fitting."
+            f"Only {points.shape[0]} stereo bezel points reached plane fitting."
         )
 
     inlier_mask = np.ones(points.shape[0], dtype=bool)
@@ -148,7 +148,7 @@ def _robust_plane_fit(
         next_mask = residuals <= threshold
         if int(np.count_nonzero(next_mask)) < cfg.min_plane_inliers:
             raise RuntimeError(
-                "Robust plane fit rejected too many stereo rim points."
+                "Robust plane fit rejected too many stereo bezel points."
             )
         if np.array_equal(next_mask, inlier_mask):
             inlier_mask = next_mask
@@ -184,39 +184,71 @@ def _camera_facing_normal(
     cosine = float(np.dot(normal, toward_cameras))
     if cosine < cfg.normal_min_camera_cosine:
         raise RuntimeError(
-            "Fitted front-rim normal is not sufficiently camera-facing: "
+            "Fitted front-bezel normal is not sufficiently camera-facing: "
             f"cosine={cosine:.3f}."
         )
     return normal
 
 
-def _side_axis(
-    points_by_side: np.ndarray,
-    accepted_mask: np.ndarray,
-    side_a: int,
-    side_b: int,
-    normal_world: np.ndarray,
-    axis_name: str,
+def _intersect_pixel_with_plane(
+    camera: StereoCamera,
+    pixel_uv: np.ndarray | tuple[float, float],
+    plane_center_world_m: np.ndarray,
+    plane_normal_world: np.ndarray,
 ) -> np.ndarray:
-    directions: list[np.ndarray] = []
-    for side_index in (side_a, side_b):
-        points = points_by_side[side_index][accepted_mask[side_index]]
-        if points.shape[0] < 2:
-            continue
-        direction = points[-1] - points[0]
-        direction -= normal_world * float(np.dot(direction, normal_world))
-        if np.linalg.norm(direction) > 1.0e-12:
-            directions.append(_unit_vector(direction, axis_name))
-    if not directions:
-        raise RuntimeError(f"No valid {axis_name} rim direction remained.")
-    reference = directions[0]
-    aligned = [
-        direction if float(np.dot(direction, reference)) >= 0.0 else -direction
-        for direction in directions
-    ]
-    average = np.mean(np.vstack(aligned), axis=0)
-    average -= normal_world * float(np.dot(average, normal_world))
-    return _unit_vector(average, axis_name)
+    origin, direction = camera.pixel_to_world_ray(pixel_uv)
+    origin = np.asarray(origin, dtype=np.float64).reshape(3)
+    direction = _unit_vector(direction, "pixel ray")
+    normal = _unit_vector(plane_normal_world, "plane normal")
+    denominator = float(np.dot(direction, normal))
+    if abs(denominator) <= 1.0e-9:
+        raise RuntimeError("Opening ray is parallel to the fitted front plane.")
+    distance = float(
+        np.dot(
+            np.asarray(plane_center_world_m, dtype=np.float64) - origin,
+            normal,
+        )
+        / denominator
+    )
+    if distance <= 0.0:
+        raise RuntimeError("Fitted front plane lies behind an opening ray.")
+    return origin + distance * direction
+
+
+def _rectangle_axes(
+    corners_world_m: np.ndarray,
+    normal_world: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    corners = np.asarray(corners_world_m, dtype=np.float64).reshape(4, 3)
+    normal = _unit_vector(normal_world, "plane normal")
+
+    horizontal_vector = 0.5 * (
+        (corners[1] - corners[0])
+        + (corners[2] - corners[3])
+    )
+    horizontal_vector -= normal * float(np.dot(horizontal_vector, normal))
+    horizontal = _unit_vector(horizontal_vector, "horizontal front-rim axis")
+
+    vertical_vector = 0.5 * (
+        (corners[3] - corners[0])
+        + (corners[2] - corners[1])
+    )
+    vertical_vector -= normal * float(np.dot(vertical_vector, normal))
+    vertical = _unit_vector(vertical_vector, "vertical front-rim axis")
+    if float(np.dot(np.cross(horizontal, vertical), normal)) < 0.0:
+        vertical = -vertical
+
+    width_m = 0.5 * (
+        float(np.linalg.norm(corners[1] - corners[0]))
+        + float(np.linalg.norm(corners[2] - corners[3]))
+    )
+    height_m = 0.5 * (
+        float(np.linalg.norm(corners[3] - corners[0]))
+        + float(np.linalg.norm(corners[2] - corners[1]))
+    )
+    if width_m <= 0.0 or height_m <= 0.0:
+        raise RuntimeError("Fitted front-rim rectangle has non-positive size.")
+    return horizontal, vertical, width_m, height_m
 
 
 def triangulate_front_rims(
@@ -226,12 +258,13 @@ def triangulate_front_rims(
     right_camera: StereoCamera,
     cfg: FrontRimConfig,
 ) -> FrontRim3D:
+    """Fit the front bezel, then intersect opening rays with that plane."""
     left_samples = np.asarray(left_rim.side_samples_uv, dtype=np.float64)
     right_samples = np.asarray(right_rim.side_samples_uv, dtype=np.float64)
     if left_samples.shape != right_samples.shape:
-        raise ValueError("Left/right front-rim sample arrays must match.")
+        raise ValueError("Left/right front-bezel sample arrays must match.")
     if left_samples.ndim != 3 or left_samples.shape[0] != 4:
-        raise ValueError("Front-rim samples must have shape (4,N,2).")
+        raise ValueError("Front-bezel samples must have shape (4,N,2).")
 
     sample_count = left_samples.shape[1]
     points = np.full((4, sample_count, 3), np.nan, dtype=np.float64)
@@ -302,11 +335,11 @@ def triangulate_front_rims(
             final_mask[tuple(original_index)] = True
 
     if int(np.count_nonzero(final_mask)) < cfg.min_plane_inliers:
-        raise RuntimeError("Too few front-rim samples survived robust plane fitting.")
+        raise RuntimeError("Too few front-bezel samples survived plane fitting.")
     for side_index, side_name in enumerate(("top", "right", "bottom", "left")):
         if int(np.count_nonzero(final_mask[side_index])) < 2:
             raise RuntimeError(
-                f"The {side_name} rim lost too many samples during plane fitting."
+                f"The {side_name} bezel side lost too many plane inliers."
             )
 
     normal = _camera_facing_normal(
@@ -316,73 +349,67 @@ def triangulate_front_rims(
         right_camera,
         cfg,
     )
-    horizontal = _side_axis(
-        points,
-        final_mask,
-        0,
-        2,
+
+    left_center = _intersect_pixel_with_plane(
+        left_camera,
+        left_rim.center_uv,
+        plane_center,
         normal,
-        "horizontal front-rim axis",
     )
-    vertical = _unit_vector(
-        np.cross(normal, horizontal),
-        "vertical front-rim axis",
+    right_center = _intersect_pixel_with_plane(
+        right_camera,
+        right_rim.center_uv,
+        plane_center,
+        normal,
     )
-
-    top_points = points[0][final_mask[0]]
-    right_points = points[1][final_mask[1]]
-    bottom_points = points[2][final_mask[2]]
-    left_points = points[3][final_mask[3]]
-
-    left_u = float(np.mean((left_points - plane_center) @ horizontal))
-    right_u = float(np.mean((right_points - plane_center) @ horizontal))
-    top_v = float(np.mean((top_points - plane_center) @ vertical))
-    bottom_v = float(np.mean((bottom_points - plane_center) @ vertical))
-
-    if right_u < left_u:
-        horizontal = -horizontal
-        left_u = float(np.mean((left_points - plane_center) @ horizontal))
-        right_u = float(np.mean((right_points - plane_center) @ horizontal))
-        vertical = _unit_vector(
-            np.cross(normal, horizontal),
-            "vertical front-rim axis",
+    center_gap = float(np.linalg.norm(left_center - right_center))
+    if center_gap > cfg.sample_max_ray_gap_m:
+        raise RuntimeError(
+            "Opening-center plane intersections disagree by "
+            f"{center_gap * 1000.0:.3f} mm."
         )
-        top_v = float(np.mean((top_points - plane_center) @ vertical))
-        bottom_v = float(np.mean((bottom_points - plane_center) @ vertical))
-    if bottom_v < top_v:
-        vertical = -vertical
-        top_v = float(np.mean((top_points - plane_center) @ vertical))
-        bottom_v = float(np.mean((bottom_points - plane_center) @ vertical))
+    center = 0.5 * (left_center + right_center)
 
-    width_m = right_u - left_u
-    height_m = bottom_v - top_v
-    if width_m <= 0.0 or height_m <= 0.0:
-        raise RuntimeError("Fitted front-rim rectangle has non-positive size.")
+    corners: list[np.ndarray] = []
+    corner_gaps: list[float] = []
+    for corner_index in range(4):
+        left_corner = _intersect_pixel_with_plane(
+            left_camera,
+            left_rim.corners_uv[corner_index],
+            plane_center,
+            normal,
+        )
+        right_corner = _intersect_pixel_with_plane(
+            right_camera,
+            right_rim.corners_uv[corner_index],
+            plane_center,
+            normal,
+        )
+        corners.append(0.5 * (left_corner + right_corner))
+        corner_gaps.append(float(np.linalg.norm(left_corner - right_corner)))
+    corners_world = np.vstack(corners)
+    corners_world += center - np.mean(corners_world, axis=0)
 
-    center = (
-        plane_center
-        + 0.5 * (left_u + right_u) * horizontal
-        + 0.5 * (top_v + bottom_v) * vertical
-    )
-    corners = np.vstack(
-        [
-            plane_center + left_u * horizontal + top_v * vertical,
-            plane_center + right_u * horizontal + top_v * vertical,
-            plane_center + right_u * horizontal + bottom_v * vertical,
-            plane_center + left_u * horizontal + bottom_v * vertical,
-        ]
+    horizontal, vertical, width_m, height_m = _rectangle_axes(
+        corners_world,
+        normal,
     )
 
     reprojection = np.asarray(reprojection_values, dtype=np.float64)
     if reprojection.size == 0:
-        raise RuntimeError("No front-rim reprojection measurements were recorded.")
+        raise RuntimeError("No front-bezel reprojection measurements were recorded.")
     final_ray_gaps = ray_gaps[final_mask]
     final_plane_residuals = np.abs(
         (points[final_mask] - plane_center) @ normal
     )
+    maximum_gap = max(
+        float(np.nanmax(final_ray_gaps)),
+        center_gap,
+        max(corner_gaps),
+    )
 
     return FrontRim3D(
-        corners_world_m=corners,
+        corners_world_m=corners_world,
         center_world_m=center,
         normal_world=normal,
         horizontal_world=horizontal,
@@ -393,7 +420,7 @@ def triangulate_front_rims(
             np.sqrt(np.mean(reprojection * reprojection))
         ),
         max_reprojection_px=float(np.nanmax(reprojection_max[final_mask])),
-        max_ray_gap_m=float(np.nanmax(final_ray_gaps)),
+        max_ray_gap_m=float(maximum_gap),
         plane_residual_m=float(np.max(final_plane_residuals)),
         sample_points_world_m=points,
         sample_inlier_mask=final_mask,
