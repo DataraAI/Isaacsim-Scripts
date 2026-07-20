@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 SMOKE_MODULE = "tests.isaac_camera_smoke_test"
 SMOKE_STATUS_ENV = "GEOMETRY_SMOKE_STATUS_FILE"
 

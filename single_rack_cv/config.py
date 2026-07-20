@@ -89,9 +89,16 @@ class YOLOEConfig:
 
     # Use the large checkpoint because the runtime port is only about 25-30 px
     # wide in the original 640x480 eye images.
-    model_name: str = "yoloe-26l-seg.pt"
+    model_name: str = str(
+        Path(__file__).resolve().parent
+        / "assets"
+        / "models"
+        / "yoloe-26l-seg.pt"
+    )
     reference_image_path: Path = (
         Path(__file__).resolve().parent
+        / "assets"
+        / "prompts"
         / "yoloe_reference_port_atlas.png"
     )
 
