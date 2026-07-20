@@ -20,7 +20,7 @@ unset VIRTUAL_ENV
 GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"
 SUMMARY="camera_output/front_rim_benchmark_v1/summary.json"
 
-printf '[FRONT RIM BENCHMARK] mode=cavity-anchored-bezel-v3\n'
+printf '[FRONT RIM BENCHMARK] mode=epipolar-patch-v4\n'
 
 if [[ ! -s "$GROUND_TRUTH" ]]; then
   printf '[FRONT RIM BENCHMARK] ground truth missing; generating automatically\n'
