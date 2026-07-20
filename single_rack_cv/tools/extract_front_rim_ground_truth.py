@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automatically derive the physical port-opening plane from Isaac raycasts."""
+"""Automatically derive the physical port-opening plane from RTX mesh raycasts."""
 
 from __future__ import annotations
 
@@ -26,24 +26,7 @@ from config import CONFIG
 
 OUTPUT_PATH = PROJECT_ROOT / "benchmarks" / "front_rim_ground_truth.json"
 DEBUG_DIR = CONFIG.camera.output_dir / "front_rim_ground_truth_debug"
-
-
-def _float3(value: np.ndarray):
-    import carb
-
-    x, y, z = np.asarray(value, dtype=np.float64).reshape(3)
-    return carb.Float3(float(x), float(y), float(z))
-
-
-def _hit_prim_path(hit: dict[str, object], rack_prefix: str) -> str:
-    candidates = (
-        str(hit.get("collision", "")),
-        str(hit.get("rigidBody", "")),
-    )
-    for candidate in candidates:
-        if candidate.startswith(rack_prefix):
-            return candidate
-    return next((candidate for candidate in candidates if candidate), "")
+RTX_POLL_UPDATES = 120
 
 
 def _bbox_side_samples(
@@ -100,43 +83,104 @@ def _cavity_outer_ring(
     )
 
 
+def _tuple3(value: np.ndarray) -> tuple[float, float, float]:
+    x, y, z = np.asarray(value, dtype=np.float64).reshape(3)
+    return float(x), float(y), float(z)
+
+
 def _cast_rays(
+    app,
     camera,
     pixels_uv: np.ndarray,
     cfg: RaycastGroundTruthConfig,
 ) -> tuple[list[RaycastHit], list[str]]:
-    from omni.physx import get_physx_scene_query_interface
+    """Cast against rendered USD meshes through RTX, not PhysX colliders."""
+    import omni.kit.raycast.query as raycast_query
 
-    query = get_physx_scene_query_interface()
+    pixels = np.asarray(pixels_uv, dtype=np.float64).reshape(-1, 2)
+    interface = raycast_query.acquire_raycast_query_interface()
+    sequence_id = interface.add_raycast_sequence()
+
+    rays = []
+    for pixel_uv in pixels:
+        origin, direction = camera.pixel_to_world_ray(pixel_uv)
+        rays.append(
+            raycast_query.Ray(
+                _tuple3(origin),
+                _tuple3(direction),
+                0.0,
+                float(cfg.max_raycast_distance_m),
+            )
+        )
+
     hits: list[RaycastHit] = []
     misses: list[str] = []
-    for index, pixel_uv in enumerate(
-        np.asarray(pixels_uv, dtype=np.float64).reshape(-1, 2)
-    ):
-        origin, direction = camera.pixel_to_world_ray(pixel_uv)
-        hit = query.raycast_closest(
-            _float3(origin),
-            _float3(direction),
-            float(cfg.max_raycast_distance_m),
+    try:
+        interface.set_raycast_sequence_array_size(sequence_id, len(rays))
+        submit_status = interface.submit_ray_to_raycast_sequence_array(
+            sequence_id,
+            rays,
         )
-        if not bool(hit.get("hit", False)):
-            misses.append(f"#{index}: miss at {np.round(pixel_uv, 2).tolist()}")
-            continue
-        prim_path = _hit_prim_path(hit, cfg.rack_path_prefix)
-        position = np.asarray(hit["position"], dtype=np.float64)
-        normal = np.asarray(hit["normal"], dtype=np.float64)
-        distance = float(hit["distance"])
-        try:
-            hits.append(
-                RaycastHit(
-                    position_world_m=position,
-                    normal_world=normal,
-                    prim_path=prim_path,
-                    distance_m=distance,
+        if submit_status != raycast_query.Result.SUCCESS:
+            raise RuntimeError(
+                "RTX raycast submission failed with status "
+                f"{submit_status!r}."
+            )
+
+        results = None
+        for _ in range(RTX_POLL_UPDATES):
+            app.update()
+            status, _, candidate_results = (
+                interface.get_latest_result_from_raycast_sequence_array(
+                    sequence_id
                 )
             )
-        except ValueError as exc:
-            misses.append(f"#{index}: invalid hit: {exc}")
+            if status == raycast_query.Result.SUCCESS:
+                results = candidate_results
+                break
+
+        if results is None:
+            raise RuntimeError(
+                "RTX raycast results were not ready after "
+                f"{RTX_POLL_UPDATES} application updates."
+            )
+        if len(results) != len(pixels):
+            raise RuntimeError(
+                "RTX raycast result count mismatch: "
+                f"{len(results)} results for {len(pixels)} rays."
+            )
+
+        for index, (pixel_uv, result) in enumerate(
+            zip(pixels, results, strict=True)
+        ):
+            if not bool(result.valid):
+                misses.append(
+                    f"#{index}: RTX miss at "
+                    f"{np.round(pixel_uv, 2).tolist()}"
+                )
+                continue
+
+            try:
+                prim_path = str(result.get_target_usd_path())
+                hits.append(
+                    RaycastHit(
+                        position_world_m=np.asarray(
+                            result.hit_position,
+                            dtype=np.float64,
+                        ),
+                        normal_world=np.asarray(
+                            result.normal,
+                            dtype=np.float64,
+                        ),
+                        prim_path=prim_path,
+                        distance_m=float(result.hit_t),
+                    )
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                misses.append(f"#{index}: invalid RTX hit: {exc}")
+    finally:
+        interface.remove_raycast_sequence(sequence_id)
+
     return hits, misses
 
 
@@ -242,6 +286,7 @@ def _print_raycast_diagnostics(
     ]
     print(
         "[GROUND TRUTH RAYCAST]\n"
+        "  backend: RTX rendered USD meshes\n"
         f"  returned hits: {len(hits)}\n"
         f"  rack-prefix hits: {len(rack_hits)}\n"
         f"  misses/invalid: {len(misses)}\n"
@@ -262,8 +307,8 @@ def _print_raycast_diagnostics(
 
 def _write_result(result, ring_pixels_uv: np.ndarray) -> None:
     payload = {
-        "schema_version": 2,
-        "source": "automatic_physx_raycast_front_bezel_plane",
+        "schema_version": 3,
+        "source": "automatic_rtx_mesh_raycast_front_bezel_plane",
         "control_usage": "forbidden; benchmark scoring only",
         "center_world_m": [float(value) for value in result.center_world_m],
         "normal_world": [float(value) for value in result.normal_world],
@@ -356,6 +401,7 @@ def main() -> int:
 
                 runtime.step()
                 hits, misses = _cast_rays(
+                    app=app,
                     camera=frame.virtual_camera,
                     pixels_uv=virtual_ring_uv,
                     cfg=ray_cfg,
