@@ -17,5 +17,19 @@ unset IGN_CONFIG_PATH
 unset CONDA_PREFIX
 unset VIRTUAL_ENV
 
-printf '[FRONT RIM BENCHMARK] mode=frozen-60-pair-v1\n'
+GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"
+
+printf '[FRONT RIM BENCHMARK] mode=frozen-60-pair-v2\n'
+
+if [[ ! -s "$GROUND_TRUTH" ]]; then
+  printf '[FRONT RIM BENCHMARK] ground truth missing; generating automatically\n'
+  bash tools/run_front_rim_ground_truth.sh
+fi
+
+if [[ ! -s "$GROUND_TRUTH" ]]; then
+  printf 'ERROR: automatic ground-truth generation did not create %s\n' "$GROUND_TRUTH" >&2
+  exit 1
+fi
+
+printf '[FRONT RIM BENCHMARK] ground truth ready: %s\n' "$GROUND_TRUTH"
 exec "$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py
