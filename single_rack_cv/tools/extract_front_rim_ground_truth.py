@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 from pathlib import Path
 import sys
 import traceback
 
 import numpy as np
+from PIL import Image, ImageDraw
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -21,9 +23,9 @@ from automatic_port_ground_truth import (
     offset_rim_samples_outward,
 )
 from config import CONFIG
-from front_rim import extract_front_rim
 
 OUTPUT_PATH = PROJECT_ROOT / "benchmarks" / "front_rim_ground_truth.json"
+DEBUG_DIR = CONFIG.camera.output_dir / "front_rim_ground_truth_debug"
 
 
 def _float3(value: np.ndarray):
@@ -42,6 +44,60 @@ def _hit_prim_path(hit: dict[str, object], rack_prefix: str) -> str:
         if candidate.startswith(rack_prefix):
             return candidate
     return next((candidate for candidate in candidates if candidate), "")
+
+
+def _bbox_side_samples(
+    bbox_xywh: tuple[int, int, int, int],
+    *,
+    samples_per_side: int,
+    corner_trim_fraction: float,
+) -> np.ndarray:
+    """Return top/right/bottom/left samples on a refined cavity box."""
+    x, y, width, height = map(float, bbox_xywh)
+    if width <= 1.0 or height <= 1.0:
+        raise RuntimeError(f"Cavity box is too small for a ray ring: {bbox_xywh}.")
+    if samples_per_side < 2:
+        raise ValueError("samples_per_side must be at least 2.")
+    trim = float(corner_trim_fraction)
+    if not 0.0 <= trim < 0.5:
+        raise ValueError("corner_trim_fraction must be in [0, 0.5).")
+
+    left = x
+    top = y
+    right = x + width - 1.0
+    bottom = y + height - 1.0
+    values = np.linspace(trim, 1.0 - trim, samples_per_side)
+
+    top_side = np.column_stack(
+        (left + values * (right - left), np.full_like(values, top))
+    )
+    right_side = np.column_stack(
+        (np.full_like(values, right), top + values * (bottom - top))
+    )
+    bottom_side = np.column_stack(
+        (left + values * (right - left), np.full_like(values, bottom))
+    )
+    left_side = np.column_stack(
+        (np.full_like(values, left), top + values * (bottom - top))
+    )
+    return np.stack((top_side, right_side, bottom_side, left_side), axis=0)
+
+
+def _cavity_outer_ring(
+    bbox_xywh: tuple[int, int, int, int],
+    center_uv: tuple[float, float],
+    cfg: RaycastGroundTruthConfig,
+) -> np.ndarray:
+    samples = _bbox_side_samples(
+        bbox_xywh,
+        samples_per_side=CONFIG.front_rim.samples_per_side,
+        corner_trim_fraction=CONFIG.front_rim.sample_corner_trim_fraction,
+    )
+    return offset_rim_samples_outward(
+        side_samples_uv=samples,
+        center_uv=center_uv,
+        offset_px=cfg.rim_outward_offset_px,
+    )
 
 
 def _cast_rays(
@@ -82,6 +138,126 @@ def _cast_rays(
         except ValueError as exc:
             misses.append(f"#{index}: invalid hit: {exc}")
     return hits, misses
+
+
+def _draw_eye_debug(
+    rgb: np.ndarray,
+    bbox_xywh: tuple[int, int, int, int],
+    center_uv: tuple[float, float],
+    ring_uv: np.ndarray,
+    label: str,
+) -> np.ndarray:
+    image = Image.fromarray(np.asarray(rgb, dtype=np.uint8), mode="RGB")
+    draw = ImageDraw.Draw(image)
+    x, y, width, height = bbox_xywh
+    draw.rectangle(
+        [x, y, x + width - 1, y + height - 1],
+        outline=(0, 255, 0),
+        width=2,
+    )
+    center_u, center_v = center_uv
+    draw.line(
+        [center_u - 5, center_v, center_u + 5, center_v],
+        fill=(0, 255, 255),
+        width=1,
+    )
+    draw.line(
+        [center_u, center_v - 5, center_u, center_v + 5],
+        fill=(0, 255, 255),
+        width=1,
+    )
+    for u, v in np.asarray(ring_uv).reshape(-1, 2):
+        draw.ellipse([u - 2, v - 2, u + 2, v + 2], fill=(255, 0, 255))
+    bbox_aspect = width / max(1.0, float(height))
+    draw.text(
+        (8, 8),
+        f"{label} bbox={bbox_xywh} aspect={bbox_aspect:.3f}",
+        fill=(255, 255, 255),
+    )
+    return np.asarray(image, dtype=np.uint8)
+
+
+def _save_debug_capture(
+    capture_index: int,
+    frame,
+    observation,
+    left_ring_uv: np.ndarray,
+    right_ring_uv: np.ndarray,
+) -> None:
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    left = observation.left.detection
+    right = observation.right.detection
+    Image.fromarray(
+        _draw_eye_debug(
+            frame.left.rgb,
+            left.bbox_xywh,
+            left.center_uv,
+            left_ring_uv,
+            "left",
+        ),
+        mode="RGB",
+    ).save(DEBUG_DIR / f"left_{capture_index:02d}.png")
+    Image.fromarray(
+        _draw_eye_debug(
+            frame.right.rgb,
+            right.bbox_xywh,
+            right.center_uv,
+            right_ring_uv,
+            "right",
+        ),
+        mode="RGB",
+    ).save(DEBUG_DIR / f"right_{capture_index:02d}.png")
+    Image.fromarray(left.mask, mode="L").save(
+        DEBUG_DIR / f"left_mask_{capture_index:02d}.png"
+    )
+    Image.fromarray(right.mask, mode="L").save(
+        DEBUG_DIR / f"right_mask_{capture_index:02d}.png"
+    )
+
+
+def _print_detection_diagnostics(capture_index: int, observation) -> None:
+    left = observation.left.detection
+    right = observation.right.detection
+    left_aspect = left.bbox_xywh[2] / max(1.0, float(left.bbox_xywh[3]))
+    right_aspect = right.bbox_xywh[2] / max(1.0, float(right.bbox_xywh[3]))
+    print(
+        "[GROUND TRUTH DETECTION]\n"
+        f"  capture: {capture_index}\n"
+        f"  left bbox: {left.bbox_xywh}; aspect={left_aspect:.3f}; "
+        f"center={np.round(left.center_uv, 3).tolist()}\n"
+        f"  right bbox: {right.bbox_xywh}; aspect={right_aspect:.3f}; "
+        f"center={np.round(right.center_uv, 3).tolist()}",
+        flush=True,
+    )
+
+
+def _print_raycast_diagnostics(
+    hits: list[RaycastHit],
+    misses: list[str],
+    cfg: RaycastGroundTruthConfig,
+) -> None:
+    path_counts = Counter(hit.prim_path or "<empty>" for hit in hits)
+    rack_hits = [
+        hit for hit in hits if hit.prim_path.startswith(cfg.rack_path_prefix)
+    ]
+    print(
+        "[GROUND TRUTH RAYCAST]\n"
+        f"  returned hits: {len(hits)}\n"
+        f"  rack-prefix hits: {len(rack_hits)}\n"
+        f"  misses/invalid: {len(misses)}\n"
+        f"  path counts: {dict(path_counts)}",
+        flush=True,
+    )
+    if hits:
+        distances = np.asarray([hit.distance_m for hit in hits])
+        print(
+            "  hit distance range: "
+            f"{float(np.min(distances)):.6f} .. "
+            f"{float(np.max(distances)):.6f} m",
+            flush=True,
+        )
+    if misses:
+        print("  first misses: " + "; ".join(misses[:8]), flush=True)
 
 
 def _write_result(result, ring_pixels_uv: np.ndarray) -> None:
@@ -150,31 +326,32 @@ def main() -> int:
                     previous_right=None,
                     detector=detector,
                 )
-                left_rim = extract_front_rim(
-                    frame.left.rgb,
-                    observation.left.detection.bbox_xywh,
-                    CONFIG.front_rim,
+                _print_detection_diagnostics(capture_index, observation)
+
+                left_detection = observation.left.detection
+                right_detection = observation.right.detection
+                left_outer = _cavity_outer_ring(
+                    left_detection.bbox_xywh,
+                    left_detection.center_uv,
+                    ray_cfg,
                 )
-                right_rim = extract_front_rim(
-                    frame.right.rgb,
-                    observation.right.detection.bbox_xywh,
-                    CONFIG.front_rim,
+                right_outer = _cavity_outer_ring(
+                    right_detection.bbox_xywh,
+                    right_detection.center_uv,
+                    ray_cfg,
+                )
+                _save_debug_capture(
+                    capture_index,
+                    frame,
+                    observation,
+                    left_outer,
+                    right_outer,
                 )
 
-                left_outer = offset_rim_samples_outward(
-                    left_rim.side_samples_uv,
-                    left_rim.center_uv,
-                    ray_cfg.rim_outward_offset_px,
-                )
-                right_outer = offset_rim_samples_outward(
-                    right_rim.side_samples_uv,
-                    right_rim.center_uv,
-                    ray_cfg.rim_outward_offset_px,
-                )
                 virtual_ring_uv = 0.5 * (left_outer + right_outer)
                 virtual_center_uv = 0.5 * (
-                    np.asarray(left_rim.center_uv, dtype=np.float64)
-                    + np.asarray(right_rim.center_uv, dtype=np.float64)
+                    np.asarray(left_detection.center_uv, dtype=np.float64)
+                    + np.asarray(right_detection.center_uv, dtype=np.float64)
                 )
 
                 runtime.step()
@@ -183,6 +360,7 @@ def main() -> int:
                     pixels_uv=virtual_ring_uv,
                     cfg=ray_cfg,
                 )
+                _print_raycast_diagnostics(hits, misses, ray_cfg)
                 center_origin, center_direction = (
                     frame.virtual_camera.pixel_to_world_ray(virtual_center_uv)
                 )
@@ -204,11 +382,6 @@ def main() -> int:
                     f"  camera-facing normal: {np.round(result.normal_world, 6).tolist()}",
                     flush=True,
                 )
-                if misses:
-                    print(
-                        "  first ray diagnostics: " + "; ".join(misses[:8]),
-                        flush=True,
-                    )
                 _write_result(result, virtual_ring_uv)
                 return 0
             except Exception as exc:
@@ -218,7 +391,8 @@ def main() -> int:
                 )
                 if capture_index >= 20:
                     raise RuntimeError(
-                        "Automatic front-plane extraction failed for 20 captures."
+                        "Automatic front-plane extraction failed for 20 captures. "
+                        f"Inspect {DEBUG_DIR}."
                     ) from exc
 
         raise RuntimeError("Isaac Sim closed before automatic extraction completed.")
