@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -10,7 +11,18 @@ from benchmarks.front_rim_benchmark import (
 )
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 class FrontRimBenchmarkTests(unittest.TestCase):
+    def test_launcher_generates_missing_ground_truth(self) -> None:
+        source = (
+            PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"', source)
+        self.assertIn('bash tools/run_front_rim_ground_truth.sh', source)
+        self.assertIn('if [[ ! -s "$GROUND_TRUTH" ]]', source)
+
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
             point_world_m=np.array([0.0, 0.0, 0.002]),
