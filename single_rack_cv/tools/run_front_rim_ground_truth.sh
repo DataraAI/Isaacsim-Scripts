@@ -20,10 +20,22 @@ unset VIRTUAL_ENV
 VALIDATOR="tools/extract_front_rim_ground_truth.py"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 
-echo "[FRONT RIM VALIDATOR] commit=${COMMIT} mode=cavity-box-rayring-v3"
+echo "[FRONT RIM VALIDATOR] commit=${COMMIT} mode=rtx-mesh-rayring-v4"
 
 if grep -q 'from front_rim import extract_front_rim' "$VALIDATOR"; then
   echo "ERROR: stale validator still imports extract_front_rim." >&2
+  echo "Run: git pull --ff-only origin main" >&2
+  exit 2
+fi
+
+if grep -q 'from omni.physx import get_physx_scene_query_interface' "$VALIDATOR"; then
+  echo "ERROR: stale validator still uses PhysX collider raycasts." >&2
+  echo "Run: git pull --ff-only origin main" >&2
+  exit 2
+fi
+
+if ! grep -q 'omni.kit.raycast.query' "$VALIDATOR"; then
+  echo "ERROR: RTX mesh-raycast backend is missing." >&2
   echo "Run: git pull --ff-only origin main" >&2
   exit 2
 fi
