@@ -5,23 +5,11 @@ import unittest
 import numpy as np
 
 from config import FrontRimConfig
-from front_rim import expand_detection_roi, extract_front_rim
-
-
-def synthetic_port_image(
-    *,
-    height: int = 120,
-    width: int = 160,
-    opening_xyxy: tuple[int, int, int, int] = (55, 42, 105, 78),
-) -> np.ndarray:
-    image = np.full((height, width, 3), 190, dtype=np.uint8)
-    x0, y0, x1, y1 = opening_xyxy
-    image[y0:y1, x0:x1] = 20
-    image[y0 - 2:y0, x0 - 2:x1 + 2] = 235
-    image[y1:y1 + 2, x0 - 2:x1 + 2] = 235
-    image[y0 - 2:y1 + 2, x0 - 2:x0] = 235
-    image[y0 - 2:y1 + 2, x1:x1 + 2] = 235
-    return image
+from front_rim import (
+    BEZEL_OUTWARD_OFFSET_PX,
+    expand_detection_roi,
+    extract_front_rim,
+)
 
 
 class FrontRimConfigTests(unittest.TestCase):
@@ -50,31 +38,77 @@ class FrontRimConfigTests(unittest.TestCase):
 
 
 class FrontRimExtractionTests(unittest.TestCase):
-    def test_extracts_dense_front_rim(self) -> None:
-        rgb = synthetic_port_image()
+    def test_builds_bezel_ring_outside_cavity_box(self) -> None:
+        rgb = np.zeros((120, 160, 3), dtype=np.uint8)
         rim = extract_front_rim(
             rgb=rgb,
             bbox_xywh=(55, 42, 50, 36),
             cfg=FrontRimConfig(),
         )
+
+        np.testing.assert_allclose(rim.center_uv, (80.0, 60.0))
         np.testing.assert_allclose(
-            rim.center_uv,
-            (80.0, 60.0),
-            atol=1.0,
+            rim.corners_uv,
+            np.array(
+                [
+                    [55.0, 42.0],
+                    [105.0, 42.0],
+                    [105.0, 78.0],
+                    [55.0, 78.0],
+                ]
+            ),
         )
         self.assertEqual(rim.side_samples_uv.shape, (4, 7, 2))
-        self.assertGreaterEqual(
-            min(line.inlier_uv.shape[0] for line in rim.side_lines),
-            12,
+        np.testing.assert_allclose(
+            rim.side_samples_uv[0, :, 1],
+            42.0 - BEZEL_OUTWARD_OFFSET_PX,
+        )
+        np.testing.assert_allclose(
+            rim.side_samples_uv[1, :, 0],
+            105.0 + BEZEL_OUTWARD_OFFSET_PX,
+        )
+        np.testing.assert_allclose(
+            rim.side_samples_uv[2, :, 1],
+            78.0 + BEZEL_OUTWARD_OFFSET_PX,
+        )
+        np.testing.assert_allclose(
+            rim.side_samples_uv[3, :, 0],
+            55.0 - BEZEL_OUTWARD_OFFSET_PX,
         )
 
-    def test_rejects_missing_bottom_rim(self) -> None:
-        rgb = synthetic_port_image()
-        rgb[76:, :] = 20
-        with self.assertRaisesRegex(RuntimeError, "bottom"):
+    def test_internal_image_edges_do_not_move_bezel_ring(self) -> None:
+        plain = np.zeros((120, 160, 3), dtype=np.uint8)
+        cluttered = plain.copy()
+        cluttered[45:77, 60:63] = 255
+        cluttered[50:53, 58:103] = 255
+        cluttered[65:68, 58:103] = 255
+
+        plain_rim = extract_front_rim(
+            plain,
+            (55, 42, 50, 36),
+            FrontRimConfig(),
+        )
+        cluttered_rim = extract_front_rim(
+            cluttered,
+            (55, 42, 50, 36),
+            FrontRimConfig(),
+        )
+
+        np.testing.assert_allclose(
+            cluttered_rim.side_samples_uv,
+            plain_rim.side_samples_uv,
+        )
+        np.testing.assert_allclose(
+            cluttered_rim.corners_uv,
+            plain_rim.corners_uv,
+        )
+
+    def test_rejects_box_too_small_for_bezel_sampling(self) -> None:
+        rgb = np.zeros((40, 50, 3), dtype=np.uint8)
+        with self.assertRaisesRegex(RuntimeError, "too small"):
             extract_front_rim(
                 rgb=rgb,
-                bbox_xywh=(55, 42, 50, 36),
+                bbox_xywh=(10, 10, 1, 1),
                 cfg=FrontRimConfig(),
             )
 
