@@ -170,7 +170,7 @@ class IKConfig:
     # cable_spawn_xy (0.54) so the raised plug stays in the stereo FOV.
     initial_position: tuple[float, float, float] = (
         0.7200,
-        0.0000, #need to loosen/rework the epipolar matching
+        0.0100,
         0.3400,
     )
     initial_orientation_wxyz: tuple[float, float, float, float] = (
@@ -263,22 +263,62 @@ class VisualServoConfig:
 
 @dataclass(frozen=True)
 class PreGraspConfig:
-    """After visual servo hold: tip approach, then open fingers (no close)."""
+    """After visual servo: pre-grasp open, grasp descend, close, then lift."""
 
     enabled: bool = True
-    # Remaining tip-to-cable gap after descend along tool +Z.
-    tip_clearance_m: float = 0.012
-    # Extra open gap per side beyond measured cable half-width.
+    # Approach elevation above the horizontal plane (0=sideways, 90=top-down).
+    grasp_elevation_deg: float = 30.0
+    # Approach azimuth in world XY: 0=+X (from robot toward cable_spawn_xy).
+    grasp_azimuth_deg: float = 0.0
+    # First angled waypoint distance along approach (before final pre-grasp).
+    approach_standoff_m: float = 0.080
+    # Tool-center clearance above cable_point along tool Z (pre-grasp hover).
+    pre_grasp_clearance_m: float = 0.012
+    # Orientation settle tolerance while moving into the angled approach.
+    orientation_settle_tolerance_rad: float = 0.05
+    # Tool-center clearance at grasp (before close).
+    grasp_clearance_m: float = 0.0025
+    # Commanded close half-gap. 0 = drive fully closed; contact stops the fingers.
+    close_target_half_gap_m: float = 0.0
+    # Post-grasp lift along +world Z.
+    lift_z_m: float = 0.020
+    # Extra open gap per side beyond measured cable half-thickness.
     side_allowance_m: float = 0.002
+    # Fallback half of short-axis thickness if stereo height is unavailable.
     fallback_cable_half_width_m: float = 0.011
     finger_joint_names: tuple[str, str] = (
         "panda_finger_joint1",
         "panda_finger_joint2",
     )
+    finger_link_names: tuple[str, str] = (
+        "panda_leftfinger",
+        "panda_rightfinger",
+    )
     finger_max_open_m: float = 0.04
     block_safety_margin_m: float = 0.002
-    # Keep commanding the open pose for this many frames after settle.
+    # Keep commanding the open pose for this many frames after pre-grasp settle.
     open_hold_frames: int = 60
+    # Finger joint motion must stay within this for finger_settle_frames.
+    finger_settle_tolerance_m: float = 0.0005
+    finger_settle_frames: int = 30
+    # Extra hold after fingers stop moving before lift.
+    close_hold_frames: int = 30
+    # Max frames waiting for finger settle before lifting anyway.
+    close_timeout_frames: int = 180
+
+    # Realistic rubber pad (fingers) / hard plastic (plug) contact.
+    # PhysX combine=average → ~0.6–0.7 effective static friction.
+    finger_static_friction: float = 0.85
+    finger_dynamic_friction: float = 0.65
+    plug_static_friction: float = 0.45
+    plug_dynamic_friction: float = 0.35
+    contact_restitution: float = 0.05
+    friction_combine_mode: str = "average"
+    restitution_combine_mode: str = "min"
+    contact_offset_m: float = 0.002
+    rest_offset_m: float = 0.0
+    finger_material_path: str = "/World/Looks/FingerPadPhysicsMaterial"
+    plug_material_path: str = "/World/Looks/PlugPlasticPhysicsMaterial"
 
 
 @dataclass(frozen=True)

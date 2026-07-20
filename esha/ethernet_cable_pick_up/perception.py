@@ -22,10 +22,38 @@ class PerceptionConfig:
     # brightness) producing a nonsensical threshold.
     min_otsu_threshold: int = 20
     max_otsu_threshold: int = 200
-    # Disabled while tuning start poses: a non-zero margin rejected valid
-    # cable blobs that merely touched the bottom image border from a
-    # slightly higher / laterally offset hand pose.
+    # Reject blob centers in the bottom strip only (eye-in-hand fingers).
+    # Do not exclude left/right/top: a small hand Y offset pushes the cable
+    # toward the side of the frame.
     edge_margin_px: int = 0
+    bottom_center_exclusion_px: int = 30
+    # Thin gripper-edge fragments triangulate to sub-mm "height".
+    min_oriented_short_px: float = 4.0
+    # Soft ranking prior only (does not reject): prefer compact heads when
+    # both a head blob and a long cord blob exist in the same eye.
+    prefer_oriented_long_px: float = 120.0
+    oriented_long_penalty_weight: float = 0.25
+    # For long cord+head blobs, first split neutral/clear RJ45 pixels from
+    # the blue boot/cable along the principal axis. Width-only extraction is
+    # retained as a fallback when color evidence is weak.
+    extract_color_head: bool = True
+    head_blue_min_value: int = 70
+    head_blue_dominance: int = 25
+    head_blue_bin_fraction: float = 0.30
+    head_blue_endpoint_difference: float = 0.15
+    head_blue_required_bins: int = 2
+    # Final grasp point only: move this fraction of the detected head length
+    # from its visual center toward the blue boot. Visual servo still tracks
+    # the unshifted head center.
+    head_grasp_offset_fraction: float = 0.20
+    extract_wide_head: bool = True
+    head_axis_bin_px: float = 6.0
+    # Head bins must be at least this times the median cord-bin width.
+    head_width_ratio: float = 1.20
+    # Keep bins whose width is at least this fraction of the peak width.
+    head_peak_keep_fraction: float = 0.70
+    # Minimum head segment length along the axis (bins * bin_px).
+    head_min_length_px: float = 18.0
 
     # The cable's visible segment can be small (far away) or span most of
     # the frame (close up), and - since it can lie at any yaw on the table -
@@ -91,16 +119,17 @@ class PerceptionConfig:
     # Stereo matching and corner refinement.
     stereo_corner_refine_window_px: int = 5
     stereo_max_corner_refine_shift_px: float = 6.0
-    # Softened from 3 px so a small hand Y offset (~10-20 mm) can still
-    # form stereo pairs when left/right centers differ by ~10-15 px.
-    # Geometry checks (height/width/reproj/ray_gap) remain the hard filter
-    # against mismatched tip-vs-boot correspondences.
-    stereo_max_epipolar_error_px: float = 12.0
+    # With local_roll=90 the baseline is horizontal in the image, so true
+    # matches share nearly the same v. Gate on |Δv| (not geometric epi from
+    # FK poses): when one eye locks the RJ45 head and the other the cord,
+    # |Δv| jumps to ~100-150 px. Allow a little Y-offset / segmentation
+    # jitter.
+    stereo_max_epipolar_error_px: float = 15.0
     stereo_max_scale_ratio: float = 1.30
     stereo_min_abs_disparity_px: float = 4.0
     stereo_max_ray_gap_m: float = 0.0020
-    stereo_max_reprojection_rms_px: float = 1.0
-    stereo_max_reprojection_px: float = 2.0
+    stereo_max_reprojection_rms_px: float = 2.5
+    stereo_max_reprojection_px: float = 3.5
     stereo_max_plane_residual_m: float = 0.00075
     # Width (visible segment length) is deliberately loose - a cable
     # segment can be a couple centimeters or most of the frame, unlike a
@@ -229,6 +258,7 @@ class StereoFrame:
 class CableDetection:
     bbox_xywh: tuple[int, int, int, int]
     center_uv: tuple[float, float]
+    grasp_center_uv: tuple[float, float]
     shape_score: float
     roi_uv: tuple[int, int, int, int]
     mask: np.ndarray
@@ -275,6 +305,7 @@ class StereoCableObservation:
     right: CableCorners
     corners_world_m: np.ndarray
     center_world_xyz_m: np.ndarray
+    grasp_world_xyz_m: np.ndarray
     center_virtual_camera_usd_m: np.ndarray
     normal_world: np.ndarray
     projected_virtual_center_uv: tuple[float, float]
@@ -403,6 +434,274 @@ def _otsu_dark_mask(
     return binary
 
 
+def _isolate_wide_head_region(
+    component_mask: np.ndarray,
+    origin_xy: tuple[int, int],
+    cfg: PerceptionConfig,
+) -> tuple[
+    tuple[float, float],
+    tuple[int, int, int, int],
+    tuple[float, float],
+] | None:
+    """
+    From a long cable blob, return (center_uv, bbox_xywh, oriented_size) for
+    the widest segment along the principal axis (RJ45 head).
+    """
+    ys_local, xs_local = np.where(component_mask > 0)
+    if xs_local.size < 30:
+        return None
+
+    origin_x, origin_y = origin_xy
+    xs = xs_local.astype(np.float64) + float(origin_x)
+    ys = ys_local.astype(np.float64) + float(origin_y)
+    pts = np.column_stack((xs, ys))
+    mean = pts.mean(axis=0)
+    centered = pts - mean
+    cov = (centered.T @ centered) / float(len(pts))
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    long_axis = eigvecs[:, int(np.argmax(eigvals))]
+    short_axis = eigvecs[:, int(np.argmin(eigvals))]
+    along = centered @ long_axis
+    across = centered @ short_axis
+
+    span = float(along.max() - along.min())
+    bin_px = float(cfg.head_axis_bin_px)
+    if span < max(3.0 * bin_px, float(cfg.head_min_length_px)):
+        return None
+
+    t0 = float(along.min())
+    edges = np.arange(t0, float(along.max()) + bin_px, bin_px)
+    if edges.size < 4:
+        return None
+
+    widths = np.zeros(edges.size - 1, dtype=np.float64)
+    for i in range(edges.size - 1):
+        in_bin = (along >= edges[i]) & (along < edges[i + 1])
+        if int(np.count_nonzero(in_bin)) < 3:
+            continue
+        band = across[in_bin]
+        widths[i] = float(band.max() - band.min())
+
+    positive = widths[widths > 0.0]
+    if positive.size < 3:
+        return None
+    peak_i = int(np.argmax(widths))
+    peak_w = float(widths[peak_i])
+    if peak_w <= 0.0:
+        return None
+    median_w = float(np.median(positive))
+    # Require a true widening vs the cord; otherwise keep full blob.
+    if peak_w < median_w * float(cfg.head_width_ratio):
+        return None
+
+    keep = peak_w * float(cfg.head_peak_keep_fraction)
+    lo = peak_i
+    while lo > 0 and widths[lo - 1] >= keep:
+        lo -= 1
+    hi = peak_i
+    while hi < widths.size - 1 and widths[hi + 1] >= keep:
+        hi += 1
+
+    head_len = float(edges[hi + 1] - edges[lo])
+    if head_len < float(cfg.head_min_length_px):
+        # Grow symmetrically to the minimum head length if possible.
+        need = float(cfg.head_min_length_px) - head_len
+        pad = 0.5 * need
+        t_lo = float(edges[lo]) - pad
+        t_hi = float(edges[hi + 1]) + pad
+    else:
+        t_lo = float(edges[lo])
+        t_hi = float(edges[hi + 1])
+
+    head_mask = (along >= t_lo) & (along <= t_hi)
+    if int(np.count_nonzero(head_mask)) < 20:
+        return None
+
+    head_pts = pts[head_mask]
+    center = head_pts.mean(axis=0)
+    min_xy = head_pts.min(axis=0)
+    max_xy = head_pts.max(axis=0)
+    bbox = (
+        int(math.floor(min_xy[0])),
+        int(math.floor(min_xy[1])),
+        int(max(1, math.ceil(max_xy[0]) - math.floor(min_xy[0]) + 1)),
+        int(max(1, math.ceil(max_xy[1]) - math.floor(min_xy[1]) + 1)),
+    )
+
+    head_centered = head_pts - center
+    head_along = head_centered @ long_axis
+    head_across = head_centered @ short_axis
+    oriented_long = float(head_along.max() - head_along.min())
+    oriented_short = float(head_across.max() - head_across.min())
+    if oriented_long < oriented_short:
+        oriented_long, oriented_short = oriented_short, oriented_long
+    if oriented_short < float(cfg.min_oriented_short_px):
+        return None
+
+    return (
+        (float(center[0]), float(center[1])),
+        bbox,
+        (oriented_long, oriented_short),
+    )
+
+
+def _isolate_color_head_region(
+    rgb_crop: np.ndarray,
+    component_mask: np.ndarray,
+    origin_xy: tuple[int, int],
+    cfg: PerceptionConfig,
+) -> tuple[
+    tuple[float, float],
+    tuple[int, int, int, int],
+    tuple[float, float],
+    tuple[float, float],
+] | None:
+    """
+    Keep the neutral RJ45 segment and place its grasp point toward the boot.
+
+    The returned visual center remains the geometric center of the isolated
+    head. The fourth value is a separate final-grasp center shifted along the
+    principal axis toward the blue cable.
+    """
+    ys_local, xs_local = np.where(component_mask > 0)
+    if xs_local.size < 30:
+        return None
+
+    colors = rgb_crop[ys_local, xs_local].astype(np.int16)
+    red = colors[:, 0]
+    green = colors[:, 1]
+    blue = colors[:, 2]
+    blue_pixels = (
+        (blue >= int(cfg.head_blue_min_value))
+        & ((blue - red) >= int(cfg.head_blue_dominance))
+        & ((blue - green) >= int(cfg.head_blue_dominance))
+    )
+
+    origin_x, origin_y = origin_xy
+    xs = xs_local.astype(np.float64) + float(origin_x)
+    ys = ys_local.astype(np.float64) + float(origin_y)
+    points = np.column_stack((xs, ys))
+    center = points.mean(axis=0)
+    centered = points - center
+    covariance = (centered.T @ centered) / float(len(points))
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    long_axis = eigenvectors[:, int(np.argmax(eigenvalues))]
+    short_axis = eigenvectors[:, int(np.argmin(eigenvalues))]
+    along = centered @ long_axis
+
+    bin_px = float(cfg.head_axis_bin_px)
+    span = float(along.max() - along.min())
+    if span < max(3.0 * bin_px, float(cfg.head_min_length_px)):
+        return None
+
+    def blue_profile(axis_values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        edges = np.arange(
+            float(axis_values.min()),
+            float(axis_values.max()) + bin_px,
+            bin_px,
+        )
+        fractions = np.zeros(max(0, edges.size - 1), dtype=np.float64)
+        for bin_index in range(fractions.size):
+            in_bin = (
+                (axis_values >= edges[bin_index])
+                & (axis_values < edges[bin_index + 1])
+            )
+            count = int(np.count_nonzero(in_bin))
+            if count > 0:
+                fractions[bin_index] = float(
+                    np.count_nonzero(blue_pixels[in_bin]) / count
+                )
+        if fractions.size >= 3:
+            fractions = np.convolve(
+                fractions,
+                np.asarray([0.25, 0.50, 0.25]),
+                mode="same",
+            )
+        return edges, fractions
+
+    edges, fractions = blue_profile(along)
+    if fractions.size < 3:
+        return None
+
+    endpoint_bins = max(1, min(3, fractions.size // 4))
+    first_blue = float(np.mean(fractions[:endpoint_bins]))
+    last_blue = float(np.mean(fractions[-endpoint_bins:]))
+    # Orient the axis from neutral head toward blue cable.
+    if first_blue > last_blue:
+        along = -along
+        long_axis = -long_axis
+        edges, fractions = blue_profile(along)
+        first_blue, last_blue = last_blue, first_blue
+
+    if (
+        last_blue < float(cfg.head_blue_bin_fraction)
+        or last_blue - first_blue
+        < float(cfg.head_blue_endpoint_difference)
+    ):
+        return None
+
+    required_bins = max(1, int(cfg.head_blue_required_bins))
+    min_head_bins = max(
+        1,
+        int(math.ceil(float(cfg.head_min_length_px) / bin_px)),
+    )
+    transition_index: int | None = None
+    for bin_index in range(
+        min_head_bins,
+        fractions.size - required_bins + 1,
+    ):
+        if np.all(
+            fractions[bin_index:bin_index + required_bins]
+            >= float(cfg.head_blue_bin_fraction)
+        ):
+            transition_index = bin_index
+            break
+    if transition_index is None:
+        return None
+
+    boundary = float(edges[transition_index])
+    head_mask = along < boundary
+    if int(np.count_nonzero(head_mask)) < 20:
+        return None
+
+    head_points = points[head_mask]
+    head_center = head_points.mean(axis=0)
+    minimum = head_points.min(axis=0)
+    maximum = head_points.max(axis=0)
+    bbox = (
+        int(math.floor(minimum[0])),
+        int(math.floor(minimum[1])),
+        int(max(1, math.ceil(maximum[0]) - math.floor(minimum[0]) + 1)),
+        int(max(1, math.ceil(maximum[1]) - math.floor(minimum[1]) + 1)),
+    )
+
+    head_centered = head_points - head_center
+    head_along = head_centered @ long_axis
+    head_across = head_centered @ short_axis
+    oriented_long = float(head_along.max() - head_along.min())
+    oriented_short = float(head_across.max() - head_across.min())
+    if oriented_long < oriented_short:
+        oriented_long, oriented_short = oriented_short, oriented_long
+    if (
+        oriented_long < float(cfg.head_min_length_px)
+        or oriented_short < float(cfg.min_oriented_short_px)
+    ):
+        return None
+
+    offset_fraction = float(
+        np.clip(cfg.head_grasp_offset_fraction, 0.0, 0.45)
+    )
+    grasp_center = (
+        head_center + offset_fraction * oriented_long * long_axis
+    )
+    return (
+        (float(head_center[0]), float(head_center[1])),
+        bbox,
+        (oriented_long, oriented_short),
+        (float(grasp_center[0]), float(grasp_center[1])),
+    )
+
+
 def detect_cable_candidates(
     rgb: np.ndarray,
     cfg: PerceptionConfig,
@@ -471,31 +770,98 @@ def detect_cable_candidates(
             or global_x + width > image_width - cfg.edge_margin_px
             or global_y + height > image_height - cfg.edge_margin_px
         )
+        local_center_u, local_center_v = centroids[index]
+        center_u = float(u0 + local_center_u)
+        center_v = float(v0 + local_center_v)
+        bottom_excl = float(cfg.bottom_center_exclusion_px)
+        center_in_bottom = (
+            bottom_excl > 0.0
+            and center_v >= float(image_height) - bottom_excl
+        )
         accepted = (
             not touches_edge
+            and not center_in_bottom
             and cfg.min_width_px <= width <= cfg.max_width_px
             and cfg.min_height_px <= height <= cfg.max_height_px
             and cfg.min_aspect_ratio <= aspect_ratio <= cfg.max_aspect_ratio
             and cfg.min_area_px <= area <= cfg.max_area_px
             and cfg.min_fill_ratio <= fill_ratio <= cfg.max_fill_ratio
+            and float(oriented_short) >= float(cfg.min_oriented_short_px)
         )
         if not accepted:
             continue
+        # Gate on raw shape score only — long-blob penalty is ranking-only so
+        # a single full-cable detection is not rejected after gripper junk
+        # is filtered out.
         shape_score = score_cable_shape(aspect_ratio, fill_ratio, cfg)
         if shape_score < cfg.min_shape_score:
             continue
-        local_center_u, local_center_v = centroids[index]
+
+        det_center_u = center_u
+        det_center_v = center_v
+        det_grasp_center = (det_center_u, det_center_v)
+        det_bbox = (global_x, global_y, width, height)
+        det_oriented = (float(oriented_long), float(oriented_short))
+        head = None
+        if (
+            cfg.extract_color_head
+            and float(oriented_long) >= float(cfg.prefer_oriented_long_px)
+        ):
+            head = _isolate_color_head_region(
+                roi[y:y + height, x:x + width],
+                component_crop,
+                (global_x, global_y),
+                cfg,
+            )
+        if (
+            head is None
+            and cfg.extract_wide_head
+            and float(oriented_long) >= float(cfg.prefer_oriented_long_px)
+        ):
+            head = _isolate_wide_head_region(
+                component_crop,
+                (global_x, global_y),
+                cfg,
+            )
+        if head is not None:
+            det_center_u, det_center_v = head[0]
+            det_bbox = head[1]
+            det_oriented = head[2]
+            if len(head) >= 4:
+                det_grasp_center = head[3]
+            else:
+                det_grasp_center = (det_center_u, det_center_v)
+            # Re-score using head geometry so compact heads rank higher.
+            head_aspect = det_oriented[0] / max(det_oriented[1], 1.0e-6)
+            shape_score = score_cable_shape(
+                head_aspect,
+                min(1.0, fill_ratio),
+                cfg,
+            )
+
+        long_excess = max(
+            0.0,
+            float(det_oriented[0]) - float(cfg.prefer_oriented_long_px),
+        )
+        rank_score = shape_score
+        if cfg.prefer_oriented_long_px > 1.0e-6:
+            rank_score -= (
+                cfg.oriented_long_penalty_weight
+                * long_excess
+                / float(cfg.prefer_oriented_long_px)
+            )
+        # Prefer heads that are not sitting in the gripper strip.
+        if det_center_v >= float(image_height) - bottom_excl:
+            continue
         candidates.append(
             CableDetection(
-                bbox_xywh=(global_x, global_y, width, height),
-                center_uv=(
-                    float(u0 + local_center_u),
-                    float(v0 + local_center_v),
-                ),
-                shape_score=shape_score,
+                bbox_xywh=det_bbox,
+                center_uv=(det_center_u, det_center_v),
+                grasp_center_uv=det_grasp_center,
+                shape_score=float(rank_score),
                 roi_uv=(u0, v0, u1, v1),
                 mask=full_mask,
-                oriented_size_px=(oriented_long, oriented_short),
+                oriented_size_px=det_oriented,
             )
         )
     candidates.sort(key=lambda item: item.shape_score, reverse=True)
@@ -904,39 +1270,80 @@ def triangulate_cable_corners(
 # ---------------------------------------------------------------------------
 
 
+def _mask_oriented_box_corners(
+    mask: np.ndarray,
+    bbox_xywh: tuple[int, int, int, int],
+) -> np.ndarray:
+    """Return clockwise oriented-box corners from mask pixels inside bbox."""
+    image_height, image_width = mask.shape[:2]
+    x, y, width, height = bbox_xywh
+    x0 = max(0, int(x))
+    y0 = max(0, int(y))
+    x1 = min(image_width, int(x + width))
+    y1 = min(image_height, int(y + height))
+    if x0 >= x1 or y0 >= y1:
+        raise RuntimeError("detection bbox is outside the image")
+
+    ys, xs = np.where(mask[y0:y1, x0:x1] > 0)
+    if xs.size < 4:
+        return np.asarray(
+            [
+                [x0, y0],
+                [x1 - 1, y0],
+                [x1 - 1, y1 - 1],
+                [x0, y1 - 1],
+            ],
+            dtype=np.float32,
+        )
+
+    points = np.column_stack(
+        (xs.astype(np.float32) + x0, ys.astype(np.float32) + y0)
+    )
+    corners = cv2.boxPoints(cv2.minAreaRect(points)).astype(np.float32)
+
+    center = corners.mean(axis=0)
+    angles = np.arctan2(corners[:, 1] - center[1], corners[:, 0] - center[0])
+    corners = corners[np.argsort(angles)]
+    start = int(np.argmin(corners[:, 0] + corners[:, 1]))
+    return np.roll(corners, -start, axis=0)
+
+
 def refine_cable_corners(
     rgb: np.ndarray,
     detection: CableDetection,
     cfg: PerceptionConfig,
 ) -> CableCorners:
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    x, y, width, height = detection.bbox_xywh
-    seeds = np.array(
-        [
-            [x, y],
-            [x + width - 1, y],
-            [x + width - 1, y + height - 1],
-            [x, y + height - 1],
-        ],
-        dtype=np.float32,
+    seeds = _mask_oriented_box_corners(
+        detection.mask,
+        detection.bbox_xywh,
     )
     refined = seeds.reshape(-1, 1, 2).copy()
     window = int(cfg.stereo_corner_refine_window_px)
-    cv2.cornerSubPix(
-        gray,
-        refined,
-        (window, window),
-        (-1, -1),
-        (
-            cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-            40,
-            0.01,
-        ),
-    )
-    corners = refined.reshape(4, 2).astype(np.float64)
+    try:
+        cv2.cornerSubPix(
+            gray,
+            refined,
+            (window, window),
+            (-1, -1),
+            (
+                cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+                40,
+                0.01,
+            ),
+        )
+        corners = refined.reshape(4, 2).astype(np.float64)
+    except cv2.error:
+        corners = seeds.astype(np.float64)
+
     shifts = np.linalg.norm(corners - seeds.astype(np.float64), axis=1)
     if float(np.max(shifts)) > cfg.stereo_max_corner_refine_shift_px:
-        raise RuntimeError("corner refinement moved outside the cable boundary")
+        # The isolated RJ45 head bbox can contain internal texture corners.
+        # If sub-pixel refinement jumps to one of those, retain the geometric
+        # silhouette box; center-based triangulation does not depend on these
+        # diagnostic corners.
+        corners = seeds.astype(np.float64)
+
     image_height, image_width = gray.shape
     if (
         np.any(corners[:, 0] < 0.0)
@@ -952,6 +1359,45 @@ def refine_cable_corners(
     if area < cfg.min_area_px * 0.5:
         raise RuntimeError("refined cable quadrilateral is too small")
     return CableCorners(detection=detection, corners_uv=corners)
+
+
+def epipolar_distance_px(
+    left_uv: np.ndarray | tuple[float, float],
+    right_uv: np.ndarray | tuple[float, float],
+    left_camera: CameraModel,
+    right_camera: CameraModel,
+) -> float:
+    """
+    Distance in the right image from right_uv to the left point's epipolar line.
+
+    Uses the calibrated camera poses, so a hand Y offset does not inflate the
+    error the way a naive |v_left - v_right| check does under roll=90 stereo.
+    """
+    left_uv = np.asarray(left_uv, dtype=np.float64).reshape(2)
+    right_uv = np.asarray(right_uv, dtype=np.float64).reshape(2)
+    origin, direction = left_camera.pixel_to_world_ray(left_uv)
+
+    projected: list[np.ndarray] = []
+    for depth_m in (0.08, 0.12, 0.18, 0.25, 0.35, 0.50, 0.80, 1.20):
+        point = origin + float(depth_m) * direction
+        try:
+            projected.append(right_camera.project_world(point))
+        except RuntimeError:
+            continue
+
+    if len(projected) < 2:
+        # Degenerate ray projection: fall back to image-vertical residual.
+        return float(abs(left_uv[1] - right_uv[1]))
+
+    uv_a = projected[0]
+    uv_b = projected[-1]
+    line = uv_b - uv_a
+    line_norm = float(np.linalg.norm(line))
+    if line_norm <= 1.0e-9:
+        return float(np.linalg.norm(right_uv - uv_a))
+
+    offset = right_uv - uv_a
+    return float(abs(offset[0] * line[1] - offset[1] * line[0]) / line_norm)
 
 
 def _candidate_continuity_ok(
@@ -1095,23 +1541,40 @@ def process_stereo_cable(
         tuple[float, CableCorners, CableCorners, StereoTriangulation]
     ] = []
     pair_rejections: list[str] = []
+    epipolar_rejects: list[tuple[float, float]] = []
     for left in left_corners:
         for right in right_corners:
+            # Roll=90 stereo: epipolar lines are horizontal → gate on |Δv|.
             vertical_error = abs(
                 left.detection.center_uv[1] - right.detection.center_uv[1]
             )
+            geometric_error = epipolar_distance_px(
+                left.detection.center_uv,
+                right.detection.center_uv,
+                frame.left.camera,
+                frame.right.camera,
+            )
             if vertical_error > cfg.stereo_max_epipolar_error_px:
+                epipolar_rejects.append((vertical_error, geometric_error))
                 continue
             scale_ratio = max(
                 left.detection.scale_px / right.detection.scale_px,
                 right.detection.scale_px / left.detection.scale_px,
             )
             if scale_ratio > cfg.stereo_max_scale_ratio:
+                pair_rejections.append(
+                    f"scale ratio {scale_ratio:.3f} exceeds "
+                    f"{cfg.stereo_max_scale_ratio:.3f}"
+                )
                 continue
             disparity = abs(
                 left.detection.center_uv[0] - right.detection.center_uv[0]
             )
             if disparity < cfg.stereo_min_abs_disparity_px:
+                pair_rejections.append(
+                    f"disparity {disparity:.2f}px below "
+                    f"{cfg.stereo_min_abs_disparity_px:.2f}px"
+                )
                 continue
             try:
                 result = triangulate_detection_centers(
@@ -1142,7 +1605,33 @@ def process_stereo_cable(
             pair_results.append((score, left, right, result))
 
     if not pair_results:
-        detail = pair_rejections[-1] if pair_rejections else (
+        parts: list[str] = []
+        if epipolar_rejects:
+            best_dv, best_geo = min(epipolar_rejects, key=lambda item: item[0])
+            parts.append(
+                f"|Δv| best={best_dv:.2f}px "
+                f"(max {cfg.stereo_max_epipolar_error_px:.2f}px), "
+                f"geometric_epi={best_geo:.2f}px"
+            )
+            # Hint when eyes likely locked different cable parts.
+            if best_dv > 40.0:
+                parts.append(
+                    "likely left/right locked different cable segments "
+                    "(head vs cord)"
+                )
+        if pair_rejections:
+            parts.append(pair_rejections[-1])
+        if left_corners and right_corners:
+            left0 = left_corners[0].detection
+            right0 = right_corners[0].detection
+            parts.append(
+                "top candidates L"
+                f"@{np.round(left0.center_uv, 1).tolist()}"
+                f" long={left0.oriented_size_px[0]:.0f}px / R"
+                f"@{np.round(right0.center_uv, 1).tolist()}"
+                f" long={right0.oriented_size_px[0]:.0f}px"
+            )
+        detail = "; ".join(parts) if parts else (
             "epipolar, scale, or disparity gate rejected every pair"
         )
         raise RuntimeError(
@@ -1182,12 +1671,19 @@ def process_stereo_cable(
     center_disparity = abs(
         left.detection.center_uv[0] - right.detection.center_uv[0]
     )
+    grasp_world, _ = triangulate_pixel_pair(
+        left.detection.grasp_center_uv,
+        right.detection.grasp_center_uv,
+        frame.left.camera,
+        frame.right.camera,
+    )
 
     return StereoCableObservation(
         left=left,
         right=right,
         corners_world_m=result.corners_world_m,
         center_world_xyz_m=result.center_world_m,
+        grasp_world_xyz_m=grasp_world,
         center_virtual_camera_usd_m=center_virtual,
         normal_world=result.normal_world,
         projected_virtual_center_uv=(

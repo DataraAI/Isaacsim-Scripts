@@ -1,2 +1,2 @@
-capture=44
-reason=left eye corner refinement failed: corner refinement moved outside the cable boundary
+capture=59
+reason=no left/right cable pair passed stereo correspondence and geometry checks: stereo reprojection RMS is too high: 2.923px (max 2.500px); top candidates L@[380.8, 360.4] long=72px / R@[258.1, 366.3] long=84px

@@ -287,14 +287,21 @@ def target_is_settled(
 
 @dataclass
 class PreGraspState:
-    """One-shot tip approach + finger open-around after servo hold."""
+    """Angled approach → pre-grasp → grasp → close → lift (orientation held)."""
 
-    phase: str = "idle"  # idle | descend | open | done
+    # idle | approach | pre_descend | open | grasp_descend | close | lift | done
+    phase: str = "idle"
+    # Half of connector short-axis thickness (from stereo height_m).
     cable_half_width_m: float | None = None
     cable_point_world_m: np.ndarray | None = None
-    descend_settled_frames: int = 0
+    move_settled_frames: int = 0
     open_frames: int = 0
+    close_frames: int = 0
+    finger_settle_frames: int = 0
     finger_half_gap_m: float = 0.0
+    finger_close_half_gap_m: float = 0.0
+    last_finger_positions_m: np.ndarray | None = None
+    grasp_orientation_wxyz: np.ndarray | None = None
     started: bool = False
 
 
@@ -659,9 +666,12 @@ class SimulationRuntime:
         state.right_reference = observation.right.detection
         state.consecutive_misses = 0
 
-        self.pre_grasp.cable_half_width_m = 0.5 * float(observation.width_m)
+        # Fingers close on the short axis (thickness), not the long axis.
+        self.pre_grasp.cable_half_width_m = 0.5 * float(
+            observation.height_m
+        )
         self.pre_grasp.cable_point_world_m = np.asarray(
-            observation.center_world_xyz_m,
+            observation.grasp_world_xyz_m,
             dtype=np.float64,
         ).reshape(3)
 
@@ -832,7 +842,7 @@ class SimulationRuntime:
             state.complete = True
 
             next_action = (
-                "begin pre-grasp tip approach"
+                "angled approach → grasp → close → lift (hold angle)"
                 if self.cfg.pre_grasp.enabled
                 else "hold; no grasping is commanded"
             )
@@ -879,7 +889,7 @@ class SimulationRuntime:
             )
 
     def update_pre_grasp(self) -> None:
-        """Descend tip toward cable while opening fingers around it (no close)."""
+        """Angled approach first, then grasp/close/lift without reorienting."""
         cfg = self.cfg.pre_grasp
         state = self.pre_grasp
 
@@ -887,30 +897,37 @@ class SimulationRuntime:
             return
         if state.phase in ("idle", "done"):
             if state.phase == "done":
-                self._apply_finger_open(state.finger_half_gap_m)
+                self._apply_finger_gap(state.finger_close_half_gap_m)
             return
 
-        # Open during descend so the fingers clear the cable as the tip drops.
-        if state.phase in ("descend", "open"):
-            self._apply_finger_open(state.finger_half_gap_m)
+        open_phases = ("approach", "pre_descend", "open", "grasp_descend")
+        close_phases = ("close", "lift")
+        if state.phase in open_phases:
+            self._apply_finger_gap(state.finger_half_gap_m)
+        elif state.phase in close_phases:
+            self._apply_finger_gap(state.finger_close_half_gap_m)
 
-        if state.phase == "descend":
-            position_error_m = self._tool_target_position_error_m()
-            state.descend_settled_frames = update_convergence_counter(
-                position_error_m=position_error_m,
-                tolerance_m=self._target_settle_tolerance_m(),
-                current_count=state.descend_settled_frames,
-            )
-            if state.descend_settled_frames < (
-                self.cfg.visual_servo.required_settled_frames
+        required_settled = self.cfg.visual_servo.required_settled_frames
+
+        if state.phase == "approach":
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
+            if not self._set_ik_target_clearance_from_cable(
+                cfg.pre_grasp_clearance_m,
+                log_title="PRE-GRASP DESCEND",
             ):
                 return
+            state.phase = "pre_descend"
+            return
 
+        if state.phase == "pre_descend":
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
             state.phase = "open"
             state.open_frames = 0
             log(
-                "PRE-GRASP OPEN HOLD (no close)\n"
-                f"  tip settled; keeping fingers open at "
+                "PRE-GRASP OPEN HOLD\n"
+                f"  angled approach settled; fingers open at "
                 f"{state.finger_half_gap_m * 1000.0:.1f} mm per side"
             )
             return
@@ -919,85 +936,331 @@ class SimulationRuntime:
             state.open_frames += 1
             if state.open_frames < cfg.open_hold_frames:
                 return
-            state.phase = "done"
+            self._begin_grasp_descend()
+            return
+
+        if state.phase == "grasp_descend":
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
+            state.phase = "close"
+            state.close_frames = 0
+            state.finger_settle_frames = 0
+            state.last_finger_positions_m = None
+            state.finger_close_half_gap_m = (
+                self._compute_finger_close_half_gap_m()
+            )
+            self._apply_finger_gap(state.finger_close_half_gap_m)
             log(
-                "PRE-GRASP DONE\n"
-                f"  tip_clearance_m={cfg.tip_clearance_m:.4f}\n"
-                f"  fingers held open at "
-                f"{state.finger_half_gap_m * 1000.0:.1f} mm per side\n"
-                "  next action: hold open; no close commanded."
+                "GRASP CLOSE\n"
+                f"  commanding "
+                f"{state.finger_close_half_gap_m * 1000.0:.1f} mm "
+                f"per side (full close drive)\n"
+                "  waiting for finger joints to stop moving before lift"
+            )
+            return
+
+        if state.phase == "close":
+            state.close_frames += 1
+            fingers_settled = self._pre_grasp_fingers_settled()
+            timed_out = state.close_frames >= cfg.close_timeout_frames
+            if not fingers_settled and not timed_out:
+                return
+            if fingers_settled:
+                if state.finger_settle_frames < (
+                    cfg.finger_settle_frames + cfg.close_hold_frames
+                ):
+                    return
+            finger_pos = self._finger_joint_positions_m()
+            if timed_out and not fingers_settled:
+                warn(
+                    "GRASP CLOSE timed out before fingers fully settled; "
+                    "lifting anyway.\n"
+                    f"  close_frames={state.close_frames}\n"
+                    f"  finger_positions_m="
+                    f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
+                )
+            else:
+                log(
+                    "GRASP CLOSE SETTLED\n"
+                    f"  close_frames={state.close_frames}\n"
+                    f"  finger_positions_m="
+                    f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
+                )
+            self._begin_grasp_lift()
+            return
+
+        if state.phase == "lift":
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
+            state.phase = "done"
+            target_position, target_orientation = self._get_world_pose(
+                self.cfg.ik.target_path
+            )
+            log(
+                "GRASP LIFT DONE\n"
+                f"  lift_z_m={cfg.lift_z_m:.4f}\n"
+                f"  orientation held (no post-grasp rotate)\n"
+                f"  IK_Target={np.round(target_position, 4).tolist()}\n"
+                f"  IK_Target_ori_wxyz="
+                f"{np.round(target_orientation, 4).tolist()}\n"
+                f"  fingers held closed at "
+                f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
             )
 
-    def _compute_finger_half_gap_m(self) -> float:
+    def _tool_target_orientation_error_rad(self) -> float:
+        """Angle between actual ToolCenter and IK_Target orientations."""
+        if self.ik is None:
+            return math.inf
+        self._update_actual_tool_frame(self.ik)
+        _, target_orientation = self._get_world_pose(self.cfg.ik.target_path)
+        _, actual_orientation = self._tool_pose_from_hand()
+        qa = _normalize_quaternion_wxyz(actual_orientation)
+        qt = _normalize_quaternion_wxyz(target_orientation)
+        dot = abs(float(np.dot(qa, qt)))
+        dot = min(1.0, max(0.0, dot))
+        return float(2.0 * math.acos(dot))
+
+    def _pre_grasp_pose_settled(self, required_settled: int) -> bool:
+        """Require both position and orientation to settle before the next phase."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        position_ok = (
+            self._tool_target_position_error_m()
+            <= self._target_settle_tolerance_m()
+        )
+        orientation_ok = (
+            self._tool_target_orientation_error_rad()
+            <= float(cfg.orientation_settle_tolerance_rad)
+        )
+        if position_ok and orientation_ok:
+            state.move_settled_frames += 1
+        else:
+            state.move_settled_frames = 0
+        return state.move_settled_frames >= required_settled
+
+    def _pre_grasp_move_settled(self, required_settled: int) -> bool:
+        # Kept for any callers; pose settle is the grasp-path check.
+        return self._pre_grasp_pose_settled(required_settled)
+
+    def _finger_joint_positions_m(self) -> np.ndarray | None:
+        if self.ik is None or not self._finger_dof_indices:
+            return None
+        positions = self._as_cpu_numpy(
+            self.ik.articulation.get_joint_positions()
+        ).reshape(-1)
+        return positions[np.asarray(self._finger_dof_indices, dtype=int)]
+
+    def _pre_grasp_fingers_settled(self) -> bool:
+        """True once finger joints stay still for finger_settle_frames."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        positions = self._finger_joint_positions_m()
+        if positions is None:
+            # No joint feedback: fall back to fixed hold timing.
+            state.finger_settle_frames = state.close_frames
+            return state.close_frames >= cfg.finger_settle_frames
+
+        if state.last_finger_positions_m is None:
+            state.last_finger_positions_m = positions.copy()
+            state.finger_settle_frames = 0
+            return False
+
+        delta_m = float(
+            np.max(np.abs(positions - state.last_finger_positions_m))
+        )
+        state.last_finger_positions_m = positions.copy()
+        if delta_m <= cfg.finger_settle_tolerance_m:
+            state.finger_settle_frames += 1
+        else:
+            state.finger_settle_frames = 0
+        return state.finger_settle_frames >= cfg.finger_settle_frames
+
+    def _cable_half_width_m(self) -> float:
         cfg = self.cfg.pre_grasp
         half_width = self.pre_grasp.cable_half_width_m
         if half_width is None or not math.isfinite(float(half_width)):
-            half_width = cfg.fallback_cable_half_width_m
+            return float(cfg.fallback_cable_half_width_m)
+        return float(half_width)
+
+    def _compute_finger_half_gap_m(self) -> float:
+        cfg = self.cfg.pre_grasp
         return min(
-            float(half_width) + cfg.side_allowance_m,
+            self._cable_half_width_m() + cfg.side_allowance_m,
             cfg.finger_max_open_m,
         )
 
+    def _compute_finger_close_half_gap_m(self) -> float:
+        cfg = self.cfg.pre_grasp
+        return max(0.0, float(cfg.close_target_half_gap_m))
+
+    def _ensure_cable_point_world_m(self) -> np.ndarray:
+        state = self.pre_grasp
+        if state.cable_point_world_m is not None:
+            return np.asarray(state.cable_point_world_m, dtype=np.float64)
+        plug_min, plug_max = self._world_bounds(
+            self.cfg.scene.tracked_connector_path
+        )
+        cable_point = 0.5 * (plug_min + plug_max)
+        state.cable_point_world_m = cable_point
+        return cable_point
+
+    def _grasp_approach_direction(self) -> np.ndarray:
+        """Unit tool-Z: points from tool toward cable at configured elevation."""
+        cfg = self.cfg.pre_grasp
+        elev = math.radians(float(cfg.grasp_elevation_deg))
+        azim = math.radians(float(cfg.grasp_azimuth_deg))
+        cos_e = math.cos(elev)
+        sin_e = math.sin(elev)
+        # Horizontal component toward azimuth; -Z for downward pitch.
+        approach = np.array(
+            [
+                cos_e * math.cos(azim),
+                cos_e * math.sin(azim),
+                -sin_e,
+            ],
+            dtype=np.float64,
+        )
+        return approach / float(np.linalg.norm(approach))
+
+    def _grasp_orientation_wxyz(self) -> np.ndarray:
+        """
+        Tool frame with +Z along the angled approach and fingers along ~world Y.
+
+        Visual servo stays top-down; this orientation is applied at pre-grasp.
+        """
+        tool_z = self._grasp_approach_direction()
+        # Prefer world +Y as the finger-opening axis (grip short sides of plug).
+        finger_hint = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        if abs(float(np.dot(finger_hint, tool_z))) > 0.95:
+            finger_hint = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
+        tool_x = np.cross(finger_hint, tool_z)
+        tool_x_norm = float(np.linalg.norm(tool_x))
+        if tool_x_norm <= 1.0e-9:
+            raise RuntimeError("Failed to build grasp tool X axis.")
+        tool_x /= tool_x_norm
+        tool_y = np.cross(tool_z, tool_x)
+        tool_y /= float(np.linalg.norm(tool_y))
+        tool_x = np.cross(tool_y, tool_z)
+        tool_x /= float(np.linalg.norm(tool_x))
+
+        rotation = np.column_stack((tool_x, tool_y, tool_z))
+        return matrix_to_quaternion_wxyz(rotation)
+
+    def _set_ik_target_clearance_from_cable(
+        self,
+        clearance_m: float,
+        *,
+        log_title: str,
+    ) -> bool:
+        """Place IK_Target at cable_point - clearance * grasp approach."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return False
+
+        cable_point = self._ensure_cable_point_world_m()
+        if state.grasp_orientation_wxyz is None:
+            state.grasp_orientation_wxyz = self._grasp_orientation_wxyz()
+        orientation = _normalize_quaternion_wxyz(state.grasp_orientation_wxyz)
+        approach = self._grasp_approach_direction()
+
+        desired_tool = np.asarray(cable_point, dtype=np.float64) - (
+            float(clearance_m) * approach
+        )
+
+        block_top = self._cable_support_top_z_m()
+        min_z = block_top + float(clearance_m) + cfg.block_safety_margin_m
+        if desired_tool[2] < min_z:
+            desired_tool[2] = min_z
+
+        self.ik.target.set_world_pose(
+            position=desired_tool,
+            orientation=orientation,
+        )
+        state.move_settled_frames = 0
+        log(
+            f"{log_title}\n"
+            f"  cable_point={np.round(cable_point, 4).tolist()}\n"
+            f"  clearance_m={float(clearance_m):.4f}\n"
+            f"  elevation_deg={cfg.grasp_elevation_deg:.1f}\n"
+            f"  azimuth_deg={cfg.grasp_azimuth_deg:.1f}\n"
+            f"  approach={np.round(approach, 4).tolist()}\n"
+            f"  new IK_Target={np.round(desired_tool, 4).tolist()}"
+        )
+        return True
+
     def _begin_pre_grasp_descend(self) -> None:
-        """Move IK_Target down the tool axis to the configured tip clearance."""
+        """Enter angled approach standoff (reorient before any grasp close)."""
         cfg = self.cfg.pre_grasp
         state = self.pre_grasp
         if state.started or self.ik is None:
             return
         state.started = True
         state.finger_half_gap_m = self._compute_finger_half_gap_m()
+        state.finger_close_half_gap_m = self._compute_finger_close_half_gap_m()
+        state.grasp_orientation_wxyz = self._grasp_orientation_wxyz()
 
-        cable_point = state.cable_point_world_m
-        if cable_point is None:
-            plug_min, plug_max = self._world_bounds(
-                self.cfg.scene.tracked_connector_path
-            )
-            cable_point = 0.5 * (plug_min + plug_max)
-            state.cable_point_world_m = cable_point
+        if not self._set_ik_target_clearance_from_cable(
+            cfg.approach_standoff_m,
+            log_title="ANGLED APPROACH",
+        ):
+            return
+        state.phase = "approach"
+        log(
+            f"  finger_half_gap_m={state.finger_half_gap_m:.4f}\n"
+            f"  side_allowance_m={cfg.side_allowance_m:.4f}\n"
+            "  rotate+approach first; grasp close only after angle settles"
+        )
+        self._apply_finger_gap(state.finger_half_gap_m)
+
+    def _begin_grasp_descend(self) -> None:
+        """Move IK_Target from pre-grasp down to grasp clearance (fingers open)."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
+        if not self._set_ik_target_clearance_from_cable(
+            cfg.grasp_clearance_m,
+            log_title="GRASP DESCEND",
+        ):
+            return
+        state.phase = "grasp_descend"
+        self._apply_finger_gap(state.finger_half_gap_m)
+
+    def _begin_grasp_lift(self) -> None:
+        """Lift +world Z while holding the angled grasp orientation."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
 
         target_position, target_orientation = self._get_world_pose(
             self.cfg.ik.target_path
         )
-        rotation = quaternion_wxyz_to_matrix(target_orientation)
-        tool_z = rotation[:, 2]
-        tool_z_norm = float(np.linalg.norm(tool_z))
-        if tool_z_norm <= 1.0e-9:
-            warn("Pre-grasp descend aborted: invalid tool Z axis.")
-            state.phase = "done"
-            return
-        approach = tool_z / tool_z_norm
-
-        # Cable lies along +tool Z from the tool center (grasp_standoff).
-        desired_tool = np.asarray(cable_point, dtype=np.float64) - (
-            cfg.tip_clearance_m * approach
-        )
-        desired_tool[0] = float(target_position[0])
-        desired_tool[1] = float(target_position[1])
-
-        block_top = self._cable_support_top_z_m()
-        # Keep tool center above block top + tip clearance as a floor.
-        min_z = block_top + cfg.tip_clearance_m + cfg.block_safety_margin_m
-        if desired_tool[2] < min_z:
-            desired_tool[2] = min_z
+        if state.grasp_orientation_wxyz is not None:
+            target_orientation = _normalize_quaternion_wxyz(
+                state.grasp_orientation_wxyz
+            )
+        desired_tool = np.asarray(target_position, dtype=np.float64).copy()
+        desired_tool[2] += float(cfg.lift_z_m)
 
         self.ik.target.set_world_pose(
             position=desired_tool,
             orientation=target_orientation,
         )
-        state.phase = "descend"
-        state.descend_settled_frames = 0
+        state.phase = "lift"
+        state.move_settled_frames = 0
         log(
-            "PRE-GRASP DESCEND + OPEN\n"
-            f"  cable_point={np.round(cable_point, 4).tolist()}\n"
-            f"  tip_clearance_m={cfg.tip_clearance_m:.4f}\n"
-            f"  new IK_Target={np.round(desired_tool, 4).tolist()}\n"
-            f"  finger_half_gap_m={state.finger_half_gap_m:.4f}\n"
-            f"  side_allowance_m={cfg.side_allowance_m:.4f}"
+            "GRASP LIFT\n"
+            f"  lift_z_m={cfg.lift_z_m:.4f}\n"
+            "  keeping angled orientation (no rotate after grasp)\n"
+            f"  new IK_Target={np.round(desired_tool, 4).tolist()}"
         )
-        self._apply_finger_open(state.finger_half_gap_m)
+        self._apply_finger_gap(state.finger_close_half_gap_m)
 
-    def _apply_finger_open(self, half_gap_m: float) -> None:
-        """Command both finger joints to an open half-gap (no close)."""
+    def _apply_finger_gap(self, half_gap_m: float) -> None:
+        """Command both finger joints to the given half-gap."""
         if self.ik is None or not self._finger_dof_indices:
             return
         gap = float(
@@ -1404,6 +1667,7 @@ class SimulationRuntime:
         )
         app_utils.update_app(steps=settle_frames)
 
+        self._apply_grasp_physics_materials()
         self.ik = self._create_ik(assets_root)
         self._set_external_view()
 
@@ -1777,6 +2041,190 @@ class SimulationRuntime:
             )
 
         log("\n".join(report_lines))
+
+    @staticmethod
+    def _set_schema_attr(api, create_attr_name: str, value) -> bool:
+        """Best-effort setter for generated USD/PhysX schema attributes."""
+        create_attr = getattr(api, create_attr_name, None)
+        if create_attr is None:
+            return False
+        try:
+            attr = create_attr()
+        except TypeError:
+            attr = create_attr(value)
+        attr.Set(value)
+        return True
+
+    def _define_physics_material(
+        self,
+        path: str,
+        *,
+        static_friction: float,
+        dynamic_friction: float,
+        restitution: float,
+    ) -> UsdShade.Material:
+        cfg = self.cfg.pre_grasp
+        stage = omni.usd.get_context().get_stage()
+        material = UsdShade.Material.Define(stage, Sdf.Path(path))
+        prim = material.GetPrim()
+
+        usd_mat = UsdPhysics.MaterialAPI.Apply(prim)
+        self._set_schema_attr(
+            usd_mat, "CreateStaticFrictionAttr", float(static_friction)
+        )
+        self._set_schema_attr(
+            usd_mat, "CreateDynamicFrictionAttr", float(dynamic_friction)
+        )
+        self._set_schema_attr(
+            usd_mat, "CreateRestitutionAttr", float(restitution)
+        )
+
+        physx_mat = PhysxSchema.PhysxMaterialAPI.Apply(prim)
+        self._set_schema_attr(
+            physx_mat,
+            "CreateFrictionCombineModeAttr",
+            cfg.friction_combine_mode,
+        )
+        self._set_schema_attr(
+            physx_mat,
+            "CreateRestitutionCombineModeAttr",
+            cfg.restitution_combine_mode,
+        )
+        return material
+
+    def _bind_physics_material(
+        self,
+        prim: Usd.Prim,
+        material: UsdShade.Material,
+    ) -> None:
+        binding = UsdShade.MaterialBindingAPI.Apply(prim)
+        try:
+            binding.Bind(
+                material,
+                bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+                materialPurpose="physics",
+            )
+        except TypeError:
+            try:
+                binding.Bind(
+                    material,
+                    bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+                )
+            except TypeError:
+                binding.Bind(material)
+
+    def _tune_collision_contact(self, prim: Usd.Prim) -> bool:
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            return False
+        cfg = self.cfg.pre_grasp
+        physx_collision = PhysxSchema.PhysxCollisionAPI.Apply(prim)
+        touched = False
+        touched |= self._set_schema_attr(
+            physx_collision,
+            "CreateContactOffsetAttr",
+            float(cfg.contact_offset_m),
+        )
+        touched |= self._set_schema_attr(
+            physx_collision,
+            "CreateRestOffsetAttr",
+            float(cfg.rest_offset_m),
+        )
+        return touched
+
+    def _bind_material_tree(
+        self,
+        root_path: str,
+        material: UsdShade.Material,
+    ) -> tuple[int, int]:
+        stage = omni.usd.get_context().get_stage()
+        root = stage.GetPrimAtPath(root_path)
+        if not root or not root.IsValid():
+            warn(f"Grasp material bind skipped; missing prim: {root_path}")
+            return 0, 0
+
+        bound = 0
+        contact_tuned = 0
+        for prim in Usd.PrimRange(root):
+            if not (
+                prim.IsA(UsdGeom.Gprim)
+                or prim.HasAPI(UsdPhysics.CollisionAPI)
+            ):
+                continue
+            self._bind_physics_material(prim, material)
+            bound += 1
+            if self._tune_collision_contact(prim):
+                contact_tuned += 1
+
+        if bound == 0:
+            self._bind_physics_material(root, material)
+            bound = 1
+        return bound, contact_tuned
+
+    def _find_franka_finger_paths(self) -> list[str]:
+        cfg = self.cfg.pre_grasp
+        stage = omni.usd.get_context().get_stage()
+        root = stage.GetPrimAtPath(self.cfg.scene.franka_asset_path)
+        if not root or not root.IsValid():
+            return []
+
+        wanted = set(cfg.finger_link_names)
+        found: dict[str, str] = {}
+        for prim in Usd.PrimRange(root):
+            name = prim.GetName()
+            if name in wanted and name not in found:
+                found[name] = str(prim.GetPath())
+        return [found[name] for name in cfg.finger_link_names if name in found]
+
+    def _apply_grasp_physics_materials(self) -> None:
+        """
+        Bind realistic rubber-pad / hard-plastic PhysX materials for grasp.
+
+        Values approximate rubber finger pads (μ≈0.85/0.65) on ABS/PVC plug
+        plastic (μ≈0.45/0.35) with average friction combine (~0.6–0.7 μ_s).
+        """
+        cfg = self.cfg.pre_grasp
+        finger_material = self._define_physics_material(
+            cfg.finger_material_path,
+            static_friction=cfg.finger_static_friction,
+            dynamic_friction=cfg.finger_dynamic_friction,
+            restitution=cfg.contact_restitution,
+        )
+        plug_material = self._define_physics_material(
+            cfg.plug_material_path,
+            static_friction=cfg.plug_static_friction,
+            dynamic_friction=cfg.plug_dynamic_friction,
+            restitution=cfg.contact_restitution,
+        )
+
+        finger_paths = self._find_franka_finger_paths()
+        total_bound = 0
+        total_contact = 0
+        for path in finger_paths:
+            bound, contact = self._bind_material_tree(path, finger_material)
+            total_bound += bound
+            total_contact += contact
+
+        plug_bound, plug_contact = self._bind_material_tree(
+            self.cfg.scene.tracked_connector_path,
+            plug_material,
+        )
+        total_bound += plug_bound
+        total_contact += plug_contact
+
+        log(
+            "GRASP PHYSICS MATERIALS\n"
+            f"  fingers: μ_s={cfg.finger_static_friction:.2f}, "
+            f"μ_d={cfg.finger_dynamic_friction:.2f} "
+            f"(rubber pad)\n"
+            f"  plug:    μ_s={cfg.plug_static_friction:.2f}, "
+            f"μ_d={cfg.plug_dynamic_friction:.2f} "
+            f"(hard plastic)\n"
+            f"  combine: friction={cfg.friction_combine_mode}, "
+            f"restitution={cfg.restitution_combine_mode}\n"
+            f"  finger links: {finger_paths or '(none found)'}\n"
+            f"  bound prims={total_bound}, "
+            f"contact-tuned={total_contact}"
+        )
 
     def _create_ik(self, assets_root: str) -> IKRuntime:
         """

@@ -114,15 +114,11 @@ class DebugOutputs:
         left_overlay = self._draw_eye_overlay(
             frame.left.rgb,
             observation.left,
-            observation.desired_left_center_uv,
-            observation.desired_size_wh_px,
             "LEFT EYE",
         )
         right_overlay = self._draw_eye_overlay(
             frame.right.rgb,
             observation.right,
-            observation.desired_right_center_uv,
-            observation.desired_size_wh_px,
             "RIGHT EYE",
         )
 
@@ -153,8 +149,6 @@ class DebugOutputs:
         self,
         rgb: np.ndarray,
         cable: CableCorners,
-        desired_center_uv: tuple[float, float],
-        desired_size_wh_px: tuple[float, float],
         title: str,
     ) -> np.ndarray:
         image = Image.fromarray(rgb, mode="RGB")
@@ -175,19 +169,6 @@ class DebugOutputs:
             self._draw_crosshair(draw, float(u), float(v), (255, 128, 0), half=5)
             draw.text((float(u) + 4, float(v) + 2), str(index), fill=(255, 255, 255))
 
-        desired_u, desired_v = desired_center_uv
-        desired_width, desired_height = desired_size_wh_px
-        draw.rectangle(
-            [
-                desired_u - desired_width / 2.0,
-                desired_v - desired_height / 2.0,
-                desired_u + desired_width / 2.0,
-                desired_v + desired_height / 2.0,
-            ],
-            outline=(0, 255, 255),
-            width=2,
-        )
-        self._draw_crosshair(draw, desired_u, desired_v, (0, 255, 255))
         self._label(draw, (10, 10), title)
         return np.asarray(image, dtype=np.uint8).copy()
 
