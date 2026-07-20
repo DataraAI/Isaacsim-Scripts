@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -14,7 +15,22 @@ from automatic_port_ground_truth import (
 from tools.extract_front_rim_ground_truth import _bbox_side_samples
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 class AutomaticGroundTruthTests(unittest.TestCase):
+    def test_validator_uses_rtx_mesh_backend_not_physx(self) -> None:
+        source = (
+            PROJECT_ROOT
+            / "tools"
+            / "extract_front_rim_ground_truth.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("omni.kit.raycast.query", source)
+        self.assertNotIn(
+            "from omni.physx import get_physx_scene_query_interface",
+            source,
+        )
+
     def test_bbox_side_samples_follow_refined_cavity_box(self) -> None:
         samples = _bbox_side_samples(
             (10, 20, 21, 11),
