@@ -30,7 +30,32 @@ class FrontRimBenchmarkTests(unittest.TestCase):
         self.assertIn('SUMMARY="camera_output/front_rim_benchmark_v1/summary.json"', source)
         self.assertIn('"QUALIFIED": true', source)
         self.assertIn("exit 2", source)
-        self.assertNotIn('exec "$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py', source)
+        self.assertNotIn(
+            'exec "$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py',
+            source,
+        )
+
+    def test_benchmark_uses_verified_epipolar_matches(self) -> None:
+        source = (
+            PROJECT_ROOT
+            / "benchmarks"
+            / "front_rim_benchmark_epipolar.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("match_front_bezel_samples(", source)
+        self.assertIn("build_matched_right_rim(", source)
+        self.assertIn("center_uv=left_detection.center_uv", source)
+        self.assertIn("center_uv=right_detection.center_uv", source)
+        self.assertIn('"mode": "epipolar_patch_v4"', source)
+
+        bootstrap = (
+            PROJECT_ROOT / "tools" / "run_front_rim_benchmark_isaac.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("front_rim_benchmark_epipolar.py", bootstrap)
+
+        launcher = (
+            PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("mode=epipolar-patch-v4", launcher)
 
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
