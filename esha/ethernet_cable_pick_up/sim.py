@@ -31,7 +31,16 @@ from isaacsim.sensors.experimental.rtx import CameraSensor, RtxCamera
 from isaacsim.storage.native import get_assets_root_path
 
 from config import Config
-from grasp_control import resolve_tool_orientation
+from grasp_control import (
+    apply_grasp_x_offset,
+    bounded_linear_step,
+    clearance_target_position,
+    finger_target_reached,
+    fingers_moved_toward_closed,
+    grasp_orientation_active,
+    resolve_tool_orientation,
+    select_open_half_gap,
+)
 from perception import (
     CameraFrame,
     CameraModel,
@@ -288,13 +297,14 @@ def target_is_settled(
 
 @dataclass
 class PreGraspState:
-    """Angled approach → pre-grasp → grasp → close → lift (orientation held)."""
+    """30° standoff → open → grasp → close → lift."""
 
-    # idle | approach | pre_descend | open | grasp_descend | close | lift | done
+    # idle | angle | open | grasp_descend | close | lift | done
     phase: str = "idle"
     # Half of connector short-axis thickness (from stereo height_m).
     cable_half_width_m: float | None = None
     cable_point_world_m: np.ndarray | None = None
+    grasp_target_world_m: np.ndarray | None = None
     move_settled_frames: int = 0
     open_frames: int = 0
     close_frames: int = 0
@@ -302,6 +312,9 @@ class PreGraspState:
     finger_half_gap_m: float = 0.0
     finger_close_half_gap_m: float = 0.0
     last_finger_positions_m: np.ndarray | None = None
+    close_start_finger_positions_m: np.ndarray | None = None
+    open_timeout_reported: bool = False
+    close_timeout_reported: bool = False
     grasp_orientation_wxyz: np.ndarray | None = None
     started: bool = False
 
@@ -843,7 +856,7 @@ class SimulationRuntime:
             state.complete = True
 
             next_action = (
-                "angled approach → grasp → close → lift (hold angle)"
+                "30° standoff → open → grasp → close → lift"
                 if self.cfg.pre_grasp.enabled
                 else "hold; no grasping is commanded"
             )
@@ -901,7 +914,7 @@ class SimulationRuntime:
                 self._apply_finger_gap(state.finger_close_half_gap_m)
             return
 
-        open_phases = ("approach", "pre_descend", "open", "grasp_descend")
+        open_phases = ("open", "grasp_descend")
         close_phases = ("close", "lift")
         if state.phase in open_phases:
             self._apply_finger_gap(state.finger_half_gap_m)
@@ -910,43 +923,68 @@ class SimulationRuntime:
 
         required_settled = self.cfg.visual_servo.required_settled_frames
 
-        if state.phase == "approach":
-            if not self._pre_grasp_pose_settled(required_settled):
-                return
-            if not self._set_ik_target_clearance_from_cable(
-                cfg.pre_grasp_clearance_m,
-                log_title="PRE-GRASP DESCEND",
-            ):
-                return
-            state.phase = "pre_descend"
-            return
-
-        if state.phase == "pre_descend":
+        if state.phase == "angle":
             if not self._pre_grasp_pose_settled(required_settled):
                 return
             state.phase = "open"
             state.open_frames = 0
+            state.finger_settle_frames = 0
+            state.last_finger_positions_m = None
+            state.open_timeout_reported = False
+            self._apply_finger_gap(state.finger_half_gap_m)
             log(
-                "PRE-GRASP OPEN HOLD\n"
-                f"  angled approach settled; fingers open at "
+                "GRASP ANGLE SETTLED - OPEN FINGERS\n"
+                f"  fingers open at "
                 f"{state.finger_half_gap_m * 1000.0:.1f} mm per side"
             )
             return
 
         if state.phase == "open":
             state.open_frames += 1
-            if state.open_frames < cfg.open_hold_frames:
+            fingers_open = self._pre_grasp_fingers_open_settled()
+            if (
+                state.open_frames >= cfg.open_timeout_frames
+                and not fingers_open
+                and not state.open_timeout_reported
+            ):
+                state.open_timeout_reported = True
+                open_positions = self._finger_joint_positions_m()
+                warn(
+                    "GRASP OPEN has not reached the commanded gap; "
+                    "holding at standoff.\n"
+                    f"  target_positions_m="
+                    f"{state.finger_half_gap_m:.4f} per side\n"
+                    f"  actual_positions_m="
+                    f"{None if open_positions is None else np.round(open_positions, 4).tolist()}"
+                )
+            if (
+                state.open_frames < cfg.open_hold_frames
+                or not fingers_open
+            ):
                 return
+            finger_pos = self._finger_joint_positions_m()
+            log(
+                "GRASP OPEN SETTLED\n"
+                f"  finger_positions_m="
+                f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}\n"
+                "  moving to cable with fingers held open"
+            )
             self._begin_grasp_descend()
             return
 
         if state.phase == "grasp_descend":
+            if not self._advance_straight_grasp_approach():
+                return
             if not self._pre_grasp_pose_settled(required_settled):
                 return
             state.phase = "close"
             state.close_frames = 0
             state.finger_settle_frames = 0
             state.last_finger_positions_m = None
+            state.close_start_finger_positions_m = (
+                self._finger_joint_positions_m()
+            )
+            state.close_timeout_reported = False
             state.finger_close_half_gap_m = (
                 self._compute_finger_close_half_gap_m()
             )
@@ -964,29 +1002,33 @@ class SimulationRuntime:
             state.close_frames += 1
             fingers_settled = self._pre_grasp_fingers_settled()
             timed_out = state.close_frames >= cfg.close_timeout_frames
-            if not fingers_settled and not timed_out:
-                return
-            if fingers_settled:
-                if state.finger_settle_frames < (
-                    cfg.finger_settle_frames + cfg.close_hold_frames
-                ):
-                    return
-            finger_pos = self._finger_joint_positions_m()
-            if timed_out and not fingers_settled:
+            if (
+                timed_out
+                and not fingers_settled
+                and not state.close_timeout_reported
+            ):
+                state.close_timeout_reported = True
+                close_positions = self._finger_joint_positions_m()
                 warn(
                     "GRASP CLOSE timed out before fingers fully settled; "
-                    "lifting anyway.\n"
+                    "holding closed without lifting.\n"
                     f"  close_frames={state.close_frames}\n"
                     f"  finger_positions_m="
-                    f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
+                    f"{None if close_positions is None else np.round(close_positions, 4).tolist()}"
                 )
-            else:
-                log(
-                    "GRASP CLOSE SETTLED\n"
-                    f"  close_frames={state.close_frames}\n"
-                    f"  finger_positions_m="
-                    f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
-                )
+            if not fingers_settled:
+                return
+            if state.finger_settle_frames < (
+                cfg.finger_settle_frames + cfg.close_hold_frames
+            ):
+                return
+            finger_pos = self._finger_joint_positions_m()
+            log(
+                "GRASP CLOSE SETTLED\n"
+                f"  close_frames={state.close_frames}\n"
+                f"  finger_positions_m="
+                f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
+            )
             self._begin_grasp_lift()
             return
 
@@ -1024,7 +1066,9 @@ class SimulationRuntime:
         qt = resolve_tool_orientation(
             target_orientation,
             self.pre_grasp.grasp_orientation_wxyz,
-            grasp_active=self.pre_grasp.phase != "idle",
+            grasp_active=grasp_orientation_active(
+                self.pre_grasp.phase
+            ),
         )
         dot = abs(float(np.dot(qa, qt)))
         dot = min(1.0, max(0.0, dot))
@@ -1060,16 +1104,20 @@ class SimulationRuntime:
         ).reshape(-1)
         return positions[np.asarray(self._finger_dof_indices, dtype=int)]
 
-    def _pre_grasp_fingers_settled(self) -> bool:
-        """True once finger joints stay still for finger_settle_frames."""
+    def _pre_grasp_fingers_open_settled(self) -> bool:
+        """Require both fingers to reach and settle at the open command."""
         cfg = self.cfg.pre_grasp
         state = self.pre_grasp
         positions = self._finger_joint_positions_m()
         if positions is None:
-            # No joint feedback: fall back to fixed hold timing.
-            state.finger_settle_frames = state.close_frames
-            return state.close_frames >= cfg.finger_settle_frames
+            state.finger_settle_frames = 0
+            return False
 
+        reached = finger_target_reached(
+            positions,
+            target_position_m=state.finger_half_gap_m,
+            tolerance_m=cfg.finger_open_target_tolerance_m,
+        )
         if state.last_finger_positions_m is None:
             state.last_finger_positions_m = positions.copy()
             state.finger_settle_frames = 0
@@ -1079,7 +1127,39 @@ class SimulationRuntime:
             np.max(np.abs(positions - state.last_finger_positions_m))
         )
         state.last_finger_positions_m = positions.copy()
-        if delta_m <= cfg.finger_settle_tolerance_m:
+        if reached and delta_m <= cfg.finger_settle_tolerance_m:
+            state.finger_settle_frames += 1
+        else:
+            state.finger_settle_frames = 0
+        return state.finger_settle_frames >= cfg.finger_settle_frames
+
+    def _pre_grasp_fingers_settled(self) -> bool:
+        """Require real inward travel followed by stable finger positions."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        positions = self._finger_joint_positions_m()
+        if positions is None:
+            state.finger_settle_frames = 0
+            return False
+
+        if state.last_finger_positions_m is None:
+            state.last_finger_positions_m = positions.copy()
+            state.finger_settle_frames = 0
+            return False
+
+        moved_inward = (
+            state.close_start_finger_positions_m is not None
+            and fingers_moved_toward_closed(
+                positions,
+                state.close_start_finger_positions_m,
+                minimum_travel_m=cfg.close_min_travel_m,
+            )
+        )
+        delta_m = float(
+            np.max(np.abs(positions - state.last_finger_positions_m))
+        )
+        state.last_finger_positions_m = positions.copy()
+        if moved_inward and delta_m <= cfg.finger_settle_tolerance_m:
             state.finger_settle_frames += 1
         else:
             state.finger_settle_frames = 0
@@ -1094,9 +1174,11 @@ class SimulationRuntime:
 
     def _compute_finger_half_gap_m(self) -> float:
         cfg = self.cfg.pre_grasp
-        return min(
-            self._cable_half_width_m() + cfg.side_allowance_m,
-            cfg.finger_max_open_m,
+        return select_open_half_gap(
+            cable_half_width_m=self._cable_half_width_m(),
+            side_allowance_m=cfg.side_allowance_m,
+            minimum_half_gap_m=cfg.minimum_open_half_gap_m,
+            maximum_half_gap_m=cfg.finger_max_open_m,
         )
 
     def _compute_finger_close_half_gap_m(self) -> float:
@@ -1105,14 +1187,15 @@ class SimulationRuntime:
 
     def _ensure_cable_point_world_m(self) -> np.ndarray:
         state = self.pre_grasp
-        if state.cable_point_world_m is not None:
-            return np.asarray(state.cable_point_world_m, dtype=np.float64)
-        plug_min, plug_max = self._world_bounds(
-            self.cfg.scene.tracked_connector_path
+        if state.cable_point_world_m is None:
+            plug_min, plug_max = self._world_bounds(
+                self.cfg.scene.tracked_connector_path
+            )
+            state.cable_point_world_m = 0.5 * (plug_min + plug_max)
+        return apply_grasp_x_offset(
+            state.cable_point_world_m,
+            x_offset_m=self.cfg.pre_grasp.grasp_point_x_offset_m,
         )
-        cable_point = 0.5 * (plug_min + plug_max)
-        state.cable_point_world_m = cable_point
-        return cable_point
 
     def _grasp_approach_direction(self) -> np.ndarray:
         """Unit tool-Z: points from tool toward cable at configured elevation."""
@@ -1169,20 +1252,12 @@ class SimulationRuntime:
         if self.ik is None:
             return False
 
-        cable_point = self._ensure_cable_point_world_m()
         if state.grasp_orientation_wxyz is None:
             state.grasp_orientation_wxyz = self._grasp_orientation_wxyz()
         orientation = _normalize_quaternion_wxyz(state.grasp_orientation_wxyz)
+        cable_point = self._ensure_cable_point_world_m()
         approach = self._grasp_approach_direction()
-
-        desired_tool = np.asarray(cable_point, dtype=np.float64) - (
-            float(clearance_m) * approach
-        )
-
-        block_top = self._cable_support_top_z_m()
-        min_z = block_top + float(clearance_m) + cfg.block_safety_margin_m
-        if desired_tool[2] < min_z:
-            desired_tool[2] = min_z
+        desired_tool = self._ik_target_position_at_cable_clearance(clearance_m)
 
         self.ik.target.set_world_pose(
             position=desired_tool,
@@ -1200,8 +1275,26 @@ class SimulationRuntime:
         )
         return True
 
+    def _ik_target_position_at_cable_clearance(
+        self,
+        clearance_m: float,
+    ) -> np.ndarray:
+        """Calculate a collision-clamped ToolCenter waypoint."""
+        cfg = self.cfg.pre_grasp
+        cable_point = self._ensure_cable_point_world_m()
+        approach = self._grasp_approach_direction()
+        return clearance_target_position(
+            cable_point,
+            approach,
+            clearance_m=float(clearance_m),
+            minimum_z_m=(
+                self._cable_support_top_z_m()
+                + cfg.block_safety_margin_m
+            ),
+        )
+
     def _begin_pre_grasp_descend(self) -> None:
-        """Enter angled approach standoff (reorient before any grasp close)."""
+        """Move once to a clear 30° standoff before opening the fingers."""
         cfg = self.cfg.pre_grasp
         state = self.pre_grasp
         if state.started or self.ik is None:
@@ -1213,30 +1306,78 @@ class SimulationRuntime:
 
         if not self._set_ik_target_clearance_from_cable(
             cfg.approach_standoff_m,
-            log_title="ANGLED APPROACH",
+            log_title="30 DEGREE GRASP STANDOFF",
         ):
             return
-        state.phase = "approach"
+        state.phase = "angle"
         log(
             f"  finger_half_gap_m={state.finger_half_gap_m:.4f}\n"
             f"  side_allowance_m={cfg.side_allowance_m:.4f}\n"
-            "  rotate+approach first; grasp close only after angle settles"
+            "  fingers stay unchanged until the 30 degree pose settles"
         )
-        self._apply_finger_gap(state.finger_half_gap_m)
 
     def _begin_grasp_descend(self) -> None:
-        """Move IK_Target from pre-grasp down to grasp clearance (fingers open)."""
+        """Start a bounded straight-line approach with fingers held open."""
         cfg = self.cfg.pre_grasp
         state = self.pre_grasp
         if self.ik is None:
             return
-        if not self._set_ik_target_clearance_from_cable(
-            cfg.grasp_clearance_m,
-            log_title="GRASP DESCEND",
-        ):
-            return
+        state.grasp_target_world_m = (
+            self._ik_target_position_at_cable_clearance(
+                cfg.grasp_clearance_m
+            )
+        )
+        current_target, _ = self._get_world_pose(
+            self.cfg.ik.target_path
+        )
         state.phase = "grasp_descend"
+        state.move_settled_frames = 0
         self._apply_finger_gap(state.finger_half_gap_m)
+        log(
+            "STRAIGHT GRASP APPROACH\n"
+            f"  start IK_Target={np.round(current_target, 4).tolist()}\n"
+            f"  final IK_Target="
+            f"{np.round(state.grasp_target_world_m, 4).tolist()}\n"
+            f"  max_step_m={cfg.grasp_approach_step_m:.4f}\n"
+            f"  fingers held open at "
+            f"{state.finger_half_gap_m * 1000.0:.1f} mm per side"
+        )
+
+    def _advance_straight_grasp_approach(self) -> bool:
+        """Advance IK_Target only after the arm catches up to each line step."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None or state.grasp_target_world_m is None:
+            return False
+        current_target, _ = self._get_world_pose(
+            self.cfg.ik.target_path
+        )
+        final_target = np.asarray(
+            state.grasp_target_world_m,
+            dtype=np.float64,
+        ).reshape(3)
+        remaining_m = float(np.linalg.norm(final_target - current_target))
+        if remaining_m <= 1.0e-6:
+            return True
+        if (
+            self._tool_target_position_error_m()
+            > self._target_settle_tolerance_m()
+        ):
+            return False
+        next_target = bounded_linear_step(
+            current_target,
+            final_target,
+            max_step_m=cfg.grasp_approach_step_m,
+        )
+        orientation = _normalize_quaternion_wxyz(
+            state.grasp_orientation_wxyz
+        )
+        self.ik.target.set_world_pose(
+            position=next_target,
+            orientation=orientation,
+        )
+        state.move_settled_frames = 0
+        return False
 
     def _begin_grasp_lift(self) -> None:
         """Lift +world Z while holding the angled grasp orientation."""
@@ -1408,7 +1549,9 @@ class SimulationRuntime:
         desired_tool_orientation = resolve_tool_orientation(
             desired_tool_orientation,
             self.pre_grasp.grasp_orientation_wxyz,
-            grasp_active=self.pre_grasp.phase != "idle",
+            grasp_active=grasp_orientation_active(
+                self.pre_grasp.phase
+            ),
         )
 
         hand_target_position, hand_target_orientation = (

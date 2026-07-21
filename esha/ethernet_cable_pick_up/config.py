@@ -170,8 +170,8 @@ class IKConfig:
     # cable_spawn_xy (0.54) so the raised plug stays in the stereo FOV.
     initial_position: tuple[float, float, float] = (
         0.7200,
-        0.0500,
-        0.3400,
+        0.1000,
+        0.3000,
     )
     initial_orientation_wxyz: tuple[float, float, float, float] = (
         0.0,
@@ -263,19 +263,19 @@ class VisualServoConfig:
 
 @dataclass(frozen=True)
 class PreGraspConfig:
-    """After visual servo: pre-grasp open, grasp descend, close, then lift."""
+    """After visual servo: angle standoff, open, grasp, close, then lift."""
 
     enabled: bool = True
     # Approach elevation above the horizontal plane (0=sideways, 90=top-down).
     grasp_elevation_deg: float = 30.0
     # Approach azimuth in world XY: 0=+X (from robot toward cable_spawn_xy).
     grasp_azimuth_deg: float = 0.0
-    # First angled waypoint distance along approach (before final pre-grasp).
-    approach_standoff_m: float = 0.080
-    # Tool-center clearance above cable_point along tool Z (pre-grasp hover).
-    pre_grasp_clearance_m: float = 0.012
+    # One clear angled waypoint before opening and moving directly to grasp.
+    approach_standoff_m: float = 0.120
     # Orientation settle tolerance while moving into the angled approach.
     orientation_settle_tolerance_rad: float = 0.05
+    # Shift the stereo grasp point backward in world X without changing Y/Z.
+    grasp_point_x_offset_m: float = -0.016 # change x offset to -0.016 to move the grasp point backwards
     # Tool-center clearance at grasp (before close).
     grasp_clearance_m: float = 0.0025
     # Commanded close half-gap. 0 = drive fully closed; contact stops the fingers.
@@ -284,6 +284,8 @@ class PreGraspConfig:
     lift_z_m: float = 0.020
     # Extra open gap per side beyond measured cable half-thickness.
     side_allowance_m: float = 0.002
+    # Never approach with less than this opening per finger.
+    minimum_open_half_gap_m: float = 0.018
     # Fallback half of short-axis thickness if stereo height is unavailable.
     fallback_cable_half_width_m: float = 0.011
     finger_joint_names: tuple[str, str] = (
@@ -295,15 +297,21 @@ class PreGraspConfig:
         "panda_rightfinger",
     )
     finger_max_open_m: float = 0.04
+    # Increment IK_Target along a straight line during final approach.
+    grasp_approach_step_m: float = 0.003
     block_safety_margin_m: float = 0.002
-    # Keep commanding the open pose for this many frames after pre-grasp settle.
+    # Minimum open hold; actual joint feedback must also confirm both fingers.
     open_hold_frames: int = 60
+    open_timeout_frames: int = 180
+    finger_open_target_tolerance_m: float = 0.00075
     # Finger joint motion must stay within this for finger_settle_frames.
     finger_settle_tolerance_m: float = 0.0005
     finger_settle_frames: int = 30
+    # Reject a false "settled" close unless both fingers moved inward.
+    close_min_travel_m: float = 0.001
     # Extra hold after fingers stop moving before lift.
     close_hold_frames: int = 30
-    # Max frames waiting for finger settle before lifting anyway.
+    # Warn after this many frames, but never lift before close settles.
     close_timeout_frames: int = 180
 
     # Realistic rubber pad (fingers) / hard plastic (plug) contact.
