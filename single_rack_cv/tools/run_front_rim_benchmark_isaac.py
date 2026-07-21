@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start Isaac before CUDA/OpenCV imports, then run epipolar benchmark."""
+"""Start Isaac before CUDA/OpenCV imports, then run local SGBM benchmark."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import traceback
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.py"
 BENCHMARK_PATH = (
-    PROJECT_ROOT / "benchmarks" / "front_rim_benchmark_epipolar.py"
+    PROJECT_ROOT / "benchmarks" / "front_rim_sgbm_benchmark.py"
 )
 
 
