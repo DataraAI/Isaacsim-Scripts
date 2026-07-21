@@ -35,27 +35,29 @@ class FrontRimBenchmarkTests(unittest.TestCase):
             source,
         )
 
-    def test_benchmark_uses_verified_epipolar_matches(self) -> None:
+    def test_benchmark_uses_local_sgbm_without_ground_truth_input(self) -> None:
         source = (
             PROJECT_ROOT
             / "benchmarks"
-            / "front_rim_benchmark_epipolar.py"
+            / "front_rim_sgbm_benchmark.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("match_front_bezel_samples(", source)
-        self.assertIn("build_matched_right_rim(", source)
-        self.assertIn("center_uv=left_detection.center_uv", source)
-        self.assertIn("center_uv=right_detection.center_uv", source)
-        self.assertIn('"mode": "epipolar_patch_v4"', source)
+        self.assertIn("compute_local_disparity(", source)
+        self.assertIn("estimate_front_plane_sgbm(", source)
+        self.assertIn("left_detection.center_uv", source)
+        self.assertIn("right_detection.center_uv", source)
+        self.assertIn('"mode": "local_sgbm_v5"', source)
+        self.assertNotIn("truth_center=", source)
+        self.assertNotIn("truth_normal=", source)
 
         bootstrap = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark_isaac.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("front_rim_benchmark_epipolar.py", bootstrap)
+        self.assertIn("front_rim_sgbm_benchmark.py", bootstrap)
 
         launcher = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("mode=epipolar-patch-v4", launcher)
+        self.assertIn("mode=local-sgbm-v5", launcher)
 
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
