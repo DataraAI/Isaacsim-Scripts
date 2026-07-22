@@ -16,6 +16,7 @@ FORBIDDEN_MODULE_MARKERS = (
     "front_rim_sgbm_refined",
     "live_front_plane",
     "highres_config",
+    "prompt_benchmark_core",
 )
 
 PRODUCTION_FILES = (
@@ -40,15 +41,24 @@ FORBIDDEN_PATHS = (
     "live_front_plane.py",
     "main_highres.py",
     "highres_config.py",
+    "benchmarks/front_rim_benchmark.py",
     "benchmarks/front_rim_benchmark_epipolar.py",
     "benchmarks/front_rim_sgbm_diagnostic.py",
     "benchmarks/front_rim_sgbm_benchmark.py",
     "benchmarks/front_rim_sgbm_refined_benchmark.py",
     "benchmarks/front_rim_sgbm_highres_benchmark.py",
+    "benchmarks/prompt_benchmark_capture.py",
+    "benchmarks/prompt_benchmark_capture_highres.py",
+    "benchmarks/prompt_benchmark_core.py",
+    "benchmarks/prompt_benchmark_evaluate.py",
+    "benchmarks/prompt_benchmark_evaluate_isaac_bootstrap.py",
+    "benchmarks/run_prompt_ab_benchmark.py",
     "tools/run_front_rim_benchmark_isaac.py",
     "tools/run_front_rim_benchmark.sh",
     "tools/run_front_rim_ground_truth.sh",
     "tools/extract_front_rim_ground_truth_bootstrap.py",
+    "tools/run_center_diagnostic_isaac.py",
+    "tools/diagnose_stereo_centers.py",
 )
 
 
