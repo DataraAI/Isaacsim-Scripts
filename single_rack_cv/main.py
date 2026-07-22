@@ -172,6 +172,7 @@ try:
     )
 
     from debug import DebugOutputs
+    from live_front_plane import refine_live_observation_to_front_plane
     from perception import YOLOEPortDetector, process_stereo_port
     from sim import SimulationRuntime, warn
 
@@ -187,6 +188,12 @@ try:
         "full-frame stereo inference is active.",
         flush=True,
     )
+    if CONFIG.front_rim.enabled:
+        print(
+            "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
+            "no manual depth offset and no RTX/USD ground truth in runtime.",
+            flush=True,
+        )
 
     capture_index = 0
 
@@ -220,6 +227,32 @@ try:
                 previous_right=previous_right,
                 detector=detector,
             )
+            if CONFIG.front_rim.enabled:
+                observation, front_plane = (
+                    refine_live_observation_to_front_plane(
+                        frame=frame,
+                        observation=observation,
+                        desired_port_virtual_camera_usd=(
+                            runtime.desired_port_virtual_camera_usd
+                        ),
+                    )
+                )
+                print(
+                    "[LIVE FRONT PLANE] "
+                    f"capture={capture_index} "
+                    f"cavity_range={front_plane.cavity_range_m * 1000.0:.2f}mm "
+                    f"opening_range={front_plane.opening_range_m * 1000.0:.2f}mm "
+                    f"recess={front_plane.recess_depth_m * 1000.0:+.2f}mm "
+                    f"plane_residual={front_plane.plane_residual_m * 1000.0:.3f}mm "
+                    f"ray_gap={front_plane.max_ray_gap_m * 1000.0:.3f}mm "
+                    f"dense={front_plane.consistent_disparity_count}/"
+                    f"{front_plane.valid_disparity_count} "
+                    f"ring={front_plane.ring_candidate_count} "
+                    f"triangulated={front_plane.triangulated_count} "
+                    f"cluster={front_plane.cluster_count} "
+                    f"sides={front_plane.side_support_counts}",
+                    flush=True,
+                )
             runtime.observe_visual_servo(observation)
             debug.handle(
                 frame,
@@ -227,8 +260,8 @@ try:
                 capture_index,
             )
         except Exception as exc:
-            # A rejected stereo pair holds the current target; repeated misses
-            # trigger a clean image-space reacquisition.
+            # A rejected detector or front-plane estimate holds the current
+            # target; repeated misses trigger a clean image-space reacquisition.
             runtime.note_perception_failure()
             warn(
                 f"RGB stereo capture {capture_index} skipped: {exc}"
