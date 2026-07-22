@@ -17,22 +17,60 @@ unset IGN_CONFIG_PATH
 unset CONDA_PREFIX
 unset VIRTUAL_ENV
 
+DATASET="camera_output/prompt_ab_benchmark_v1/manifest.json"
 GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"
 SUMMARY="camera_output/front_rim_benchmark_v1/summary.json"
+EXPECTED_HEIGHT=960
+EXPECTED_WIDTH=1280
 
-printf '[FRONT RIM BENCHMARK] mode=local-sgbm-refined-v7\n'
+json_resolution_matches() {
+  local path="$1"
+  local key="$2"
+  /usr/bin/python3 - "$path" "$key" "$EXPECTED_HEIGHT" "$EXPECTED_WIDTH" <<'PY'
+import json
+from pathlib import Path
+import sys
 
-if [[ ! -s "$GROUND_TRUTH" ]]; then
-  printf '[FRONT RIM BENCHMARK] ground truth missing; generating automatically\n'
-  bash tools/run_front_rim_ground_truth.sh
+path = Path(sys.argv[1])
+key = sys.argv[2]
+expected = [int(sys.argv[3]), int(sys.argv[4])]
+if not path.is_file():
+    raise SystemExit(1)
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if payload.get(key) == expected else 1)
+PY
+}
+
+printf '[FRONT RIM BENCHMARK] mode=local-sgbm-refined-highres-v8\n'
+printf '[FRONT RIM BENCHMARK] camera resolution: %sx%s\n' \
+  "$EXPECTED_WIDTH" "$EXPECTED_HEIGHT"
+
+if ! json_resolution_matches "$DATASET" "resolution_height_width"; then
+  printf '[FRONT RIM BENCHMARK] frozen frames missing/stale; recapturing at 1280x960\n'
+  rm -rf camera_output/prompt_ab_benchmark_v1
+  "$HOME/isaacsim/python.sh" benchmarks/prompt_benchmark_capture_highres.py
 fi
 
-if [[ ! -s "$GROUND_TRUTH" ]]; then
-  printf 'ERROR: automatic ground-truth generation did not create %s\n' "$GROUND_TRUTH" >&2
+if ! json_resolution_matches "$DATASET" "resolution_height_width"; then
+  printf 'ERROR: high-resolution capture did not create a valid %s\n' "$DATASET" >&2
   exit 1
 fi
 
-printf '[FRONT RIM BENCHMARK] ground truth ready: %s\n' "$GROUND_TRUTH"
+if ! json_resolution_matches "$GROUND_TRUTH" "camera_resolution_height_width"; then
+  printf '[FRONT RIM BENCHMARK] ground truth missing/stale; regenerating at 1280x960\n'
+  rm -f "$GROUND_TRUTH"
+  bash tools/run_front_rim_ground_truth.sh
+fi
+
+if ! json_resolution_matches "$GROUND_TRUTH" "camera_resolution_height_width"; then
+  printf 'ERROR: high-resolution ground truth is invalid: %s\n' "$GROUND_TRUTH" >&2
+  exit 1
+fi
+
+printf '[FRONT RIM BENCHMARK] high-resolution inputs ready\n'
 rm -f "$SUMMARY"
 
 set +e
