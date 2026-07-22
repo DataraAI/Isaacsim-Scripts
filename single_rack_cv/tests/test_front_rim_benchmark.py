@@ -35,29 +35,29 @@ class FrontRimBenchmarkTests(unittest.TestCase):
             source,
         )
 
-    def test_sgbm_diagnostic_records_accuracy_before_strict_rejection(self) -> None:
-        diagnostic = (
+    def test_refined_sgbm_benchmark_keeps_strict_gates(self) -> None:
+        refined = (
             PROJECT_ROOT
             / "benchmarks"
-            / "front_rim_sgbm_diagnostic.py"
+            / "front_rim_sgbm_refined_benchmark.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("replace(", diagnostic)
-        self.assertIn("center_max_gap_m=0.0020", diagnostic)
-        self.assertIn("plane_max_residual_m=0.0010", diagnostic)
-        self.assertIn('"plane_residual_p95_mm"', diagnostic)
-        self.assertIn("STRICT_PLANE_RESIDUAL_P95_MM", diagnostic)
-        self.assertIn("and plane_residual_p95_mm <=", diagnostic)
-        self.assertIn('"mode": "local_sgbm_diagnostic_v6"', diagnostic)
+        self.assertIn("estimate_front_plane_sgbm_refined", refined)
+        self.assertIn('"plane_residual_p95_mm"', refined)
+        self.assertIn("STRICT_PLANE_RESIDUAL_P95_MM", refined)
+        self.assertIn("and plane_residual_p95_mm <=", refined)
+        self.assertIn('"mode": "local_sgbm_refined_v7"', refined)
+        self.assertNotIn("center_max_gap_m=0.0020", refined)
+        self.assertNotIn("plane_max_residual_m=0.0010", refined)
 
         bootstrap = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark_isaac.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("front_rim_sgbm_diagnostic.py", bootstrap)
+        self.assertIn("front_rim_sgbm_refined_benchmark.py", bootstrap)
 
         launcher = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("mode=local-sgbm-diagnostic-v6", launcher)
+        self.assertIn("mode=local-sgbm-refined-v7", launcher)
 
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
