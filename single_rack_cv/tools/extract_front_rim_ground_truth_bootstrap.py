@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Start Isaac Sim before loading OpenCV-dependent front-rim code."""
+"""Start Isaac before loading high-resolution OpenCV front-rim code."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.py"
+HIGHRES_CONFIG_PATH = PROJECT_ROOT / "highres_config.py"
 IMPLEMENTATION_PATH = PROJECT_ROOT / "tools" / "extract_front_rim_ground_truth.py"
+OUTPUT_PATH = PROJECT_ROOT / "benchmarks" / "front_rim_ground_truth.json"
 
 
 def _put_project_root_first() -> None:
@@ -36,21 +39,35 @@ def _load_module_from_path(module_name: str, module_path: Path):
 
 
 def _load_project_config():
-    """Load this project's config.py as the top-level `config` module."""
+    """Load base config and install the 1280x960 runtime replacement."""
     existing = sys.modules.get("config")
     if existing is not None:
         existing_path = Path(getattr(existing, "__file__", "")).resolve()
-        if existing_path == CONFIG_PATH.resolve():
-            return existing
-        sys.modules.pop("config", None)
-
-    return _load_module_from_path("config", CONFIG_PATH)
+        if existing_path != CONFIG_PATH.resolve():
+            sys.modules.pop("config", None)
+    if "config" not in sys.modules:
+        _load_module_from_path("config", CONFIG_PATH)
+    return _load_module_from_path("highres_config", HIGHRES_CONFIG_PATH)
 
 
 def _load_implementation():
     return _load_module_from_path(
         "front_rim_ground_truth_impl",
         IMPLEMENTATION_PATH,
+    )
+
+
+def _stamp_resolution_metadata() -> None:
+    if not OUTPUT_PATH.is_file():
+        raise RuntimeError(
+            "Ground-truth extractor returned without writing its JSON output."
+        )
+    payload = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
+    payload["schema_version"] = max(int(payload.get("schema_version", 0)), 4)
+    payload["camera_resolution_height_width"] = [960, 1280]
+    OUTPUT_PATH.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -70,9 +87,6 @@ def main() -> int:
 
     original_simulation_app = isaacsim.SimulationApp
     try:
-        # Kit prepends its own package paths, including cv2/config.py. Force the
-        # project root back to sys.path[0] and register the exact project config
-        # module before importing any OpenCV-dependent project code.
         _put_project_root_first()
         _load_project_config()
         implementation = _load_implementation()
@@ -80,7 +94,10 @@ def main() -> int:
         # The implementation's main() imports SimulationApp internally. Return
         # the already-running app instead of attempting a second Kit startup.
         isaacsim.SimulationApp = lambda *_args, **_kwargs: app
-        return int(implementation.main())
+        status = int(implementation.main())
+        if status == 0:
+            _stamp_resolution_metadata()
+        return status
     finally:
         isaacsim.SimulationApp = original_simulation_app
 
