@@ -324,6 +324,11 @@ def finalize_parent_result(
         if child.get(key) is not expected:
             failed.append(key)
 
+    for timestamp_key in ("started_at", "ended_at"):
+        timestamp = child.get(timestamp_key)
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            failed.append("required_fields")
+
     fatal_error = child.get("fatal_error")
     if not isinstance(fatal_error, str) or fatal_error:
         failed.append("fatal_error")
@@ -340,10 +345,12 @@ def finalize_parent_result(
         ("maximum_target_step_mm", STEP_LIMIT_MM, False),
         ("maximum_orientation_deviation_deg", ORIENTATION_LIMIT_DEG, False),
     )
-    for key, limit, absolute in numeric_limits:
+    for key, limit, signed in numeric_limits:
         value = _finite_number(child, key)
-        gate_name = "absolute_final_range_error_mm" if absolute else key
-        if value is None or (abs(value) if absolute else value) > limit:
+        gate_name = "absolute_final_range_error_mm" if signed else key
+        outside_domain = value is not None and not signed and value < 0.0
+        compared = abs(value) if value is not None and signed else value
+        if value is None or outside_domain or compared > limit:
             failed.append(gate_name)
 
     if target_error_mm is None or target_error_mm > GROUND_TRUTH_TARGET_LIMIT_MM:
