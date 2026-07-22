@@ -86,19 +86,30 @@ def main() -> int:
     import isaacsim
 
     original_simulation_app = isaacsim.SimulationApp
+    implementation = None
+    original_write_result = None
     try:
         _put_project_root_first()
         _load_project_config()
         implementation = _load_implementation()
 
+        # Write the resolution metadata while the extractor is writing the JSON,
+        # before implementation.main() closes the shared SimulationApp.
+        original_write_result = implementation._write_result
+
+        def write_result_with_resolution(*args, **kwargs) -> None:
+            original_write_result(*args, **kwargs)
+            _stamp_resolution_metadata()
+
+        implementation._write_result = write_result_with_resolution
+
         # The implementation's main() imports SimulationApp internally. Return
         # the already-running app instead of attempting a second Kit startup.
         isaacsim.SimulationApp = lambda *_args, **_kwargs: app
-        status = int(implementation.main())
-        if status == 0:
-            _stamp_resolution_metadata()
-        return status
+        return int(implementation.main())
     finally:
+        if implementation is not None and original_write_result is not None:
+            implementation._write_result = original_write_result
         isaacsim.SimulationApp = original_simulation_app
 
 
