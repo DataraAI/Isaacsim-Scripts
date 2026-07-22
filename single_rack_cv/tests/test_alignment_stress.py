@@ -105,9 +105,10 @@ class AlignmentStressTests(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaises(ValueError):
                 parse_stress_run_args(argv)
 
-    def test_sim_instrumentation_is_passive_and_complete(self):
-        source = Path("sim.py").read_text(encoding="utf-8")
+    def test_stress_runtime_instrumentation_is_passive_and_complete(self):
+        source = Path("stress_runtime.py").read_text(encoding="utf-8")
         for token in (
+            "class InstrumentedSimulationRuntime",
             "track_acquired_ever",
             "visual_alignment_locked_ever",
             "perception_rejection_count",
@@ -117,8 +118,9 @@ class AlignmentStressTests(unittest.TestCase):
             '"insertion_command_count": 0',
         ):
             self.assertIn(token, source)
-        self.assertIn("compute_bounded_step(", source)
-        self.assertIn("state.maximum_target_step_m = max(", source)
+        self.assertIn("super().observe_visual_servo(observation)", source)
+        self.assertIn("target_before", source)
+        self.assertNotIn("compute_bounded_step(", source)
         self.assertNotIn("insert_along", source)
 
     def test_quaternion_sign_flip_is_zero(self):
