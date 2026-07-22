@@ -57,6 +57,19 @@ class SceneConfig:
     # Extra gap between plug bottom and block top.
     cable_support_plug_clearance_m: float = 0.004
 
+    # Data Hall (full facility) placed past the cable head in +X by default.
+    datahall_enabled: bool = True
+    datahall_usd_path: str = (
+        "/home/advaith/Isaacsim-assets/DigitalTwin/"
+        "Assets/Datacenter/Facilities/Stages/Data_Hall/"
+        "DataHall_Full_01.usd"
+    )
+    datahall_prim_path: str = "/World/DataHall"
+    datahall_scale: float = 1.0
+    datahall_yaw_deg: float = 0.0
+    datahall_offset_from_cable_xy: tuple[float, float] = (1.5, 0.0)
+    datahall_enable_static_collisions: bool = True
+
     franka_path: str = "/World/Franka"
     franka_asset_path: str = "/World/Franka/Robot"
     franka_gripper_variant: str = "AlternateFinger"
@@ -359,6 +372,16 @@ class Config:
     pre_grasp: PreGraspConfig = field(default_factory=PreGraspConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
+
+def datahall_world_position(
+    scene: SceneConfig,
+) -> tuple[float, float, float]:
+    """World XYZ for the Data Hall root from cable spawn + XY offset."""
+    return (
+        float(scene.cable_spawn_xy[0] + scene.datahall_offset_from_cable_xy[0]),
+        float(scene.cable_spawn_xy[1] + scene.datahall_offset_from_cable_xy[1]),
+        0.0,
+    )
 
 
 CONFIG = Config()
