@@ -120,6 +120,8 @@ class AlignmentStressTests(unittest.TestCase):
             self.assertIn(token, source)
         self.assertIn("super().observe_visual_servo(observation)", source)
         self.assertIn("target_before", source)
+        self.assertIn("self.ik.actual_tool.get_world_pose()", source)
+        self.assertIn("self.visual_servo.startup_ready", source)
         self.assertNotIn("compute_bounded_step(", source)
         self.assertNotIn("insert_along", source)
 
@@ -298,6 +300,30 @@ class AlignmentStressTests(unittest.TestCase):
         result = self.finalize(child)
         self.assertFalse(result["qualified"])
         self.assertIn("ground_truth_target_error_mm", result["failed_gates"])
+
+    def test_negative_nonnegative_metrics_fail(self):
+        for gate in (
+            "runtime_duration_s",
+            "final_center_error_px",
+            "final_physical_tracking_error_mm",
+            "maximum_target_step_mm",
+            "maximum_orientation_deviation_deg",
+        ):
+            with self.subTest(gate=gate):
+                child = self.passing_child()
+                child[gate] = -0.000001
+                result = self.finalize(child)
+                self.assertFalse(result["qualified"])
+                self.assertIn(gate, result["failed_gates"])
+
+    def test_timestamps_must_be_nonempty_strings(self):
+        for key, value in (("started_at", ""), ("ended_at", None)):
+            with self.subTest(key=key):
+                child = self.passing_child()
+                child[key] = value
+                result = self.finalize(child)
+                self.assertFalse(result["qualified"])
+                self.assertIn("required_fields", result["failed_gates"])
 
     def test_missing_and_nonfinite_metrics_fail_and_write_null(self):
         child = self.passing_child()
