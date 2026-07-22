@@ -297,9 +297,9 @@ def target_is_settled(
 
 @dataclass
 class PreGraspState:
-    """30° standoff → open → grasp → close → lift."""
+    """30° standoff → open → grasp → close → lift → carry."""
 
-    # idle | angle | open | grasp_descend | close | lift | done
+    # idle | angle | open | grasp_descend | close | lift | carry | done
     phase: str = "idle"
     # Half of connector short-axis thickness (from stereo height_m).
     cable_half_width_m: float | None = None
@@ -395,7 +395,6 @@ class SimulationRuntime:
         self.desired_cable_virtual_camera_usd = (
             self._compute_desired_cable_camera_usd()
         )
-
         self._build_scene()
 
     # ------------------------------------------------------------------
@@ -856,7 +855,7 @@ class SimulationRuntime:
             state.complete = True
 
             next_action = (
-                "30° standoff → open → grasp → close → lift"
+                "30° standoff → open → grasp → close → lift → carry"
                 if self.cfg.pre_grasp.enabled
                 else "hold; no grasping is commanded"
             )
@@ -915,7 +914,7 @@ class SimulationRuntime:
             return
 
         open_phases = ("open", "grasp_descend")
-        close_phases = ("close", "lift")
+        close_phases = ("close", "lift", "carry")
         if state.phase in open_phases:
             self._apply_finger_gap(state.finger_half_gap_m)
         elif state.phase in close_phases:
@@ -973,7 +972,10 @@ class SimulationRuntime:
             return
 
         if state.phase == "grasp_descend":
-            if not self._advance_straight_grasp_approach():
+            if not self._advance_linear_ik_target(
+                state.grasp_target_world_m,
+                max_step_m=cfg.grasp_approach_step_m,
+            ):
                 return
             if not self._pre_grasp_pose_settled(required_settled):
                 return
@@ -1035,7 +1037,6 @@ class SimulationRuntime:
         if state.phase == "lift":
             if not self._pre_grasp_pose_settled(required_settled):
                 return
-            state.phase = "done"
             target_position, target_orientation = self._get_world_pose(
                 self.cfg.ik.target_path
             )
@@ -1051,6 +1052,26 @@ class SimulationRuntime:
                 f"  IK_Target={np.round(target_position, 4).tolist()}\n"
                 f"  commanded_grasp_ori_wxyz="
                 f"{np.round(commanded_orientation, 4).tolist()}\n"
+                f"  fingers held closed at "
+                f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
+            )
+            self._begin_grasp_carry()
+            return
+
+        if state.phase == "carry":
+            if not self._advance_linear_ik_target(
+                state.grasp_target_world_m,
+                max_step_m=cfg.carry_step_m,
+            ):
+                return
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
+            state.phase = "done"
+            target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+            log(
+                "GRASP CARRY DONE\n"
+                f"  carry_offset_m={np.round(cfg.carry_offset_m, 4).tolist()}\n"
+                f"  IK_Target={np.round(target_position, 4).tolist()}\n"
                 f"  fingers held closed at "
                 f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
             )
@@ -1343,17 +1364,21 @@ class SimulationRuntime:
             f"{state.finger_half_gap_m * 1000.0:.1f} mm per side"
         )
 
-    def _advance_straight_grasp_approach(self) -> bool:
+    def _advance_linear_ik_target(
+        self,
+        final_target_world_m: np.ndarray | None,
+        *,
+        max_step_m: float,
+    ) -> bool:
         """Advance IK_Target only after the arm catches up to each line step."""
-        cfg = self.cfg.pre_grasp
         state = self.pre_grasp
-        if self.ik is None or state.grasp_target_world_m is None:
+        if self.ik is None or final_target_world_m is None:
             return False
         current_target, _ = self._get_world_pose(
             self.cfg.ik.target_path
         )
         final_target = np.asarray(
-            state.grasp_target_world_m,
+            final_target_world_m,
             dtype=np.float64,
         ).reshape(3)
         remaining_m = float(np.linalg.norm(final_target - current_target))
@@ -1367,7 +1392,7 @@ class SimulationRuntime:
         next_target = bounded_linear_step(
             current_target,
             final_target,
-            max_step_m=cfg.grasp_approach_step_m,
+            max_step_m=max_step_m,
         )
         orientation = _normalize_quaternion_wxyz(
             state.grasp_orientation_wxyz
@@ -1409,6 +1434,31 @@ class SimulationRuntime:
             f"  new IK_Target={np.round(desired_tool, 4).tolist()}"
         )
         self._apply_finger_gap(state.finger_close_half_gap_m)
+
+    def _begin_grasp_carry(self) -> None:
+        """Step current IK_Target by carry_offset_m; keep gripper closed."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
+
+        target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+        offset = np.asarray(cfg.carry_offset_m, dtype=np.float64).reshape(3)
+        state.grasp_target_world_m = (
+            np.asarray(target_position, dtype=np.float64).reshape(3) + offset
+        )
+        state.phase = "carry"
+        state.move_settled_frames = 0
+        self._apply_finger_gap(state.finger_close_half_gap_m)
+        log(
+            "GRASP CARRY\n"
+            f"  carry_offset_m={np.round(offset, 4).tolist()}\n"
+            f"  start IK_Target={np.round(target_position, 4).tolist()}\n"
+            f"  final IK_Target="
+            f"{np.round(state.grasp_target_world_m, 4).tolist()}\n"
+            f"  max_step_m={cfg.carry_step_m:.4f}\n"
+            "  fingers stay closed"
+        )
 
     def _apply_finger_gap(self, half_gap_m: float) -> None:
         """Command both finger joints to the given half-gap."""
@@ -1744,6 +1794,8 @@ class SimulationRuntime:
         if scene.cable_support_enabled:
             self._create_cable_support_block()
         self._load_cable()
+        if scene.datahall_enabled:
+            self._load_datahall()
 
         assets_root = get_assets_root_path()
         if assets_root is None:
@@ -1829,10 +1881,19 @@ class SimulationRuntime:
         self.ik = self._create_ik(assets_root)
         self._set_external_view()
 
+        if scene.datahall_enabled:
+            datahall_line = (
+                f"  datahall:   {scene.datahall_prim_path} at "
+                f"({scene.cable_spawn_xy[0] + scene.datahall_offset_from_cable_xy[0]:.2f}, "
+                f"{scene.cable_spawn_xy[1] + scene.datahall_offset_from_cable_xy[1]:.2f}, 0)\n"
+            )
+        else:
+            datahall_line = "  datahall:   disabled\n"
         log(
             "READY\n"
             f"  cable:      {scene.cable_usd_path}\n"
             f"  connector:  {scene.tracked_connector_path}\n"
+            f"{datahall_line}"
             f"  Franka:     pos={scene.franka_position}, "
             f"yaw={scene.franka_yaw_deg}°\n"
             f"  left eye:   {self.left_camera_path}\n"
@@ -2724,6 +2785,31 @@ class SimulationRuntime:
             self._place_tracked_plug_on_support()
         else:
             self._place_cable_on_ground()
+
+    def _load_datahall(self) -> None:
+        """Place DataHall_Full_01 behind the robot/cable workspace in -X."""
+        scene = self.cfg.scene
+        if not scene.datahall_enabled:
+            log("Data Hall load skipped (datahall_enabled=False)")
+            return
+        if not os.path.isfile(scene.datahall_usd_path):
+            raise FileNotFoundError(
+                f"Data Hall USD not found: {scene.datahall_usd_path}"
+            )
+
+        position = (
+            scene.cable_spawn_xy[0] + scene.datahall_offset_from_cable_xy[0],
+            scene.cable_spawn_xy[1] + scene.datahall_offset_from_cable_xy[1],
+            0.0,
+        )
+        self._define_xform(
+            scene.datahall_prim_path,
+            position=position,
+            yaw_deg=0.0,
+            scale=(1.0, 1.0, 1.0),
+        )
+        self._add_reference(scene.datahall_usd_path, scene.datahall_prim_path)
+        log(f"Data Hall loaded at {position}")
 
     def _create_cable_support_block(self) -> None:
         """

@@ -124,8 +124,8 @@ class PerceptionConfig:
     # FK poses): when one eye locks the RJ45 head and the other the cord,
     # |Δv| jumps to ~100-150 px. Allow a little Y-offset / segmentation
     # jitter.
-    stereo_max_epipolar_error_px: float = 15.0
-    stereo_max_scale_ratio: float = 1.30
+    stereo_max_epipolar_error_px: float = 25.0 #change here to 15.0 to allow more Y-offset / segmentation jitter
+    stereo_max_scale_ratio: float = 1.35 #change to 1.30 to allow less scale ratio
     stereo_min_abs_disparity_px: float = 4.0
     stereo_max_ray_gap_m: float = 0.0020
     stereo_max_reprojection_rms_px: float = 2.5

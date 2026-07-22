@@ -57,18 +57,19 @@ class SceneConfig:
     # Extra gap between plug bottom and block top.
     cable_support_plug_clearance_m: float = 0.004
 
-    # Data Hall (full facility) placed past the cable head in +X by default.
-    datahall_enabled: bool = True
+    # Data Hall behind the robot + cable system in -X (Franka at origin,
+    # cable ~+0.74). Large negative offset keeps the facility clear of the
+    # grasp workspace; retarget post-lift insertion to this side later.
+    # Set False to skip loading for lighter/faster detection A/B tests.
+    datahall_enabled: bool = True #change if data hall shows up in the scene
     datahall_usd_path: str = (
         "/home/advaith/Isaacsim-assets/DigitalTwin/"
         "Assets/Datacenter/Facilities/Stages/Data_Hall/"
         "DataHall_Full_01.usd"
     )
     datahall_prim_path: str = "/World/DataHall"
-    datahall_scale: float = 1.0
-    datahall_yaw_deg: float = 0.0
-    datahall_offset_from_cable_xy: tuple[float, float] = (1.5, 0.0)
-    datahall_enable_static_collisions: bool = True
+    # World XY = cable_spawn_xy + this offset → ~(-9.26, 0) with current spawn.
+    datahall_offset_from_cable_xy: tuple[float, float] = (-1.5, 0.0)
 
     franka_path: str = "/World/Franka"
     franka_asset_path: str = "/World/Franka/Robot"
@@ -263,12 +264,12 @@ class VisualServoConfig:
     # tracking because the detected box size is quantized in whole pixels.
     center_tolerance_px: float = 2.0
     range_tolerance_m: float = 0.003
-    required_aligned_captures: int = 5
+    required_aligned_captures: int = 2 #decreased to stop delay waiting in vertical position
 
     # The measured physical tracking floor at this pose is about 0.22 mm.
     # A 0.30 mm gate remains far smaller than the RGB range uncertainty.
     settle_position_tolerance_m: float = 0.0003
-    required_settled_frames: int = 30
+    required_settled_frames: int = 10 #decreased to stop delay waiting in vertical position
     settle_warning_timeout_s: float = 8.0
 
     freeze_after_complete: bool = True
@@ -276,7 +277,7 @@ class VisualServoConfig:
 
 @dataclass(frozen=True)
 class PreGraspConfig:
-    """After visual servo: angle standoff, open, grasp, close, then lift."""
+    """After visual servo: angle standoff, open, grasp, close, lift, carry."""
 
     enabled: bool = True
     # Approach elevation above the horizontal plane (0=sideways, 90=top-down).
@@ -294,7 +295,12 @@ class PreGraspConfig:
     # Commanded close half-gap. 0 = drive fully closed; contact stops the fingers.
     close_target_half_gap_m: float = 0.0
     # Post-grasp lift along +world Z.
-    lift_z_m: float = 0.020
+    lift_z_m: float = 0.050
+    # After lift settles: world translation added to the current IK_Target
+    # (not a hardcoded absolute pose). Gripper stays closed.
+    carry_offset_m: tuple[float, float, float] = (-0.30, -0.10, 0.30) #change target location
+    # Slow stepped carry so the gripped cable does not slip.
+    carry_step_m: float = 0.02 #increase carry step to 0.02 to move the cable faster
     # Extra open gap per side beyond measured cable half-thickness.
     side_allowance_m: float = 0.002
     # Never approach with less than this opening per finger.
@@ -371,17 +377,6 @@ class Config:
     )
     pre_grasp: PreGraspConfig = field(default_factory=PreGraspConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
-
-
-def datahall_world_position(
-    scene: SceneConfig,
-) -> tuple[float, float, float]:
-    """World XYZ for the Data Hall root from cable spawn + XY offset."""
-    return (
-        float(scene.cable_spawn_xy[0] + scene.datahall_offset_from_cable_xy[0]),
-        float(scene.cable_spawn_xy[1] + scene.datahall_offset_from_cable_xy[1]),
-        0.0,
-    )
 
 
 CONFIG = Config()
