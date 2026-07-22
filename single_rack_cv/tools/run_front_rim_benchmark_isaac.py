@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start Isaac before CUDA/OpenCV imports, then run refined SGBM benchmark."""
+"""Start Isaac before CUDA/OpenCV imports, then run high-resolution SGBM."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ import traceback
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.py"
+HIGHRES_CONFIG_PATH = PROJECT_ROOT / "highres_config.py"
 BENCHMARK_PATH = (
-    PROJECT_ROOT / "benchmarks" / "front_rim_sgbm_refined_benchmark.py"
+    PROJECT_ROOT / "benchmarks" / "front_rim_sgbm_highres_benchmark.py"
 )
 
 
@@ -31,7 +32,8 @@ def _install_safe_disparity_writer(benchmark) -> None:
     import numpy as np
     from PIL import Image
 
-    target = getattr(benchmark, "base", benchmark)
+    refined = getattr(benchmark, "refined", benchmark)
+    target = getattr(refined, "base", refined)
 
     def save(path, disparity) -> None:
         values = np.asarray(disparity.disparity_crop_px, dtype=np.float32)
@@ -59,11 +61,16 @@ def _install_safe_disparity_writer(benchmark) -> None:
 def main() -> int:
     from isaacsim import SimulationApp
 
-    app = SimulationApp({"headless": False, "width": 640, "height": 480})
+    # DLSS internally scales the renderer input. Starting at 1280x960 keeps the
+    # scaled input above the 300-pixel minimum and matches the stereo sensors.
+    app = SimulationApp(
+        {"headless": False, "width": 1280, "height": 960}
+    )
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         sys.modules.pop("config", None)
         _load_path("config", CONFIG_PATH)
+        _load_path("highres_config", HIGHRES_CONFIG_PATH)
         benchmark = _load_path("front_rim_benchmark_impl", BENCHMARK_PATH)
         _install_safe_disparity_writer(benchmark)
         return int(benchmark.main())
