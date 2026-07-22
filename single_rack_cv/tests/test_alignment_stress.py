@@ -22,6 +22,7 @@ from stress_alignment import (
     finalize_parent_result,
     new_child_result,
     parse_stress_run_args,
+    quaternion_angular_distance_deg,
     write_json_atomic,
 )
 
@@ -103,6 +104,47 @@ class AlignmentStressTests(unittest.TestCase):
         for argv in bad_argv:
             with self.subTest(argv=argv), self.assertRaises(ValueError):
                 parse_stress_run_args(argv)
+
+    def test_sim_instrumentation_is_passive_and_complete(self):
+        source = Path("sim.py").read_text(encoding="utf-8")
+        for token in (
+            "track_acquired_ever",
+            "visual_alignment_locked_ever",
+            "perception_rejection_count",
+            "maximum_target_step_m",
+            "maximum_orientation_deviation_deg",
+            "def stress_snapshot",
+            '"insertion_command_count": 0',
+        ):
+            self.assertIn(token, source)
+        self.assertIn("compute_bounded_step(", source)
+        self.assertIn("state.maximum_target_step_m = max(", source)
+        self.assertNotIn("insert_along", source)
+
+    def test_quaternion_sign_flip_is_zero(self):
+        self.assertAlmostEqual(
+            quaternion_angular_distance_deg(
+                (1.0, 0.0, 0.0, 0.0),
+                (-1.0, 0.0, 0.0, 0.0),
+            ),
+            0.0,
+            places=12,
+        )
+
+    def test_known_ten_degree_rotation(self):
+        half = math.radians(5.0)
+        rotated = (math.cos(half), 0.0, math.sin(half), 0.0)
+        self.assertAlmostEqual(
+            quaternion_angular_distance_deg((1.0, 0.0, 0.0, 0.0), rotated),
+            10.0,
+            places=12,
+        )
+
+    def test_quaternion_distance_rejects_nonfinite_and_zero(self):
+        with self.assertRaises(ValueError):
+            quaternion_angular_distance_deg((0.0, 0.0, 0.0, 0.0), (1, 0, 0, 0))
+        with self.assertRaises(ValueError):
+            quaternion_angular_distance_deg((math.nan, 0, 0, 0), (1, 0, 0, 0))
 
     def test_offsets_change_only_world_y_and_z(self):
         args = StressRunArgs(
