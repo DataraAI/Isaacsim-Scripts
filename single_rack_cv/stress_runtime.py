@@ -77,12 +77,13 @@ class InstrumentedSimulationRuntime(SimulationRuntime):
 
     def update_ik(self) -> None:
         super().update_ik()
-        if self.ik is None:
+        if self.ik is None or not self.visual_servo.startup_ready:
             return
-        _position, orientation = self.ik.target.get_world_pose()
+        self._update_actual_tool_frame(self.ik)
+        _position, actual_orientation = self.ik.actual_tool.get_world_pose()
         deviation_deg = quaternion_angular_distance_deg(
             self._initial_target_orientation_wxyz,
-            orientation,
+            actual_orientation,
         )
         self._maximum_orientation_deviation_deg = max(
             self._maximum_orientation_deviation_deg,
