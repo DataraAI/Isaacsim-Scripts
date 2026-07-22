@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""
+Offline detector test: run detect_port_candidates against a saved PNG.
+
+No Isaac Sim needed - this only imports perception.py, which is pure
+NumPy/OpenCV. Point it at one of the raw camera captures saved by main.py
+(camera_output/rgb_left_latest.png or rgb_right_latest.png) to see what
+the detector actually finds, without relaunching the simulator each time.
+
+Usage:
+    python3 test_detection.py camera_output/rgb_left_latest.png
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from perception import PerceptionConfig, detect_port_candidates
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        print(f"Usage: python3 {sys.argv[0]} <path_to_rgb_image.png>")
+        raise SystemExit(1)
+
+    image_path = Path(sys.argv[1])
+    if not image_path.is_file():
+        raise FileNotFoundError(f"No such file: {image_path}")
+
+    rgb = np.array(Image.open(image_path).convert("RGB"))
+    cfg = PerceptionConfig()
+
+    candidates = detect_port_candidates(rgb, cfg)
+
+    print(f"Loaded {image_path} ({rgb.shape[1]}x{rgb.shape[0]})")
+    print(f"Found {len(candidates)} candidate(s) after all shape filters:\n")
+
+    for i, c in enumerate(candidates):
+        x, y, w, h = c.bbox_xywh
+        print(
+            f"  [{i}] axis_aligned_bbox=({x},{y},{w},{h})  "
+            f"score={c.shape_score:.3f}  center={c.center_uv}\n"
+            "      (acceptance used an oriented, rotation-aware rectangle "
+            "internally, not this axis-aligned bbox)"
+        )
+
+    # Save the raw dark-mask (before shape filtering) and an overlay of
+    # accepted candidates, so you can *see* what's happening, not just read
+    # numbers. This mirrors debug.py's own habit of dumping the mask image.
+    out_dir = image_path.parent
+    stem = image_path.stem
+
+    if candidates:
+        mask = candidates[0].mask
+    else:
+        # No accepted candidates - still show the raw Otsu mask so we can
+        # tell whether the problem is thresholding or the shape filters.
+        import cv2
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        _, mask = cv2.threshold(
+            gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+
+    mask_path = out_dir / f"{stem}_mask.png"
+    Image.fromarray(mask, mode="L").save(mask_path)
+    print(f"\nSaved raw dark-mask to: {mask_path}")
+
+    overlay = Image.fromarray(rgb, mode="RGB").copy()
+    if candidates:
+        from PIL import ImageDraw
+
+        draw = ImageDraw.Draw(overlay)
+        for c in candidates:
+            x, y, w, h = c.bbox_xywh
+            draw.rectangle([x, y, x + w, y + h], outline=(0, 255, 0), width=2)
+
+    overlay_path = out_dir / f"{stem}_overlay.png"
+    overlay.save(overlay_path)
+    print(f"Saved candidate overlay to: {overlay_path}")
+
+
+if __name__ == "__main__":
+    main()
+    
