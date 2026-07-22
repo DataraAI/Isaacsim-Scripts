@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start Isaac before CUDA/OpenCV imports, then run local SGBM benchmark."""
+"""Start Isaac before CUDA/OpenCV imports, then run SGBM diagnostics."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import traceback
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.py"
 BENCHMARK_PATH = (
-    PROJECT_ROOT / "benchmarks" / "front_rim_sgbm_benchmark.py"
+    PROJECT_ROOT / "benchmarks" / "front_rim_sgbm_diagnostic.py"
 )
 
 
@@ -26,17 +26,17 @@ def _load_path(name: str, path: Path):
 
 
 def _install_safe_disparity_writer(benchmark) -> None:
-    """Replace the benchmark writer with channel-safe NumPy indexing."""
+    """Replace the base benchmark writer with channel-safe NumPy indexing."""
     import cv2
     import numpy as np
     from PIL import Image
 
+    target = getattr(benchmark, "base", benchmark)
+
     def save(path, disparity) -> None:
         values = np.asarray(disparity.disparity_crop_px, dtype=np.float32)
         center = float(disparity.center_disparity_px)
-        half = float(
-            benchmark.DEFAULT_SGBM_CONFIG.disparity_half_range_px
-        )
+        half = float(target.DEFAULT_SGBM_CONFIG.disparity_half_range_px)
         normalized = np.clip(
             (values - (center - half)) / (2.0 * half),
             0.0,
@@ -53,7 +53,7 @@ def _install_safe_disparity_writer(benchmark) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(color_rgb, mode="RGB").save(path)
 
-    benchmark._save_disparity_debug = save
+    target._save_disparity_debug = save
 
 
 def main() -> int:
