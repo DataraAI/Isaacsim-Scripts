@@ -69,6 +69,12 @@ def _stamp_resolution_metadata() -> None:
         json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
     )
+    print(
+        "[GROUND TRUTH METADATA STAMPED]\n"
+        f"  schema_version: {payload['schema_version']}\n"
+        "  camera resolution: 1280x960",
+        flush=True,
+    )
 
 
 def main() -> int:
