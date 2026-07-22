@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local dense SGBM disparity and front-bezel plane estimation."""
+"""Qualified local SGBM front-opening plane estimation."""
 
 from __future__ import annotations
 
@@ -9,11 +9,15 @@ import math
 import cv2
 import numpy as np
 
-from front_rim_stereo import triangulate_pixel_pair
+from stereo_geometry import triangulate_pixel_pair, unit_vector
+
+
+SIDE_NAMES = ("top", "right", "bottom", "left")
+STRICT_RAY_GAP_M = 0.0005
 
 
 @dataclass(frozen=True)
-class LocalSGBMConfig:
+class FrontPlaneConfig:
     """Dense stereo settings constrained by the detected cavity disparity."""
 
     roi_margin_px: int = 24
@@ -30,7 +34,7 @@ class LocalSGBMConfig:
     ring_outer_offset_px: int = 10
     ring_sample_stride_px: int = 1
 
-    max_triangulation_ray_gap_m: float = 0.0010
+    max_triangulation_ray_gap_m: float = STRICT_RAY_GAP_M
     depth_cluster_tolerance_m: float = 0.0040
     min_cluster_points: int = 24
     min_points_per_side: int = 4
@@ -38,12 +42,10 @@ class LocalSGBMConfig:
     plane_fit_iterations: int = 4
     plane_mad_scale: float = 2.5
     plane_max_residual_m: float = 0.0005
-    center_max_gap_m: float = 0.0005
     normal_min_camera_cosine: float = 0.20
 
 
-DEFAULT_SGBM_CONFIG = LocalSGBMConfig()
-SIDE_NAMES = ("top", "right", "bottom", "left")
+DEFAULT_FRONT_PLANE_CONFIG = FrontPlaneConfig()
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ class LocalDisparityResult:
         if disparity.ndim != 2:
             raise ValueError("disparity_crop_px must be a 2D array.")
         if valid.shape != disparity.shape or consistent.shape != disparity.shape:
-            raise ValueError("Disparity masks must match the disparity shape.")
+            raise ValueError("Disparity masks must match disparity shape.")
         x0, y0, x1, y1 = map(int, self.crop_xyxy)
         if disparity.shape != (y1 - y0, x1 - x0):
             raise ValueError("Disparity shape does not match crop_xyxy.")
@@ -81,7 +83,7 @@ class LocalDisparityResult:
 
 
 @dataclass(frozen=True)
-class SGBMFrontPlaneResult:
+class FrontPlaneResult:
     center_world_m: np.ndarray
     normal_world: np.ndarray
     corners_world_m: np.ndarray
@@ -102,7 +104,7 @@ class SGBMFrontPlaneResult:
 
     def __post_init__(self) -> None:
         center = np.asarray(self.center_world_m, dtype=np.float64).reshape(3)
-        normal = _unit(self.normal_world, "normal_world")
+        normal = unit_vector(self.normal_world, "normal_world")
         corners = np.asarray(self.corners_world_m, dtype=np.float64).reshape(4, 3)
         if self.width_m <= 0.0 or self.height_m <= 0.0:
             raise ValueError("Estimated opening dimensions must be positive.")
@@ -111,15 +113,7 @@ class SGBMFrontPlaneResult:
         object.__setattr__(self, "corners_world_m", corners.copy())
 
 
-def _unit(value: np.ndarray, name: str) -> np.ndarray:
-    vector = np.asarray(value, dtype=np.float64).reshape(3)
-    norm = float(np.linalg.norm(vector))
-    if not np.all(np.isfinite(vector)) or norm <= 1.0e-12:
-        raise ValueError(f"{name} must be finite and nonzero.")
-    return vector / norm
-
-
-def _validate_config(cfg: LocalSGBMConfig) -> None:
+def _validate_config(cfg: FrontPlaneConfig) -> None:
     if cfg.roi_margin_px < 0:
         raise ValueError("roi_margin_px must be non-negative.")
     if cfg.disparity_half_range_px <= 0.0:
@@ -134,6 +128,8 @@ def _validate_config(cfg: LocalSGBMConfig) -> None:
         raise ValueError("ring_sample_stride_px must be positive.")
     if cfg.min_cluster_points < 3 or cfg.min_points_per_side < 1:
         raise ValueError("SGBM support requirements are invalid.")
+    if cfg.max_triangulation_ray_gap_m > STRICT_RAY_GAP_M:
+        raise ValueError("Front-plane ray-gap gate may not exceed 0.5 mm.")
 
 
 def _bbox_edges(
@@ -174,7 +170,7 @@ def _num_disparities(half_range_px: float) -> int:
 def _create_matcher(
     min_disparity_px: int,
     num_disparities: int,
-    cfg: LocalSGBMConfig,
+    cfg: FrontPlaneConfig,
 ):
     block = int(cfg.block_size)
     return cv2.StereoSGBM_create(
@@ -199,9 +195,9 @@ def compute_local_disparity(
     left_center_uv: tuple[float, float] | np.ndarray,
     right_bbox_xywh: tuple[int, int, int, int],
     right_center_uv: tuple[float, float] | np.ndarray,
-    cfg: LocalSGBMConfig = DEFAULT_SGBM_CONFIG,
+    cfg: FrontPlaneConfig = DEFAULT_FRONT_PLANE_CONFIG,
 ) -> LocalDisparityResult:
-    """Compute local left disparity and an explicit left-right consistency mask."""
+    """Compute local left disparity and explicit left-right consistency."""
     _validate_config(cfg)
     left = np.asarray(left_rgb)
     right = np.asarray(right_rgb)
@@ -242,7 +238,6 @@ def compute_local_disparity(
         right_aligned[y0:y1, x0:x1],
         cv2.COLOR_RGB2GRAY,
     )
-
     if left_gray.shape[1] <= num_disparities + cfg.block_size + 2:
         raise RuntimeError(
             "Local SGBM crop is narrower than its disparity search."
@@ -272,7 +267,10 @@ def compute_local_disparity(
 
     rows, columns = np.indices(left_disparity.shape)
     right_columns = np.rint(columns - left_disparity).astype(np.int64)
-    inside = (right_columns >= 0) & (right_columns < left_disparity.shape[1])
+    inside = (
+        (right_columns >= 0)
+        & (right_columns < left_disparity.shape[1])
+    )
     consistent = np.zeros_like(valid_left)
     candidate_rows, candidate_columns = np.where(valid_left & inside)
     mapped_columns = right_columns[candidate_rows, candidate_columns]
@@ -287,7 +285,6 @@ def compute_local_disparity(
             <= cfg.lr_consistency_px
         )
     )
-
     return LocalDisparityResult(
         disparity_crop_px=left_disparity,
         valid_mask=valid_left,
@@ -302,25 +299,19 @@ def compute_local_disparity(
 def build_bezel_ring_pixels(
     bbox_xywh: tuple[int, int, int, int],
     image_shape_hw: tuple[int, int],
-    cfg: LocalSGBMConfig = DEFAULT_SGBM_CONFIG,
+    cfg: FrontPlaneConfig = DEFAULT_FRONT_PLANE_CONFIG,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return disjoint full-image pixels for top/right/bottom/left bezel bands."""
+    """Return disjoint full-image pixels for top/right/bottom/left bands."""
     _validate_config(cfg)
     image_height, image_width = map(int, image_shape_hw)
     x0f, y0f, x1f, y1f = _bbox_edges(bbox_xywh)
     x0, y0, x1, y1 = map(
         int,
-        (
-            round(x0f),
-            round(y0f),
-            round(x1f),
-            round(y1f),
-        ),
+        (round(x0f), round(y0f), round(x1f), round(y1f)),
     )
     inner = int(cfg.ring_inner_offset_px)
     outer = int(cfg.ring_outer_offset_px)
     stride = int(cfg.ring_sample_stride_px)
-
     rectangles = (
         (x0 - outer, y0 - outer, x1 + outer, y0 - inner),
         (x1 + inner, y0 - inner, x1 + outer, y1 + inner),
@@ -356,7 +347,7 @@ def select_nearest_range_cluster(
     tolerance_m: float,
     min_points: int,
 ) -> np.ndarray:
-    """Select the densest range window, breaking equal-size ties toward camera."""
+    """Select densest range window, breaking ties toward the camera."""
     ranges = np.asarray(ranges_m, dtype=np.float64).reshape(-1)
     if ranges.size < min_points:
         raise RuntimeError(
@@ -379,7 +370,9 @@ def select_nearest_range_cluster(
         if count > best_count:
             best_start, best_end = start, end
         elif count == best_count and count > 0:
-            candidate_median = float(np.median(values[start : end + 1]))
+            candidate_median = float(
+                np.median(values[start : end + 1])
+            )
             best_median = float(
                 np.median(values[best_start : best_end + 1])
             )
@@ -396,19 +389,22 @@ def select_nearest_range_cluster(
     return mask
 
 
-def _fit_plane(
+def fit_plane_stable(
     points_world_m: np.ndarray,
-    cfg: LocalSGBMConfig,
+    cfg: FrontPlaneConfig = DEFAULT_FRONT_PLANE_CONFIG,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Fit with monotonic robust trimming and final hard stabilization."""
     points = np.asarray(points_world_m, dtype=np.float64).reshape(-1, 3)
     if points.shape[0] < cfg.min_cluster_points:
-        raise RuntimeError("Too few points reached SGBM plane fitting.")
+        raise RuntimeError("Too few points reached front-plane fitting.")
     inliers = np.ones(points.shape[0], dtype=bool)
-    for _ in range(cfg.plane_fit_iterations):
+    max_iterations = max(8, 2 * int(cfg.plane_fit_iterations))
+
+    for _ in range(max_iterations):
         active = points[inliers]
         center = np.mean(active, axis=0)
         _, _, vh = np.linalg.svd(active - center, full_matrices=False)
-        normal = _unit(vh[-1], "SGBM plane normal")
+        normal = unit_vector(vh[-1], "front-plane normal")
         residuals = np.abs((points - center) @ normal)
         active_residuals = residuals[inliers]
         median = float(np.median(active_residuals))
@@ -418,40 +414,64 @@ def _fit_plane(
             cfg.plane_max_residual_m,
             max(1.0e-8, robust_limit),
         )
-        next_inliers = residuals <= threshold
+        next_inliers = inliers & (residuals <= threshold)
         if int(np.count_nonzero(next_inliers)) < cfg.min_cluster_points:
             raise RuntimeError(
-                "Robust SGBM plane fit rejected too many depth points."
+                "Front-plane fit rejected too many depth points."
             )
         if np.array_equal(next_inliers, inliers):
-            inliers = next_inliers
-            break
+            hard = inliers & (residuals <= cfg.plane_max_residual_m)
+            if int(np.count_nonzero(hard)) < cfg.min_cluster_points:
+                raise RuntimeError(
+                    "Front-plane hard residual pass rejected too many points."
+                )
+            if np.array_equal(hard, inliers):
+                return (
+                    center,
+                    normal,
+                    inliers,
+                    float(np.max(residuals[inliers])),
+                )
+            next_inliers = hard
         inliers = next_inliers
-    active = points[inliers]
-    center = np.mean(active, axis=0)
-    _, _, vh = np.linalg.svd(active - center, full_matrices=False)
-    normal = _unit(vh[-1], "SGBM plane normal")
-    residual = float(np.max(np.abs((active - center) @ normal)))
-    if residual > cfg.plane_max_residual_m:
-        raise RuntimeError(
-            f"SGBM plane residual {residual:.6f} m exceeds gate."
+
+    for _ in range(max_iterations):
+        active = points[inliers]
+        center = np.mean(active, axis=0)
+        _, _, vh = np.linalg.svd(active - center, full_matrices=False)
+        normal = unit_vector(vh[-1], "front-plane normal")
+        residuals = np.abs((points - center) @ normal)
+        next_inliers = inliers & (
+            residuals <= cfg.plane_max_residual_m
         )
-    return center, normal, inliers, residual
+        if int(np.count_nonzero(next_inliers)) < cfg.min_cluster_points:
+            raise RuntimeError(
+                "Final residual pass rejected too many points."
+            )
+        if np.array_equal(next_inliers, inliers):
+            return (
+                center,
+                normal,
+                inliers,
+                float(np.max(residuals[inliers])),
+            )
+        inliers = next_inliers
+    raise RuntimeError("Front-plane inliers did not stabilize.")
 
 
-def _intersect_pixel_with_plane(
+def intersect_pixel_with_plane(
     camera,
-    pixel_uv: tuple[float, float] | np.ndarray,
-    plane_center_world_m: np.ndarray,
-    plane_normal_world: np.ndarray,
-) -> np.ndarray:
+    pixel_uv,
+    plane_center_world_m,
+    plane_normal_world,
+):
     origin, direction = camera.pixel_to_world_ray(pixel_uv)
     origin = np.asarray(origin, dtype=np.float64).reshape(3)
-    direction = _unit(direction, "image ray")
-    normal = _unit(plane_normal_world, "plane normal")
+    direction = unit_vector(direction, "image ray")
+    normal = unit_vector(plane_normal_world, "plane normal")
     denominator = float(np.dot(direction, normal))
     if abs(denominator) <= 1.0e-9:
-        raise RuntimeError("Image ray is parallel to the SGBM front plane.")
+        raise RuntimeError("Image ray is parallel to the front plane.")
     distance = float(
         np.dot(
             np.asarray(plane_center_world_m, dtype=np.float64) - origin,
@@ -460,7 +480,50 @@ def _intersect_pixel_with_plane(
         / denominator
     )
     if distance <= 0.0:
-        raise RuntimeError("SGBM front plane lies behind an image ray.")
+        raise RuntimeError("Front plane lies behind an image ray.")
+    return origin + distance * direction
+
+
+def intersect_midpoint_ray_with_plane(
+    left_camera,
+    right_camera,
+    left_center_uv,
+    right_center_uv,
+    plane_center_world_m,
+    plane_normal_world,
+) -> np.ndarray:
+    left_origin, left_direction = left_camera.pixel_to_world_ray(
+        left_center_uv
+    )
+    right_origin, right_direction = right_camera.pixel_to_world_ray(
+        right_center_uv
+    )
+    origin = 0.5 * (
+        np.asarray(left_origin, dtype=np.float64).reshape(3)
+        + np.asarray(right_origin, dtype=np.float64).reshape(3)
+    )
+    direction = unit_vector(
+        np.asarray(left_direction, dtype=np.float64).reshape(3)
+        + np.asarray(right_direction, dtype=np.float64).reshape(3),
+        "fused cavity-center direction",
+    )
+    normal = unit_vector(plane_normal_world, "front-plane normal")
+    denominator = float(np.dot(direction, normal))
+    if abs(denominator) <= 1.0e-9:
+        raise RuntimeError(
+            "Fused cavity-center ray is parallel to front plane."
+        )
+    distance = float(
+        np.dot(
+            np.asarray(plane_center_world_m, dtype=np.float64) - origin,
+            normal,
+        )
+        / denominator
+    )
+    if distance <= 0.0:
+        raise RuntimeError(
+            "Front plane lies behind fused cavity-center ray."
+        )
     return origin + distance * direction
 
 
@@ -479,7 +542,7 @@ def _bbox_corners(
     )
 
 
-def estimate_front_plane_sgbm(
+def estimate_front_plane(
     left_rgb: np.ndarray,
     right_rgb: np.ndarray,
     left_bbox_xywh: tuple[int, int, int, int],
@@ -488,10 +551,11 @@ def estimate_front_plane_sgbm(
     right_center_uv: tuple[float, float] | np.ndarray,
     left_camera,
     right_camera,
-    cfg: LocalSGBMConfig = DEFAULT_SGBM_CONFIG,
+    cfg: FrontPlaneConfig = DEFAULT_FRONT_PLANE_CONFIG,
     disparity: LocalDisparityResult | None = None,
-) -> SGBMFrontPlaneResult:
-    """Fit the nearest coherent dense bezel plane and intersect cavity rays."""
+) -> FrontPlaneResult:
+    """Estimate the physical front-opening plane from a cavity-anchored ROI."""
+    _validate_config(cfg)
     if disparity is None:
         disparity = compute_local_disparity(
             left_rgb,
@@ -544,9 +608,13 @@ def estimate_front_plane_sgbm(
         np.asarray(left_camera.camera_center_world_m, dtype=np.float64)
         + np.asarray(right_camera.camera_center_world_m, dtype=np.float64)
     )
-    _, left_center_direction = left_camera.pixel_to_world_ray(left_center_uv)
-    _, right_center_direction = right_camera.pixel_to_world_ray(right_center_uv)
-    view_direction = _unit(
+    _, left_center_direction = left_camera.pixel_to_world_ray(
+        left_center_uv
+    )
+    _, right_center_direction = right_camera.pixel_to_world_ray(
+        right_center_uv
+    )
+    view_direction = unit_vector(
         np.asarray(left_center_direction, dtype=np.float64)
         + np.asarray(right_center_direction, dtype=np.float64),
         "stereo center viewing direction",
@@ -585,7 +653,9 @@ def estimate_front_plane_sgbm(
         )
         points.append(point)
         gaps.append(float(gap))
-        depths.append(float(np.dot(point - camera_midpoint, view_direction)))
+        depths.append(
+            float(np.dot(point - camera_midpoint, view_direction))
+        )
         labels.append(int(side))
         used_disparities.append(float(value))
         reprojection_errors.extend((left_error, right_error))
@@ -618,11 +688,15 @@ def estimate_front_plane_sgbm(
             "Nearest SGBM depth cluster lacks four-sided bezel support: "
             + ", ".join(
                 f"{name}={count}"
-                for name, count in zip(SIDE_NAMES, side_counts, strict=True)
+                for name, count in zip(
+                    SIDE_NAMES,
+                    side_counts,
+                    strict=True,
+                )
             )
         )
 
-    plane_center, normal, plane_inliers, residual = _fit_plane(
+    plane_center, normal, plane_inliers, residual = fit_plane_stable(
         cluster_points,
         cfg,
     )
@@ -633,7 +707,7 @@ def estimate_front_plane_sgbm(
     )
     if min(final_side_counts) < cfg.min_points_per_side:
         raise RuntimeError(
-            "SGBM plane inliers lost four-sided bezel support: "
+            "Front-plane inliers lost four-sided bezel support: "
             + ", ".join(
                 f"{name}={count}"
                 for name, count in zip(
@@ -644,60 +718,48 @@ def estimate_front_plane_sgbm(
             )
         )
 
-    toward_cameras = _unit(
+    toward_cameras = unit_vector(
         camera_midpoint - plane_center,
         "front-plane camera direction",
     )
     if float(np.dot(normal, toward_cameras)) < 0.0:
         normal = -normal
-    if float(np.dot(normal, toward_cameras)) < cfg.normal_min_camera_cosine:
-        raise RuntimeError("SGBM front-plane normal is not camera-facing.")
+    if (
+        float(np.dot(normal, toward_cameras))
+        < cfg.normal_min_camera_cosine
+    ):
+        raise RuntimeError("Front-plane normal is not camera-facing.")
 
-    left_center_point = _intersect_pixel_with_plane(
+    center = intersect_midpoint_ray_with_plane(
         left_camera,
-        left_center_uv,
-        plane_center,
-        normal,
-    )
-    right_center_point = _intersect_pixel_with_plane(
         right_camera,
+        left_center_uv,
         right_center_uv,
         plane_center,
         normal,
     )
-    center_gap = float(
-        np.linalg.norm(left_center_point - right_center_point)
-    )
-    if center_gap > cfg.center_max_gap_m:
-        raise RuntimeError(
-            "SGBM cavity-center plane intersections disagree by "
-            f"{center_gap * 1000.0:.3f} mm."
-        )
-    center = 0.5 * (left_center_point + right_center_point)
 
     left_corners = _bbox_corners(left_bbox_xywh)
     right_corners = _bbox_corners(right_bbox_xywh)
     corners: list[np.ndarray] = []
-    corner_gaps: list[float] = []
     for left_uv, right_uv in zip(
         left_corners,
         right_corners,
         strict=True,
     ):
-        left_point = _intersect_pixel_with_plane(
+        left_point = intersect_pixel_with_plane(
             left_camera,
             left_uv,
             plane_center,
             normal,
         )
-        right_point = _intersect_pixel_with_plane(
+        right_point = intersect_pixel_with_plane(
             right_camera,
             right_uv,
             plane_center,
             normal,
         )
         corners.append(0.5 * (left_point + right_point))
-        corner_gaps.append(float(np.linalg.norm(left_point - right_point)))
     corners_world = np.vstack(corners)
     corners_world += center - np.mean(corners_world, axis=0)
     width_m = 0.5 * (
@@ -710,18 +772,13 @@ def estimate_front_plane_sgbm(
     )
 
     reprojection = np.asarray(reprojection_errors, dtype=np.float64)
-    maximum_gap = max(
-        float(np.max(cluster_gaps[plane_inliers])),
-        center_gap,
-        max(corner_gaps),
-    )
-    return SGBMFrontPlaneResult(
+    return FrontPlaneResult(
         center_world_m=center,
         normal_world=normal,
         corners_world_m=corners_world,
         width_m=width_m,
         height_m=height_m,
-        max_ray_gap_m=maximum_gap,
+        max_ray_gap_m=float(np.max(cluster_gaps[plane_inliers])),
         reprojection_rms_px=float(
             np.sqrt(np.mean(reprojection * reprojection))
         ),

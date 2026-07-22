@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
-"""Start Isaac before loading high-resolution OpenCV front-rim code."""
+"""Generate benchmark-only RTX ground truth for the front opening."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import sys
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.py"
-HIGHRES_CONFIG_PATH = PROJECT_ROOT / "highres_config.py"
 IMPLEMENTATION_PATH = PROJECT_ROOT / "tools" / "extract_front_rim_ground_truth.py"
-OUTPUT_PATH = PROJECT_ROOT / "benchmarks" / "front_rim_ground_truth.json"
+OUTPUT_PATH = PROJECT_ROOT / "benchmarks" / "front_plane_ground_truth.json"
+DEBUG_PATH = PROJECT_ROOT / "camera_output" / "front_plane_ground_truth_debug"
+EXPECTED_RESOLUTION = [960, 1280]
 
 
-def _put_project_root_first() -> None:
-    """Prevent Kit/OpenCV paths from shadowing project modules."""
-    project_root = str(PROJECT_ROOT)
-    sys.path[:] = [entry for entry in sys.path if entry != project_root]
-    sys.path.insert(0, project_root)
-
-
-def _load_module_from_path(module_name: str, module_path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
+def _load_module(module_name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module: {module_path}")
-
+        raise RuntimeError(f"Could not load module: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
@@ -39,22 +32,29 @@ def _load_module_from_path(module_name: str, module_path: Path):
 
 
 def _load_project_config():
-    """Load base config and install the 1280x960 runtime replacement."""
+    """Load this repository's config even after Isaac adds cv2 paths."""
+    expected = CONFIG_PATH.resolve()
     existing = sys.modules.get("config")
     if existing is not None:
-        existing_path = Path(getattr(existing, "__file__", "")).resolve()
-        if existing_path != CONFIG_PATH.resolve():
-            sys.modules.pop("config", None)
-    if "config" not in sys.modules:
-        _load_module_from_path("config", CONFIG_PATH)
-    return _load_module_from_path("highres_config", HIGHRES_CONFIG_PATH)
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == expected:
+            return existing
+        sys.modules.pop("config", None)
+    return _load_module("config", CONFIG_PATH)
 
 
-def _load_implementation():
-    return _load_module_from_path(
-        "front_rim_ground_truth_impl",
-        IMPLEMENTATION_PATH,
-    )
+class _GroundTruthConfigProxy:
+    """Expose canonical config plus the two legacy ray-ring sample values."""
+
+    def __init__(self, base) -> None:
+        self._base = base
+        self.front_rim = SimpleNamespace(
+            samples_per_side=7,
+            sample_corner_trim_fraction=0.15,
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
 
 
 def _stamp_resolution_metadata() -> None:
@@ -64,7 +64,7 @@ def _stamp_resolution_metadata() -> None:
         )
     payload = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
     payload["schema_version"] = max(int(payload.get("schema_version", 0)), 4)
-    payload["camera_resolution_height_width"] = [960, 1280]
+    payload["camera_resolution_height_width"] = EXPECTED_RESOLUTION
     OUTPUT_PATH.write_text(
         json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
@@ -78,14 +78,17 @@ def _stamp_resolution_metadata() -> None:
 
 
 def main() -> int:
-    # Kit must own native-library initialization before front_rim imports cv2.
+    # Protect the generic module name before Isaac/OpenCV modifies sys.path.
+    project_config = _load_project_config()
+    CONFIG = project_config.CONFIG
+
     from isaacsim import SimulationApp
 
     app = SimulationApp(
         {
             "headless": False,
-            "width": 1600,
-            "height": 900,
+            "width": 1280,
+            "height": 960,
         }
     )
 
@@ -95,12 +98,16 @@ def main() -> int:
     implementation = None
     original_write_result = None
     try:
-        _put_project_root_first()
-        _load_project_config()
-        implementation = _load_implementation()
-
-        # Write the resolution metadata while the extractor is writing the JSON,
-        # before implementation.main() closes the shared SimulationApp.
+        project_root = str(PROJECT_ROOT)
+        sys.path[:] = [entry for entry in sys.path if entry != project_root]
+        sys.path.insert(0, project_root)
+        implementation = _load_module(
+            "front_plane_ground_truth_impl",
+            IMPLEMENTATION_PATH,
+        )
+        implementation.CONFIG = _GroundTruthConfigProxy(CONFIG)
+        implementation.OUTPUT_PATH = OUTPUT_PATH
+        implementation.DEBUG_DIR = DEBUG_PATH
         original_write_result = implementation._write_result
 
         def write_result_with_resolution(*args, **kwargs) -> None:
@@ -108,9 +115,6 @@ def main() -> int:
             _stamp_resolution_metadata()
 
         implementation._write_result = write_result_with_resolution
-
-        # The implementation's main() imports SimulationApp internally. Return
-        # the already-running app instead of attempting a second Kit startup.
         isaacsim.SimulationApp = lambda *_args, **_kwargs: app
         return int(implementation.main())
     finally:

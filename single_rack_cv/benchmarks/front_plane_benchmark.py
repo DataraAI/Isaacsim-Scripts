@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate dense front-rim stereo geometry on the frozen 60-pair dataset."""
+"""Strict 1280x960 qualification for the canonical front-plane estimator."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import sys
 import time
 from typing import Iterable
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -20,8 +21,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import CONFIG
-from front_rim import FrontRim2D, extract_front_rim
-from front_rim_stereo import FrontRim3D, triangulate_front_rims
+from front_plane import (
+    DEFAULT_FRONT_PLANE_CONFIG,
+    FrontPlaneResult,
+    LocalDisparityResult,
+    compute_local_disparity,
+    estimate_front_plane,
+)
 from perception import (
     CameraFrame,
     CameraModel,
@@ -31,10 +37,11 @@ from perception import (
     process_stereo_port,
 )
 
-DATASET_DIR = CONFIG.camera.output_dir / "prompt_ab_benchmark_v1"
-OUTPUT_DIR = CONFIG.camera.output_dir / "front_rim_benchmark_v1"
-GROUND_TRUTH_PATH = PROJECT_ROOT / "benchmarks" / "front_rim_ground_truth.json"
+EXPECTED_RESOLUTION = [960, 1280]
 EXPECTED_FRAME_COUNT = 60
+DATASET_DIR = CONFIG.camera.output_dir / "prompt_ab_benchmark_v1"
+OUTPUT_DIR = CONFIG.camera.output_dir / "front_plane_benchmark"
+GROUND_TRUTH_PATH = PROJECT_ROOT / "benchmarks" / "front_plane_ground_truth.json"
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,7 @@ class QualificationGates:
     maximum_track_switch_count: int = 0
     maximum_radial_jitter_mm: float = 0.50
     maximum_ray_gap_p95_mm: float = 0.50
+    maximum_plane_residual_p95_mm: float = 0.50
     maximum_plane_error_median_mm: float = 0.50
     maximum_plane_error_p95_mm: float = 1.00
 
@@ -61,16 +69,11 @@ class FrameRecord:
     left_detection_v: float = math.nan
     right_detection_u: float = math.nan
     right_detection_v: float = math.nan
-    left_rim_u: float = math.nan
-    left_rim_v: float = math.nan
-    right_rim_u: float = math.nan
-    right_rim_v: float = math.nan
     center_world_x: float = math.nan
     center_world_y: float = math.nan
     center_world_z: float = math.nan
     width_mm: float = math.nan
     height_mm: float = math.nan
-    accepted_sample_count: int = 0
     ray_gap_mm: float = math.nan
     reprojection_rms_px: float = math.nan
     max_reprojection_px: float = math.nan
@@ -78,12 +81,20 @@ class FrameRecord:
     plane_error_mm: float = math.nan
     left_projected_gt_error_px: float = math.nan
     right_projected_gt_error_px: float = math.nan
+    valid_disparity_count: int = 0
+    consistent_disparity_count: int = 0
+    ring_candidate_count: int = 0
+    triangulated_count: int = 0
+    cluster_count: int = 0
+    top_support: int = 0
+    right_support: int = 0
+    bottom_support: int = 0
+    left_support: int = 0
+    median_disparity_px: float = math.nan
     rejection_reason: str = ""
 
 
 class CachedDetector:
-    """Feed cached YOLOE detections into production pair selection."""
-
     def __init__(
         self,
         left: list[PortDetection],
@@ -94,59 +105,12 @@ class CachedDetector:
         self.right = right
         self.diagnostics = diagnostics
 
-    def detect_stereo(
-        self,
-        left_rgb: np.ndarray,
-        right_rgb: np.ndarray,
-    ) -> tuple[list[PortDetection], list[PortDetection]]:
+    def detect_stereo(self, left_rgb, right_rgb):
         del left_rgb, right_rgb
         return self.left, self.right
 
     def diagnostic(self, eye_name: str) -> str:
         return self.diagnostics.get(eye_name, "no cached diagnostic")
-
-
-def point_to_plane_error_m(
-    point_world_m: np.ndarray,
-    plane_center_world_m: np.ndarray,
-    plane_normal_world: np.ndarray,
-) -> float:
-    point = np.asarray(point_world_m, dtype=np.float64).reshape(3)
-    center = np.asarray(plane_center_world_m, dtype=np.float64).reshape(3)
-    normal = np.asarray(plane_normal_world, dtype=np.float64).reshape(3)
-    norm = float(np.linalg.norm(normal))
-    if not np.all(np.isfinite(point)) or not np.all(np.isfinite(center)):
-        raise ValueError("Point and plane center must be finite.")
-    if not np.isfinite(norm) or norm <= 1.0e-12:
-        raise ValueError("Plane normal must be finite and nonzero.")
-    return abs(float(np.dot(point - center, normal / norm)))
-
-
-def qualification_passes(
-    *,
-    pair_success_rate: float,
-    track_switch_count: int,
-    radial_jitter_mm: float,
-    ray_gap_p95_mm: float,
-    plane_error_median_mm: float,
-    plane_error_p95_mm: float,
-    gates: QualificationGates = GATES,
-) -> bool:
-    values = (
-        radial_jitter_mm,
-        ray_gap_p95_mm,
-        plane_error_median_mm,
-        plane_error_p95_mm,
-    )
-    return bool(
-        pair_success_rate >= gates.minimum_pair_success_rate
-        and track_switch_count <= gates.maximum_track_switch_count
-        and all(math.isfinite(float(value)) for value in values)
-        and radial_jitter_mm <= gates.maximum_radial_jitter_mm
-        and ray_gap_p95_mm <= gates.maximum_ray_gap_p95_mm
-        and plane_error_median_mm <= gates.maximum_plane_error_median_mm
-        and plane_error_p95_mm <= gates.maximum_plane_error_p95_mm
-    )
 
 
 def _finite(values: Iterable[float]) -> np.ndarray:
@@ -182,23 +146,28 @@ def _count_track_switches(records: list[FrameRecord], threshold_px: float) -> in
             continue
         current = np.asarray(
             [
-                record.left_rim_u,
-                record.left_rim_v,
-                record.right_rim_u,
-                record.right_rim_v,
+                record.left_detection_u,
+                record.left_detection_v,
+                record.right_detection_u,
+                record.right_detection_v,
             ],
             dtype=np.float64,
         )
-        if not np.all(np.isfinite(current)):
-            continue
-        if previous is not None:
-            if (
-                np.linalg.norm(current[:2] - previous[:2]) > threshold_px
-                or np.linalg.norm(current[2:] - previous[2:]) > threshold_px
-            ):
-                switches += 1
+        if previous is not None and (
+            np.linalg.norm(current[:2] - previous[:2]) > threshold_px
+            or np.linalg.norm(current[2:] - previous[2:]) > threshold_px
+        ):
+            switches += 1
         previous = current
     return switches
+
+
+def point_to_plane_error_m(point, plane_center, plane_normal) -> float:
+    point = np.asarray(point, dtype=np.float64).reshape(3)
+    center = np.asarray(plane_center, dtype=np.float64).reshape(3)
+    normal = np.asarray(plane_normal, dtype=np.float64).reshape(3)
+    normal /= np.linalg.norm(normal)
+    return abs(float(np.dot(point - center, normal)))
 
 
 def _camera_from_dict(data: dict[str, object]) -> CameraModel:
@@ -229,23 +198,20 @@ def _load_inputs() -> tuple[dict[str, object], dict[str, object]]:
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Frozen benchmark manifest not found: {manifest_path}")
     if not GROUND_TRUTH_PATH.is_file():
-        raise FileNotFoundError(
-            "Automatic ground truth is missing. Run "
-            "tools/run_front_rim_ground_truth.sh first: "
-            f"{GROUND_TRUTH_PATH}"
-        )
+        raise FileNotFoundError(f"Ground truth not found: {GROUND_TRUTH_PATH}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     truth = json.loads(GROUND_TRUTH_PATH.read_text(encoding="utf-8"))
+    if manifest.get("resolution_height_width") != EXPECTED_RESOLUTION:
+        raise RuntimeError("Frozen dataset is not 1280x960.")
+    if truth.get("camera_resolution_height_width") != EXPECTED_RESOLUTION:
+        raise RuntimeError("Ground truth is not 1280x960.")
     frames = manifest.get("frames")
     if int(manifest.get("frame_count", -1)) != EXPECTED_FRAME_COUNT:
-        raise ValueError(
-            f"Expected {EXPECTED_FRAME_COUNT} frozen pairs, got "
-            f"{manifest.get('frame_count')}."
-        )
+        raise ValueError("Frozen benchmark frame count is not 60.")
     if not isinstance(frames, list) or len(frames) != EXPECTED_FRAME_COUNT:
-        raise ValueError("Frozen manifest frame list is incomplete.")
+        raise ValueError("Frozen benchmark frame list is incomplete.")
     if not str(truth.get("control_usage", "")).lower().startswith("forbidden"):
-        raise ValueError("Ground-truth JSON must be marked benchmark-only.")
+        raise ValueError("Ground truth must be marked benchmark-only.")
     return manifest, truth
 
 
@@ -258,47 +224,72 @@ def _sync_cuda() -> None:
         pass
 
 
-def _draw_cross(draw: ImageDraw.ImageDraw, uv: tuple[float, float], color) -> None:
+def _save_disparity(path: Path, disparity: LocalDisparityResult) -> None:
+    values = np.asarray(disparity.disparity_crop_px, dtype=np.float32)
+    center = float(disparity.center_disparity_px)
+    half = float(DEFAULT_FRONT_PLANE_CONFIG.disparity_half_range_px)
+    normalized = np.clip(
+        (values - (center - half)) / (2.0 * half),
+        0.0,
+        1.0,
+    )
+    gray = np.round(255.0 * normalized).astype(np.uint8)
+    color = cv2.cvtColor(
+        cv2.applyColorMap(gray, cv2.COLORMAP_TURBO),
+        cv2.COLOR_BGR2RGB,
+    )
+    color[~disparity.valid_mask] = 0
+    consistent = disparity.consistent_mask
+    color[..., 1][consistent] = 255
+    color[..., 0][consistent] //= 2
+    color[..., 2][consistent] //= 2
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(color, mode="RGB").save(path)
+
+
+def _draw_cross(draw: ImageDraw.ImageDraw, uv, color) -> None:
     u, v = map(float, uv)
     draw.line((u - 4, v, u + 4, v), fill=color, width=1)
     draw.line((u, v - 4, u, v + 4), fill=color, width=1)
 
 
-def _save_annotation(
+def _save_failure_annotation(
     path: Path,
     frame: StereoFrame,
-    left_rim: FrontRim2D | None,
-    right_rim: FrontRim2D | None,
+    record: FrameRecord,
     left_gt_uv: np.ndarray,
     right_gt_uv: np.ndarray,
-    label: str,
 ) -> None:
     combined = np.concatenate((frame.left.rgb, frame.right.rgb), axis=1)
     image = Image.fromarray(combined, mode="RGB")
     draw = ImageDraw.Draw(image)
     eye_width = frame.left.rgb.shape[1]
-    for rim, offset in ((left_rim, 0), (right_rim, eye_width)):
-        if rim is None:
-            continue
-        corners = np.asarray(rim.corners_uv, dtype=np.float64).copy()
-        corners[:, 0] += offset
-        draw.line(
-            [tuple(point) for point in np.vstack((corners, corners[0]))],
-            fill=(255, 0, 255),
-            width=2,
-        )
-        for point in rim.side_samples_uv.reshape(-1, 2):
-            _draw_cross(draw, (point[0] + offset, point[1]), (255, 255, 0))
-        _draw_cross(
-            draw,
-            (rim.center_uv[0] + offset, rim.center_uv[1]),
-            (0, 255, 255),
-        )
-    _draw_cross(draw, tuple(left_gt_uv), (0, 255, 0))
+    _draw_cross(draw, left_gt_uv, (0, 255, 0))
     _draw_cross(
         draw,
-        (float(right_gt_uv[0] + eye_width), float(right_gt_uv[1])),
+        (right_gt_uv[0] + eye_width, right_gt_uv[1]),
         (0, 255, 0),
+    )
+    if math.isfinite(record.left_detection_u):
+        _draw_cross(
+            draw,
+            (record.left_detection_u, record.left_detection_v),
+            (0, 255, 255),
+        )
+    if math.isfinite(record.right_detection_u):
+        _draw_cross(
+            draw,
+            (
+                record.right_detection_u + eye_width,
+                record.right_detection_v,
+            ),
+            (0, 255, 255),
+        )
+    label = (
+        f"frame={record.frame_index:03d} FAIL\n"
+        f"valid={record.valid_disparity_count} "
+        f"consistent={record.consistent_disparity_count}\n"
+        f"{record.rejection_reason[:160]}"
     )
     bounds = draw.multiline_textbbox((8, 8), label)
     draw.rectangle(
@@ -310,34 +301,72 @@ def _save_annotation(
     image.save(path)
 
 
+def _qualified(summary: dict[str, object]) -> bool:
+    return bool(
+        summary["pair_success_rate"] >= GATES.minimum_pair_success_rate
+        and summary["track_switch_count"] <= GATES.maximum_track_switch_count
+        and summary["radial_jitter_mm"] <= GATES.maximum_radial_jitter_mm
+        and summary["ray_gap_p95_mm"] <= GATES.maximum_ray_gap_p95_mm
+        and summary["plane_residual_p95_mm"]
+        <= GATES.maximum_plane_residual_p95_mm
+        and summary["plane_error_median_mm"]
+        <= GATES.maximum_plane_error_median_mm
+        and summary["plane_error_p95_mm"]
+        <= GATES.maximum_plane_error_p95_mm
+    )
+
+
 def _write_outputs(records: list[FrameRecord], summary: dict[str, object]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    fields = list(asdict(records[0]).keys()) if records else list(asdict(FrameRecord(0)))
+    fields = list(asdict(records[0]).keys()) if records else []
     with (OUTPUT_DIR / "details.csv").open(
-        "w", newline="", encoding="utf-8"
+        "w",
+        newline="",
+        encoding="utf-8",
     ) as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(asdict(record) for record in records)
     (OUTPUT_DIR / "summary.json").write_text(
-        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+        json.dumps(summary, indent=2) + "\n",
+        encoding="utf-8",
     )
-    report = ["FRONT-RIM BENCHMARK SUMMARY"]
-    for key in (
+    keys = (
         "pair_success_rate",
         "track_switch_count",
         "radial_jitter_mm",
         "ray_gap_p95_mm",
+        "plane_residual_p95_mm",
         "plane_error_median_mm",
         "plane_error_p95_mm",
+        "valid_count_median",
+        "consistent_count_median",
+        "ring_count_median",
+        "triangulated_count_median",
+        "cluster_count_median",
+        "median_disparity_px",
         "QUALIFIED",
-    ):
-        report.append(f"{key}={summary[key]}")
-    report.append("")
-    report.append("Rejection counts:")
+    )
+    lines = ["FRONT-PLANE 1280x960 BENCHMARK SUMMARY"]
+    lines.extend(f"{key}={summary[key]}" for key in keys)
+    lines.extend(
+        (
+            "",
+            "Strict qualification:",
+            "  pair_success_rate>=0.95",
+            "  track_switch_count=0",
+            "  radial_jitter_mm<=0.5",
+            "  ray_gap_p95_mm<=0.5",
+            "  plane_residual_p95_mm<=0.5",
+            "  plane_error_median_mm<=0.5",
+            "  plane_error_p95_mm<=1.0",
+            "",
+            "Rejection counts:",
+        )
+    )
     for reason, count in summary["rejection_counts"].items():
-        report.append(f"  {count:3d}  {reason}")
-    text = "\n".join(report) + "\n"
+        lines.append(f"  {count:3d}  {reason}")
+    text = "\n".join(lines) + "\n"
     (OUTPUT_DIR / "report.txt").write_text(text, encoding="utf-8")
     print(text, flush=True)
 
@@ -346,7 +375,8 @@ def main() -> int:
     manifest, truth = _load_inputs()
     frames = manifest["frames"]
     desired = np.asarray(
-        manifest["desired_port_virtual_camera_usd"], dtype=np.float64
+        manifest["desired_port_virtual_camera_usd"],
+        dtype=np.float64,
     )
     truth_center = np.asarray(truth["center_world_m"], dtype=np.float64)
     truth_normal = np.asarray(truth["normal_world"], dtype=np.float64)
@@ -365,8 +395,7 @@ def main() -> int:
         frame_index = int(entry["frame_index"])
         frame = _load_frame(DATASET_DIR, entry)
         record = FrameRecord(frame_index=frame_index)
-        left_rim: FrontRim2D | None = None
-        right_rim: FrontRim2D | None = None
+        disparity: LocalDisparityResult | None = None
         left_gt_uv = frame.left.camera.project_world(truth_center)
         right_gt_uv = frame.right.camera.project_world(truth_center)
         try:
@@ -374,11 +403,14 @@ def main() -> int:
             started = time.perf_counter()
             try:
                 left_candidates, right_candidates = detector.detect_stereo(
-                    frame.left.rgb, frame.right.rgb
+                    frame.left.rgb,
+                    frame.right.rgb,
                 )
             finally:
                 _sync_cuda()
-                record.inference_ms = 1000.0 * (time.perf_counter() - started)
+                record.inference_ms = 1000.0 * (
+                    time.perf_counter() - started
+                )
             record.left_candidate_count = len(left_candidates)
             record.right_candidate_count = len(right_candidates)
             cached = CachedDetector(
@@ -408,27 +440,29 @@ def main() -> int:
                 record.right_detection_v,
             ) = right_detection.center_uv
 
-            left_rim = extract_front_rim(
+            disparity = compute_local_disparity(
                 frame.left.rgb,
-                left_detection.bbox_xywh,
-                CONFIG.front_rim,
-            )
-            right_rim = extract_front_rim(
                 frame.right.rgb,
+                left_detection.bbox_xywh,
+                left_detection.center_uv,
                 right_detection.bbox_xywh,
-                CONFIG.front_rim,
+                right_detection.center_uv,
             )
-            result: FrontRim3D = triangulate_front_rims(
-                left_rim=left_rim,
-                right_rim=right_rim,
-                left_camera=frame.left.camera,
-                right_camera=frame.right.camera,
-                cfg=CONFIG.front_rim,
+            record.valid_disparity_count = disparity.valid_count
+            record.consistent_disparity_count = disparity.consistent_count
+            result: FrontPlaneResult = estimate_front_plane(
+                frame.left.rgb,
+                frame.right.rgb,
+                left_detection.bbox_xywh,
+                left_detection.center_uv,
+                right_detection.bbox_xywh,
+                right_detection.center_uv,
+                frame.left.camera,
+                frame.right.camera,
+                disparity=disparity,
             )
 
             record.pair_success = True
-            record.left_rim_u, record.left_rim_v = left_rim.center_uv
-            record.right_rim_u, record.right_rim_v = right_rim.center_uv
             (
                 record.center_world_x,
                 record.center_world_y,
@@ -436,7 +470,6 @@ def main() -> int:
             ) = result.center_world_m
             record.width_mm = 1000.0 * result.width_m
             record.height_mm = 1000.0 * result.height_m
-            record.accepted_sample_count = result.accepted_sample_count
             record.ray_gap_mm = 1000.0 * result.max_ray_gap_m
             record.reprojection_rms_px = result.reprojection_rms_px
             record.max_reprojection_px = result.max_reprojection_px
@@ -447,11 +480,25 @@ def main() -> int:
                 truth_normal,
             )
             record.left_projected_gt_error_px = float(
-                np.linalg.norm(np.asarray(left_rim.center_uv) - left_gt_uv)
+                np.linalg.norm(
+                    np.asarray(left_detection.center_uv) - left_gt_uv
+                )
             )
             record.right_projected_gt_error_px = float(
-                np.linalg.norm(np.asarray(right_rim.center_uv) - right_gt_uv)
+                np.linalg.norm(
+                    np.asarray(right_detection.center_uv) - right_gt_uv
+                )
             )
+            record.ring_candidate_count = result.ring_candidate_count
+            record.triangulated_count = result.triangulated_count
+            record.cluster_count = result.cluster_count
+            (
+                record.top_support,
+                record.right_support,
+                record.bottom_support,
+                record.left_support,
+            ) = result.side_support_counts
+            record.median_disparity_px = result.median_disparity_px
             successful_centers.append(
                 np.asarray(result.center_world_m, dtype=np.float64)
             )
@@ -462,57 +509,83 @@ def main() -> int:
             )
         records.append(record)
 
+        if disparity is not None:
+            _save_disparity(
+                OUTPUT_DIR / "disparity" / f"frame_{frame_index:03d}.png",
+                disparity,
+            )
         if not record.pair_success:
-            _save_annotation(
+            _save_failure_annotation(
                 OUTPUT_DIR / "annotated" / f"failed_{frame_index:03d}.png",
                 frame,
-                left_rim,
-                right_rim,
+                record,
                 left_gt_uv,
                 right_gt_uv,
-                f"frame={frame_index:03d} FAIL\n"
-                f"{record.rejection_reason[:180]}",
             )
 
     success_count = sum(record.pair_success for record in records)
-    success_rate = success_count / float(len(records))
-    track_switches = _count_track_switches(
-        records,
-        CONFIG.perception.tracking_max_center_jump_px,
-    )
-    radial_jitter_mm = _rms_radial_jitter_mm(successful_centers)
-    ray_gap_p95_mm = _percentile(
-        (record.ray_gap_mm for record in records if record.pair_success),
-        95.0,
-    )
-    plane_error_median_mm = _median(
-        record.plane_error_mm for record in records if record.pair_success
-    )
-    plane_error_p95_mm = _percentile(
-        (record.plane_error_mm for record in records if record.pair_success),
-        95.0,
-    )
-    qualified = qualification_passes(
-        pair_success_rate=success_rate,
-        track_switch_count=track_switches,
-        radial_jitter_mm=radial_jitter_mm,
-        ray_gap_p95_mm=ray_gap_p95_mm,
-        plane_error_median_mm=plane_error_median_mm,
-        plane_error_p95_mm=plane_error_p95_mm,
-    )
-    summary = {
+    summary: dict[str, object] = {
         "schema_version": 1,
+        "mode": "front_plane_highres_v1",
+        "camera_resolution_height_width": EXPECTED_RESOLUTION,
         "dataset": str(DATASET_DIR),
         "ground_truth": str(GROUND_TRUTH_PATH),
         "total_pairs": len(records),
         "successful_pairs": success_count,
-        "pair_success_rate": success_rate,
-        "track_switch_count": track_switches,
-        "radial_jitter_mm": radial_jitter_mm,
-        "ray_gap_p95_mm": ray_gap_p95_mm,
-        "plane_error_median_mm": plane_error_median_mm,
-        "plane_error_p95_mm": plane_error_p95_mm,
-        "QUALIFIED": qualified,
+        "pair_success_rate": success_count / float(len(records)),
+        "track_switch_count": _count_track_switches(
+            records,
+            CONFIG.perception.tracking_max_center_jump_px,
+        ),
+        "radial_jitter_mm": _rms_radial_jitter_mm(successful_centers),
+        "ray_gap_p95_mm": _percentile(
+            (
+                record.ray_gap_mm
+                for record in records
+                if record.pair_success
+            ),
+            95.0,
+        ),
+        "plane_residual_p95_mm": _percentile(
+            (
+                record.plane_residual_mm
+                for record in records
+                if record.pair_success
+            ),
+            95.0,
+        ),
+        "plane_error_median_mm": _median(
+            record.plane_error_mm
+            for record in records
+            if record.pair_success
+        ),
+        "plane_error_p95_mm": _percentile(
+            (
+                record.plane_error_mm
+                for record in records
+                if record.pair_success
+            ),
+            95.0,
+        ),
+        "valid_count_median": _median(
+            record.valid_disparity_count for record in records
+        ),
+        "consistent_count_median": _median(
+            record.consistent_disparity_count for record in records
+        ),
+        "ring_count_median": _median(
+            record.ring_candidate_count for record in records
+        ),
+        "triangulated_count_median": _median(
+            record.triangulated_count for record in records
+        ),
+        "cluster_count_median": _median(
+            record.cluster_count for record in records
+        ),
+        "median_disparity_px": _median(
+            record.median_disparity_px for record in records
+        ),
+        "front_plane_config": asdict(DEFAULT_FRONT_PLANE_CONFIG),
         "gates": asdict(GATES),
         "rejection_counts": dict(
             sorted(
@@ -521,8 +594,9 @@ def main() -> int:
             )
         ),
     }
+    summary["QUALIFIED"] = _qualified(summary)
     _write_outputs(records, summary)
-    return 0 if qualified else 2
+    return 0 if summary["QUALIFIED"] else 2
 
 
 if __name__ == "__main__":

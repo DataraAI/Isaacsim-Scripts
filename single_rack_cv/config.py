@@ -44,7 +44,6 @@ class CameraConfig:
     left_camera_name: str = "left_eye_camera"
     right_camera_name: str = "right_eye_camera"
 
-    # Two physical RGB eyes, symmetric around the old single-camera pose.
     left_local_position: tuple[float, float, float] = (
         0.04,
         -0.020,
@@ -55,7 +54,6 @@ class CameraConfig:
         +0.020,
         0.025,
     )
-    # Mathematical midpoint only. No camera sensor is created here.
     virtual_local_position: tuple[float, float, float] = (
         0.04,
         0.0,
@@ -70,9 +68,8 @@ class CameraConfig:
     clipping_range_m: tuple[float, float] = (0.01, 10.0)
     focus_distance_m: float = 1.0
 
-    # CameraSensor uses (height, width). At 60 Hz physics, every 4 frames
-    # matches the camera's 15 Hz tick rate.
-    resolution: tuple[int, int] = (480, 640)
+    # CameraSensor uses (height, width).
+    resolution: tuple[int, int] = (960, 1280)
     tick_rate_hz: float = 15.0
     capture_every_sim_frames: int = 4
 
@@ -81,12 +78,9 @@ class CameraConfig:
 
 @dataclass(frozen=True)
 class YOLOEConfig:
-    """One-time multiscale visual prompt plus full-frame stereo inference."""
+    """One-time visual prompt plus full-frame stereo inference."""
 
     enabled: bool = True
-
-    # Use the large checkpoint because the runtime port is only about 25-30 px
-    # wide in the original 640x480 eye images.
     model_name: str = str(
         Path(__file__).resolve().parent
         / "assets"
@@ -100,9 +94,7 @@ class YOLOEConfig:
         / "yoloe_reference_port_atlas.png"
     )
 
-    # Production prompt selected by the 60-frame stereo benchmark.
-    # This tight runtime-scale example produced zero track switches and
-    # 0.434 mm 3D RMS jitter.
+    # Production prompt selected by the qualified 60-frame benchmark.
     reference_boxes_xyxy: tuple[
         tuple[float, float, float, float],
         ...,
@@ -111,9 +103,6 @@ class YOLOEConfig:
     )
     reference_class_ids: tuple[int, ...] = (0,)
 
-    # Small-object inference. Confidence stays low because visual-prompt scores
-    # are not calibrated like a closed-set detector; stereo geometry and local
-    # cavity refinement reject false positives.
     imgsz: int = 1280
     confidence: float = 0.005
     iou: float = 0.80
@@ -123,15 +112,12 @@ class YOLOEConfig:
     retina_masks: bool = False
     verbose: bool = False
 
-    # Coarse YOLOE proposal limits before local cavity refinement.
     min_proposal_area_px: int = 36
     min_proposal_width_px: int = 6
     min_proposal_height_px: int = 6
     max_proposal_width_px: int = 180
     max_proposal_height_px: int = 150
 
-    # YOLOE finds the object globally. These settings only refine the precise
-    # dark opening inside the YOLOE proposal for metric stereo measurement.
     refine_expand_ratio: float = 0.35
     refine_min_margin_px: int = 6
     refine_percentiles: tuple[float, ...] = (
@@ -159,14 +145,11 @@ class YOLOEConfig:
 class PerceptionConfig:
     """YOLOE instance pairing plus calibrated stereo geometry."""
 
-    # Physical dimensions validate a stereo pair and size the desired overlay.
-    # Disparity, not known-size ranging, determines control depth.
     port_width_m: float = 0.0114
     port_height_m: float = 0.0070
     min_estimated_range_m: float = 0.08
     max_estimated_range_m: float = 0.35
 
-    # Stereo matching and triangulated-center validation.
     stereo_max_epipolar_error_px: float = 3.0
     stereo_max_scale_ratio: float = 1.30
     stereo_min_abs_disparity_px: float = 4.0
@@ -178,52 +161,15 @@ class PerceptionConfig:
     stereo_min_height_m: float = 0.005
     stereo_max_height_m: float = 0.010
 
-    # Once acquired, reject YOLOE masks that jump to another rack feature.
     tracking_max_center_jump_px: float = 45.0
     tracking_max_scale_ratio: float = 1.35
 
 
 @dataclass(frozen=True)
-class FrontRimConfig:
-    """Dense front-opening rim estimation inside a qualified YOLOE ROI."""
+class FrontPlaneRuntimeConfig:
+    """Automatic front-opening geometry is mandatory in production."""
 
-    # Keep the working cavity-center controller active until the rim path
-    # independently passes the offline and live qualification gates.
-    enabled: bool = False
-
-    roi_expand_ratio: float = 0.50
-    roi_min_margin_px: int = 8
-
-    sobel_kernel_px: int = 3
-    gradient_min: float = 18.0
-    polarity_min: float = 6.0
-
-    side_band_fraction: float = 0.40
-    side_band_min_px: int = 5
-    min_support_pixels_per_side: int = 12
-
-    line_fit_iterations: int = 4
-    line_mad_scale: float = 2.5
-    line_max_residual_px: float = 1.5
-
-    min_image_aspect_ratio: float = 1.00
-    max_image_aspect_ratio: float = 2.20
-    max_corner_outside_roi_px: float = 1.0
-
-    samples_per_side: int = 7
-    sample_corner_trim_fraction: float = 0.15
-
-    sample_max_epipolar_error_px: float = 2.0
-    sample_max_ray_gap_m: float = 0.0005
-    sample_max_reprojection_px: float = 1.0
-    min_accepted_sample_pairs: int = 20
-
-    plane_fit_iterations: int = 4
-    plane_mad_scale: float = 2.5
-    plane_max_residual_m: float = 0.0005
-    min_plane_inliers: int = 20
-
-    normal_min_camera_cosine: float = 0.20
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -241,7 +187,6 @@ class IKConfig:
     actual_tool_scale: float = 0.05
     actual_tool_visible: bool = False
 
-    # Center between the fingers, 103.4 mm along panda_hand local +Z.
     tool_center_local_position_m: tuple[float, float, float] = (
         0.0,
         0.0,
@@ -295,36 +240,27 @@ class DriveTuningConfig:
 
 @dataclass(frozen=True)
 class VisualServoConfig:
-    """Continuous RGB feedback for translation-only pre-insert alignment."""
+    """Translation-only stop-and-look pre-insert alignment."""
 
     enabled: bool = True
     preinsert_standoff_m: float = 0.050
 
-    # Do not start perception while the arm/camera is still moving to its
-    # fixed startup pose.
     startup_settle_tolerance_m: float = 0.0005
     required_startup_settled_frames: int = 15
 
-    # Require a short stable image track before the robot is allowed to move.
     required_acquisition_samples: int = 3
     max_acquisition_center_spread_px: float = 8.0
     max_acquisition_scale_spread_ratio: float = 0.12
     max_consecutive_misses: int = 3
 
-    # Stop-and-look visual servo: issue one small correction, wait until the
-    # ToolCenter reaches that target, then capture the next control image.
     control_gain: float = 0.35
     max_target_step_m: float = 0.001
     target_settle_tolerance_m: float = 0.0005
 
-    # Visual alignment is intentionally looser than physical articulation
-    # tracking because the detected box size is quantized in whole pixels.
     center_tolerance_px: float = 2.0
     range_tolerance_m: float = 0.003
     required_aligned_captures: int = 5
 
-    # The measured physical tracking floor at this pose is about 0.22 mm.
-    # A 0.30 mm gate remains far smaller than the RGB range uncertainty.
     settle_position_tolerance_m: float = 0.0003
     required_settled_frames: int = 30
     settle_warning_timeout_s: float = 8.0
@@ -353,7 +289,9 @@ class Config:
     scene: SceneConfig = field(default_factory=SceneConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
-    front_rim: FrontRimConfig = field(default_factory=FrontRimConfig)
+    front_plane: FrontPlaneRuntimeConfig = field(
+        default_factory=FrontPlaneRuntimeConfig
+    )
     ik: IKConfig = field(default_factory=IKConfig)
     drive_tuning: DriveTuningConfig = field(
         default_factory=DriveTuningConfig

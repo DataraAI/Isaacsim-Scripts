@@ -35,7 +35,7 @@ class AutomaticGroundTruthTests(unittest.TestCase):
         source = (
             PROJECT_ROOT
             / "tools"
-            / "extract_front_rim_ground_truth_bootstrap.py"
+            / "generate_ground_truth.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "original_write_result = implementation._write_result",
@@ -46,6 +46,7 @@ class AutomaticGroundTruthTests(unittest.TestCase):
             source,
         )
         self.assertIn("_stamp_resolution_metadata()", source)
+        self.assertNotIn("highres_config", source)
 
     def test_bbox_side_samples_follow_refined_cavity_box(self) -> None:
         samples = _bbox_side_samples(
