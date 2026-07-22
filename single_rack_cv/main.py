@@ -6,10 +6,18 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
 from config import CONFIG
+from stress_alignment import (
+    derive_stress_config,
+    new_child_result,
+    parse_stress_run_args,
+    utc_now_iso,
+    write_json_atomic,
+)
 
 
 class RunOutputTee:
@@ -108,27 +116,49 @@ class RunOutputTee:
         self._started = False
 
 
-run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
+stress_args = parse_stress_run_args(sys.argv[1:])
+RUNTIME_CONFIG = (
+    CONFIG if stress_args is None else derive_stress_config(CONFIG, stress_args)
+)
+run_output_path = (
+    RUNTIME_CONFIG.camera.output_dir / "run_output_latest.txt"
+    if stress_args is None
+    else stress_args.result_json.parent / "runtime_output.txt"
+)
 run_output_tee = RunOutputTee(run_output_path)
 run_output_tee.start()
 
 simulation_app = None
 runtime = None
+started_at = utc_now_iso()
+started_monotonic = time.monotonic()
+internal_timed_out = False
+fatal_error = ""
+child_exit_status = 0
 
 try:
     print(
         f"[LOG] Saving complete run output to: {run_output_path}",
         flush=True,
     )
+    if stress_args is not None:
+        print(
+            "[ALIGNMENT STRESS CHILD] "
+            f"run_id={stress_args.case.run_id} "
+            f"y_offset_mm={stress_args.case.y_offset_mm:+d} "
+            f"z_offset_mm={stress_args.case.z_offset_mm:+d} "
+            f"timeout_s={stress_args.timeout_s:.1f}",
+            flush=True,
+        )
 
     # Isaac Sim must start before importing modules that use omni/pxr APIs.
     from isaacsim import SimulationApp
 
     simulation_app = SimulationApp(
         {
-            "headless": CONFIG.app.headless,
-            "width": CONFIG.app.width,
-            "height": CONFIG.app.height,
+            "headless": RUNTIME_CONFIG.app.headless,
+            "width": RUNTIME_CONFIG.app.width,
+            "height": RUNTIME_CONFIG.app.height,
         }
     )
 
@@ -137,19 +167,25 @@ try:
     from perception import YOLOEPortDetector, process_stereo_port
     from sim import SimulationRuntime, warn
 
-    runtime = SimulationRuntime(
+    runtime_class = SimulationRuntime
+    if stress_args is not None:
+        from stress_runtime import InstrumentedSimulationRuntime
+
+        runtime_class = InstrumentedSimulationRuntime
+
+    runtime = runtime_class(
         simulation_app=simulation_app,
-        cfg=CONFIG,
+        cfg=RUNTIME_CONFIG,
     )
-    debug = DebugOutputs(CONFIG)
-    detector = YOLOEPortDetector(CONFIG.yoloe)
+    debug = DebugOutputs(RUNTIME_CONFIG)
+    detector = YOLOEPortDetector(RUNTIME_CONFIG.yoloe)
     detector.initialize()
     print(
         "[YOLOE] Visual prompt initialized once; "
         "full-frame stereo inference is active.",
         flush=True,
     )
-    if CONFIG.front_plane.enabled:
+    if RUNTIME_CONFIG.front_plane.enabled:
         print(
             "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
             "no manual depth offset and no RTX/USD ground truth in runtime.",
@@ -165,6 +201,19 @@ try:
         except Exception as exc:
             warn(f"Motion/IK update failed: {exc}")
 
+        if stress_args is not None:
+            elapsed_s = time.monotonic() - started_monotonic
+            if elapsed_s >= stress_args.timeout_s:
+                internal_timed_out = True
+                child_exit_status = 2
+                warn(
+                    "Alignment stress run reached its internal "
+                    f"{stress_args.timeout_s:.0f} second timeout."
+                )
+                break
+            if stress_args.exit_after_complete and runtime.visual_servo.complete:
+                break
+
         if not runtime.capture_due():
             continue
         capture_index += 1
@@ -172,12 +221,10 @@ try:
         try:
             frame = runtime.capture()
             debug.save_raw(frame)
-            previous_left, previous_right = (
-                runtime.visual_servo_references()
-            )
+            previous_left, previous_right = runtime.visual_servo_references()
             observation = process_stereo_port(
                 frame=frame,
-                cfg=CONFIG.perception,
+                cfg=RUNTIME_CONFIG.perception,
                 desired_port_virtual_camera_usd=(
                     runtime.desired_port_virtual_camera_usd
                 ),
@@ -185,7 +232,7 @@ try:
                 previous_right=previous_right,
                 detector=detector,
             )
-            if CONFIG.front_plane.enabled:
+            if RUNTIME_CONFIG.front_plane.enabled:
                 observation, front_plane = refine_live_observation(
                     frame=frame,
                     observation=observation,
@@ -217,15 +264,60 @@ try:
             runtime.note_perception_failure()
             warn(f"RGB stereo capture {capture_index} skipped: {exc}")
 
+    if (
+        stress_args is not None
+        and child_exit_status == 0
+        and (runtime is None or not runtime.visual_servo.complete)
+    ):
+        child_exit_status = 2
+        fatal_error = "Isaac Sim closed before visual-servo completion."
+
 except Exception:
+    fatal_error = traceback.format_exc()
     print(
-        "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n"
-        + traceback.format_exc(),
+        "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n" + fatal_error,
         flush=True,
     )
-    raise
+    if stress_args is None:
+        raise
+    child_exit_status = 1
 
 finally:
+    if stress_args is not None:
+        child_payload = new_child_result(stress_args, started_at)
+        if runtime is not None and runtime.ik is not None:
+            try:
+                child_payload.update(runtime.stress_snapshot())
+            except Exception:
+                snapshot_error = traceback.format_exc()
+                fatal_error = (
+                    f"{fatal_error}\n{snapshot_error}".strip()
+                    if fatal_error
+                    else snapshot_error
+                )
+                child_exit_status = 1
+        child_payload.update(
+            {
+                "ended_at": utc_now_iso(),
+                "runtime_duration_s": time.monotonic() - started_monotonic,
+                "internal_timed_out": internal_timed_out,
+                "fatal_error": fatal_error,
+            }
+        )
+        try:
+            write_json_atomic(stress_args.result_json, child_payload)
+            print(
+                f"[ALIGNMENT STRESS CHILD] result={stress_args.result_json}",
+                flush=True,
+            )
+        except Exception:
+            child_exit_status = 1
+            print(
+                "[ALIGNMENT STRESS CHILD] failed to write result\n"
+                + traceback.format_exc(),
+                flush=True,
+            )
+
     try:
         if runtime is not None:
             runtime.stop()
@@ -237,3 +329,6 @@ finally:
             flush=True,
         )
         run_output_tee.stop()
+
+if stress_args is not None:
+    raise SystemExit(child_exit_status)
