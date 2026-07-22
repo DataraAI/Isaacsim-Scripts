@@ -9,19 +9,33 @@ from benchmarks.front_rim_benchmark import (
     point_to_plane_error_m,
     qualification_passes,
 )
+from highres_config import (
+    CAMERA_RESOLUTION_HEIGHT_WIDTH,
+    CONFIG as HIGHRES_CONFIG,
+    RENDER_RESOLUTION_WIDTH_HEIGHT,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontRimBenchmarkTests(unittest.TestCase):
-    def test_launcher_generates_missing_ground_truth(self) -> None:
+    def test_high_resolution_camera_configuration(self) -> None:
+        self.assertEqual(CAMERA_RESOLUTION_HEIGHT_WIDTH, (960, 1280))
+        self.assertEqual(RENDER_RESOLUTION_WIDTH_HEIGHT, (1280, 960))
+        self.assertEqual(HIGHRES_CONFIG.camera.resolution, (960, 1280))
+        self.assertFalse(HIGHRES_CONFIG.front_rim.enabled)
+
+    def test_launcher_recaptures_stale_resolution_inputs(self) -> None:
         source = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn('GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"', source)
+        self.assertIn('EXPECTED_HEIGHT=960', source)
+        self.assertIn('EXPECTED_WIDTH=1280', source)
+        self.assertIn('prompt_benchmark_capture_highres.py', source)
         self.assertIn('bash tools/run_front_rim_ground_truth.sh', source)
-        self.assertIn('if [[ ! -s "$GROUND_TRUTH" ]]', source)
+        self.assertIn('camera_resolution_height_width', source)
+        self.assertIn('resolution_height_width', source)
 
     def test_launcher_uses_summary_to_set_final_exit_status(self) -> None:
         source = (
@@ -35,7 +49,7 @@ class FrontRimBenchmarkTests(unittest.TestCase):
             source,
         )
 
-    def test_refined_sgbm_benchmark_keeps_strict_gates(self) -> None:
+    def test_refined_highres_sgbm_benchmark_keeps_strict_gates(self) -> None:
         refined = (
             PROJECT_ROOT
             / "benchmarks"
@@ -45,19 +59,29 @@ class FrontRimBenchmarkTests(unittest.TestCase):
         self.assertIn('"plane_residual_p95_mm"', refined)
         self.assertIn("STRICT_PLANE_RESIDUAL_P95_MM", refined)
         self.assertIn("and plane_residual_p95_mm <=", refined)
-        self.assertIn('"mode": "local_sgbm_refined_v7"', refined)
         self.assertNotIn("center_max_gap_m=0.0020", refined)
         self.assertNotIn("plane_max_residual_m=0.0010", refined)
+
+        highres = (
+            PROJECT_ROOT
+            / "benchmarks"
+            / "front_rim_sgbm_highres_benchmark.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('local_sgbm_refined_highres_v8', highres)
+        self.assertIn('resolution_height_width', highres)
+        self.assertIn('camera_resolution_height_width', highres)
 
         bootstrap = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark_isaac.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("front_rim_sgbm_refined_benchmark.py", bootstrap)
+        self.assertIn("front_rim_sgbm_highres_benchmark.py", bootstrap)
+        self.assertIn('"width": 1280', bootstrap)
+        self.assertIn('"height": 960', bootstrap)
 
         launcher = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("mode=local-sgbm-refined-v7", launcher)
+        self.assertIn("mode=local-sgbm-refined-highres-v8", launcher)
 
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
