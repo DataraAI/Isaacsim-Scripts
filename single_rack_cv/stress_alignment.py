@@ -171,6 +171,21 @@ def derive_stress_config(base_config, args: StressRunArgs):
     )
 
 
+def quaternion_angular_distance_deg(first, second) -> float:
+    """Return the shortest angular distance between scalar-first quaternions."""
+    a = np.asarray(first, dtype=np.float64).reshape(4)
+    b = np.asarray(second, dtype=np.float64).reshape(4)
+    if not np.all(np.isfinite(a)) or not np.all(np.isfinite(b)):
+        raise ValueError("quaternions must be finite")
+    a_norm = float(np.linalg.norm(a))
+    b_norm = float(np.linalg.norm(b))
+    if a_norm <= 1.0e-12 or b_norm <= 1.0e-12:
+        raise ValueError("quaternions must be nonzero")
+    cosine = abs(float(np.dot(a / a_norm, b / b_norm)))
+    cosine = min(1.0, max(-1.0, cosine))
+    return math.degrees(2.0 * math.acos(cosine))
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -334,6 +349,8 @@ def finalize_parent_result(
     if target_error_mm is None or target_error_mm > GROUND_TRUTH_TARGET_LIMIT_MM:
         failed.append("ground_truth_target_error_mm")
 
+    # Required counters and both final poses must also be finite, even when they
+    # are not separate threshold gates.
     for key in ("perception_rejection_count", "track_reacquisition_count"):
         value = _finite_number(child, key)
         if value is None or value < 0.0:
@@ -357,12 +374,7 @@ def finalize_parent_result(
     return result
 
 
-def _finite_values(
-    results: Sequence[Mapping[str, object]],
-    key: str,
-    *,
-    absolute: bool = False,
-) -> list[float]:
+def _finite_values(results: Sequence[Mapping[str, object]], key: str, *, absolute=False) -> list[float]:
     values: list[float] = []
     for result in results:
         value = _finite_number(result, key)
@@ -424,19 +436,10 @@ def aggregate_suite(
     worst_fields = {
         "worst_center_error_px": ("final_center_error_px", False),
         "worst_absolute_range_error_mm": ("final_range_error_mm", True),
-        "worst_ground_truth_target_error_mm": (
-            "ground_truth_target_error_mm",
-            False,
-        ),
-        "worst_physical_tracking_error_mm": (
-            "final_physical_tracking_error_mm",
-            False,
-        ),
+        "worst_ground_truth_target_error_mm": ("ground_truth_target_error_mm", False),
+        "worst_physical_tracking_error_mm": ("final_physical_tracking_error_mm", False),
         "maximum_target_step_mm": ("maximum_target_step_mm", False),
-        "maximum_orientation_deviation_deg": (
-            "maximum_orientation_deviation_deg",
-            False,
-        ),
+        "maximum_orientation_deviation_deg": ("maximum_orientation_deviation_deg", False),
     }
     worst: dict[str, float | None] = {}
     for output_key, (source_key, absolute) in worst_fields.items():
