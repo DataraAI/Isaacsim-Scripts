@@ -2,58 +2,64 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a deterministic 27-run qualification harness that launches a fresh Isaac Sim process for every world-frame Y/Z start offset and fails unless all 27 runs satisfy the approved safety and accuracy gates.
+**Goal:** Build a deterministic 27-run qualification harness that starts a fresh Isaac Sim process for every world-frame Y/Z start offset and fails unless all 27 runs satisfy the approved safety and accuracy gates.
 
-**Architecture:** `stress_alignment.py` is pure Python and owns the matrix, run-ID parsing, config derivation, child/final result schemas, benchmark-only target scoring, gates, and suite aggregation. `sim.py` only observes existing commands and exposes a stress snapshot. `main.py` gains an opt-in child mode that never reads ground truth. `tools/run_alignment_stress.py` validates canonical ground truth before launching children, starts 27 sequential Isaac subprocesses, finalizes each result after the child exits, and writes suite reports.
+**Architecture:** `stress_alignment.py` is pure Python and owns the matrix, run-ID parsing, config derivation, strict JSON schemas, expected-target calculation, gates, and aggregation. `sim.py` passively records existing controller behavior. `main.py` gains an opt-in child mode that never reads ground truth. `tools/run_alignment_stress.py` validates canonical benchmark truth before launching children, finalizes each result only after the child exits, and writes suite reports.
 
 **Tech Stack:** Python 3.12, standard library, NumPy, Isaac Sim 6.0.0, Lula IK, existing YOLOE/SGBM controller, `unittest`, Bash.
 
 ## Global Constraints
 
-- Platform remains Ubuntu 24.04 with Isaac Sim 6.0.0.
-- Camera resolution remains `(960, 1280)` height-width.
-- Runtime control remains image-only.
-- The child process must never read RTX/USD ground truth.
-- The parent may read benchmark ground truth only outside the live control loop.
-- Wrist orientation remains fixed and vision never commands orientation.
-- Existing ToolCenter target updates remain bounded to 1 mm.
-- Qualification comparison allows exactly `1e-9 m`, which is `0.000001 mm`, so the recorded maximum must be `<=1.000001 mm`.
-- Failed observations hold the target and trigger existing reacquisition behavior.
+- Ubuntu 24.04, Isaac Sim 6.0.0, camera resolution `(960, 1280)`.
+- Runtime remains image-only; the child must never read RTX/USD ground truth.
+- Parent ground truth is scoring-only and is never passed to the child.
+- X and wrist orientation remain unchanged; vision never commands orientation.
+- Existing target-step limit remains 1 mm. Qualification permits `1e-9 m = 0.000001 mm`, so `maximum_target_step_mm <= 1.000001`.
+- Orientation deviation is quaternion angular distance in degrees and must be `<=0.572958°`.
+- Failed observations hold the target and use existing reacquisition behavior.
 - No insertion command is added.
-- Normal `main.py` behavior remains unchanged without stress arguments.
-- Matrix is world Y/Z `(-10, 0, +10)` mm, X unchanged, three repeats per pose.
-- Execution order uses seed `20260722`.
-- Child internal timeout is 240 seconds.
-- Parent hard timeout is 270 seconds.
-- Ground-truth gate compares the final ToolCenter target against the expected 50 mm pre-insert target derived from ground-truth opening center and normalized front-plane normal.
-- Orientation deviation is recorded in degrees and must be `<=0.572958°`, equivalent to 0.01 rad.
-- Suite qualification requires 27/27 runs.
+- Default `main.py` behavior is unchanged without stress arguments.
+- Matrix: world Y/Z `(-10, 0, +10)` mm, 3 repeats, seed `20260722`, 27 runs.
+- Child timeout: 240 seconds. Parent hard timeout: 270 seconds.
+- Expected target: ground-truth opening center plus normalized outward front-plane normal times the existing 0.050 m standoff.
+- Suite passes only at 27/27.
 
 ---
 
 ## File Map
 
-- Create `single_rack_cv/stress_alignment.py`: pure domain model, schemas, scoring, gates, and aggregation.
-- Create `single_rack_cv/tests/test_alignment_stress.py`: pure tests for matrix, parsing, config offsets, scoring, and gates.
-- Modify `single_rack_cv/sim.py`: passive measurement fields and `stress_snapshot()`.
-- Modify `single_rack_cv/main.py`: optional child stress lifecycle and `child_result.json` emission.
-- Create `single_rack_cv/tools/run_alignment_stress.py`: parent orchestration, finalized `result.json`, and suite reports.
-- Create `single_rack_cv/tests/test_alignment_stress_runner.py`: parent-runner tests without Isaac startup.
-- Create `single_rack_cv/tools/run_alignment_stress.sh`: sanitized one-command launcher.
-- Modify `single_rack_cv/tests/test_runtime_wiring.py`: structural safety guards.
-- Modify `single_rack_cv/README.md`: exact command, output, exit codes, and kill switch.
+- Create `single_rack_cv/stress_alignment.py`.
+- Create `single_rack_cv/tests/test_alignment_stress.py`.
+- Modify `single_rack_cv/sim.py`.
+- Modify `single_rack_cv/main.py`.
+- Create `single_rack_cv/tools/run_alignment_stress.py`.
+- Create `single_rack_cv/tests/test_alignment_stress_runner.py`.
+- Create `single_rack_cv/tools/run_alignment_stress.sh`.
+- Modify `single_rack_cv/tests/test_runtime_wiring.py`.
+- Modify `single_rack_cv/README.md`.
 
 ---
 
-### Task 1: Pure stress domain model, schemas, and gates
+### Task 1: Pure matrix, parsing, schemas, scoring, and aggregation
 
 **Files:**
 - Create: `single_rack_cv/stress_alignment.py`
 - Create: `single_rack_cv/tests/test_alignment_stress.py`
 
 **Interfaces:**
-- Produces `StressCase`, `StressRunArgs`, `build_stress_cases`, `parse_stress_run_args`, `derive_stress_config`, `new_child_result`, `expected_preinsert_target_world_m`, `finalize_parent_result`, `aggregate_suite`, and `write_json_atomic`.
-- `StressCase.from_run_id()` extracts repeat from `y+00_z-10_r2`; no extra `--stress-repeat` argument is introduced.
+
+```python
+StressCase(y_offset_mm: int, z_offset_mm: int, repeat: int)
+StressCase.from_run_id(run_id: str) -> StressCase
+build_stress_cases(seed: int = 20260722) -> list[StressCase]
+parse_stress_run_args(argv: Sequence[str]) -> StressRunArgs | None
+derive_stress_config(base_config, args: StressRunArgs)
+new_child_result(args: StressRunArgs, started_at: str) -> dict[str, object]
+expected_preinsert_target_world_m(center, normal, standoff_m) -> np.ndarray
+finalize_parent_result(...) -> dict[str, object]
+aggregate_suite(results, execution_order) -> dict[str, object]
+write_json_atomic(path, payload) -> None
+```
 
 - [ ] **Step 1: Write failing matrix, parsing, and config tests**
 
@@ -63,6 +69,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import unittest
+
+import numpy as np
 
 from config import CONFIG
 from stress_alignment import (
@@ -88,8 +96,9 @@ class AlignmentStressTests(unittest.TestCase):
             {(y, z): 3 for y in (-10, 0, 10) for z in (-10, 0, 10)},
         )
         self.assertEqual(len({case.run_id for case in cases}), 27)
+        self.assertEqual(len({case.directory_name for case in cases}), 27)
 
-    def test_shuffle_is_reproducible(self):
+    def test_seed_is_reproducible(self):
         first = [case.run_id for case in build_stress_cases(STRESS_SEED)]
         second = [case.run_id for case in build_stress_cases(STRESS_SEED)]
         other = [case.run_id for case in build_stress_cases(STRESS_SEED + 1)]
@@ -97,25 +106,27 @@ class AlignmentStressTests(unittest.TestCase):
         self.assertNotEqual(first, other)
 
     def test_run_id_round_trip(self):
-        case = StressCase(y_offset_mm=-10, z_offset_mm=10, repeat=2)
+        case = StressCase(-10, 10, 2)
         self.assertEqual(case.run_id, "y-10_z+10_r2")
         self.assertEqual(StressCase.from_run_id(case.run_id), case)
 
-    def test_cli_uses_only_approved_arguments(self):
-        args = parse_stress_run_args(
-            [
-                "--start-y-offset-mm", "-10",
-                "--start-z-offset-mm", "10",
-                "--stress-run-id", "y-10_z+10_r2",
-                "--stress-result-json", "/tmp/child_result.json",
-                "--stress-timeout-s", "240",
-                "--exit-after-complete",
-            ]
-        )
+    def test_cli_uses_approved_arguments_only(self):
+        args = parse_stress_run_args([
+            "--start-y-offset-mm", "-10",
+            "--start-z-offset-mm", "10",
+            "--stress-run-id", "y-10_z+10_r2",
+            "--stress-result-json", "/tmp/child_result.json",
+            "--stress-timeout-s", "240",
+            "--exit-after-complete",
+        ])
         self.assertEqual(args.case, StressCase(-10, 10, 2))
         self.assertEqual(args.result_json, Path("/tmp/child_result.json"))
 
-    def test_config_offsets_change_only_world_y_and_z(self):
+    def test_lone_stress_flag_is_rejected(self):
+        with self.assertRaises(ValueError):
+            parse_stress_run_args(["--exit-after-complete"])
+
+    def test_offsets_change_only_world_y_and_z(self):
         args = StressRunArgs(
             case=StressCase(10, -10, 1),
             result_json=Path("/tmp/child_result.json"),
@@ -134,7 +145,7 @@ class AlignmentStressTests(unittest.TestCase):
         self.assertEqual(CONFIG.ik.initial_position, (x, y, z))
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [ ] **Step 2: Run and verify failure**
 
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
@@ -143,7 +154,7 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 
 Expected: import failure because `stress_alignment.py` does not exist.
 
-- [ ] **Step 3: Implement matrix, run-ID parsing, CLI parsing, and config derivation**
+- [ ] **Step 3: Implement the matrix and approved CLI**
 
 ```python
 from __future__ import annotations
@@ -233,15 +244,19 @@ def parse_stress_run_args(argv: Sequence[str]) -> StressRunArgs | None:
         namespace.stress_result_json,
         namespace.stress_timeout_s,
     )
-    if all(value is None for value in supplied):
+    stress_requested = namespace.exit_after_complete or any(
+        value is not None for value in supplied
+    )
+    if not stress_requested:
         return None
     if any(value is None for value in supplied):
         raise ValueError("all stress-run arguments must be supplied together")
     case = StressCase.from_run_id(namespace.stress_run_id)
-    if case.y_offset_mm != namespace.start_y_offset_mm:
-        raise ValueError("run ID and Y offset disagree")
-    if case.z_offset_mm != namespace.start_z_offset_mm:
-        raise ValueError("run ID and Z offset disagree")
+    if (case.y_offset_mm, case.z_offset_mm) != (
+        namespace.start_y_offset_mm,
+        namespace.start_z_offset_mm,
+    ):
+        raise ValueError("run ID and start offsets disagree")
     if case.y_offset_mm not in Y_OFFSETS_MM or case.z_offset_mm not in Z_OFFSETS_MM:
         raise ValueError("stress offsets must be -10, 0, or +10 mm")
     timeout_s = float(namespace.stress_timeout_s)
@@ -257,29 +272,31 @@ def parse_stress_run_args(argv: Sequence[str]) -> StressRunArgs | None:
 
 def derive_stress_config(base_config, args: StressRunArgs):
     x, y, z = base_config.ik.initial_position
-    stressed_ik = replace(
-        base_config.ik,
-        initial_position=(
-            float(x),
-            float(y) + args.case.y_offset_mm / 1000.0,
-            float(z) + args.case.z_offset_mm / 1000.0,
+    return replace(
+        base_config,
+        ik=replace(
+            base_config.ik,
+            initial_position=(
+                float(x),
+                float(y) + args.case.y_offset_mm / 1000.0,
+                float(z) + args.case.z_offset_mm / 1000.0,
+            ),
         ),
     )
-    return replace(base_config, ik=stressed_ik)
 ```
 
-The existing `ik.initial_position` is a panda-hand pose. With fixed orientation and fixed hand-to-tool transform, adding world Y/Z to that pose applies the same world Y/Z delta to ToolCenter without changing X or orientation.
+The configured fixed startup pose is the panda-hand pose. Because wrist orientation and the hand-to-tool transform remain fixed, a world Y/Z shift of that pose produces the identical world Y/Z shift at ToolCenter.
 
-- [ ] **Step 4: Write failing child/final schema and scoring tests**
+- [ ] **Step 4: Write failing schema, strict-JSON, target, and gate tests**
 
 ```python
 from stress_alignment import (
     expected_preinsert_target_world_m,
     finalize_parent_result,
-    new_child_result,
+    write_json_atomic,
 )
 
-    def _passing_child(self):
+    def passing_child(self):
         return {
             "schema_version": 1,
             "run_id": "y+00_z+00_r1",
@@ -306,17 +323,17 @@ from stress_alignment import (
             "insertion_command_count": 0,
         }
 
-    def test_expected_target_uses_center_plus_normalized_outward_normal(self):
+    def test_expected_target_normalizes_normal(self):
         target = expected_preinsert_target_world_m(
-            center_world_m=[1.0, 2.0, 3.0],
-            normal_world=[2.0, 0.0, 0.0],
-            standoff_m=0.05,
+            [1.0, 2.0, 3.0],
+            [2.0, 0.0, 0.0],
+            0.05,
         )
         self.assertTrue(np.allclose(target, [1.05, 2.0, 3.0]))
 
-    def test_exact_gate_boundaries_pass(self):
+    def test_exact_boundaries_pass(self):
         result = finalize_parent_result(
-            child_payload=self._passing_child(),
+            child_payload=self.passing_child(),
             subprocess_exit_status=0,
             parent_hard_timed_out=False,
             console_log_path="runs/y+00_z+00_repeat-1/console.log",
@@ -327,38 +344,56 @@ from stress_alignment import (
         )
         self.assertTrue(result["qualified"])
         self.assertEqual(result["failed_gates"], [])
-        self.assertAlmostEqual(result["ground_truth_target_error_mm"], 0.0)
 
-    def test_one_over_each_limit_fails(self):
-        changes = {
-            "final_center_error_px": 2.000001,
-            "final_range_error_mm": 3.000001,
-            "final_physical_tracking_error_mm": 0.300001,
-            "maximum_target_step_mm": 1.000002,
-            "maximum_orientation_deviation_deg": 0.572959,
-        }
-        for key, value in changes.items():
-            with self.subTest(key=key):
-                child = self._passing_child()
-                child[key] = value
-                result = finalize_parent_result(
-                    child_payload=child,
-                    subprocess_exit_status=0,
-                    parent_hard_timed_out=False,
-                    console_log_path="console.log",
-                    child_result_parse_status="valid",
-                    truth_center_world_m=[1.0, 2.0, 3.0],
-                    truth_normal_world=[1.0, 0.0, 0.0],
-                    preinsert_standoff_m=0.05,
-                )
-                self.assertFalse(result["qualified"])
+    def test_nonfinite_is_written_as_null_and_fails_gate(self):
+        child = self.passing_child()
+        child["final_center_error_px"] = math.nan
+        with self.subTest("strict JSON"):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "payload.json"
+                write_json_atomic(path, child)
+                self.assertIn('"final_center_error_px": null', path.read_text())
+        result = finalize_parent_result(
+            child_payload=child,
+            subprocess_exit_status=0,
+            parent_hard_timed_out=False,
+            console_log_path="console.log",
+            child_result_parse_status="valid",
+            truth_center_world_m=[1.0, 2.0, 3.0],
+            truth_normal_world=[1.0, 0.0, 0.0],
+            preinsert_standoff_m=0.05,
+        )
+        self.assertFalse(result["qualified"])
 ```
 
-- [ ] **Step 5: Implement child schema, target derivation, finalization, and gates**
+Add one-over-limit tests for 2 px, 3 mm, 0.3 mm, 1 mm target error, 1.000001 mm step, and 0.572958° orientation.
+
+- [ ] **Step 5: Implement strict JSON and child schema**
 
 ```python
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _json_safe(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(_json_safe(dict(payload)), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def new_child_result(args: StressRunArgs, started_at: str) -> dict[str, object]:
@@ -370,16 +405,16 @@ def new_child_result(args: StressRunArgs, started_at: str) -> dict[str, object]:
         "repeat": args.case.repeat,
         "started_at": started_at,
         "ended_at": "",
-        "runtime_duration_s": math.nan,
+        "runtime_duration_s": None,
         "completed": False,
         "internal_timed_out": False,
         "track_acquired": False,
         "visual_alignment_locked": False,
-        "final_center_error_px": math.nan,
-        "final_range_error_mm": math.nan,
+        "final_center_error_px": None,
+        "final_range_error_mm": None,
         "final_tool_target_world_m": None,
         "final_actual_tool_world_m": None,
-        "final_physical_tracking_error_mm": math.nan,
+        "final_physical_tracking_error_mm": None,
         "maximum_target_step_mm": 0.0,
         "maximum_orientation_deviation_deg": 0.0,
         "perception_rejection_count": 0,
@@ -387,34 +422,22 @@ def new_child_result(args: StressRunArgs, started_at: str) -> dict[str, object]:
         "fatal_error": "",
         "insertion_command_count": 0,
     }
+```
 
+- [ ] **Step 6: Implement expected target and parent finalization**
 
-def write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, allow_nan=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
-
-
-def expected_preinsert_target_world_m(
-    center_world_m: Sequence[float],
-    normal_world: Sequence[float],
-    standoff_m: float,
-) -> np.ndarray:
-    center = np.asarray(center_world_m, dtype=np.float64).reshape(3)
-    normal = np.asarray(normal_world, dtype=np.float64).reshape(3)
-    if not np.all(np.isfinite(center)) or not np.all(np.isfinite(normal)):
+```python
+def expected_preinsert_target_world_m(center, normal, standoff_m) -> np.ndarray:
+    center_array = np.asarray(center, dtype=np.float64).reshape(3)
+    normal_array = np.asarray(normal, dtype=np.float64).reshape(3)
+    if not np.all(np.isfinite(center_array)) or not np.all(np.isfinite(normal_array)):
         raise ValueError("ground-truth center and normal must be finite")
-    normal_norm = float(np.linalg.norm(normal))
-    if normal_norm <= 1.0e-12:
+    norm = float(np.linalg.norm(normal_array))
+    if norm <= 1.0e-12:
         raise ValueError("ground-truth normal must be nonzero")
     if not math.isfinite(standoff_m) or standoff_m <= 0.0:
         raise ValueError("standoff must be finite and positive")
-    return center + (normal / normal_norm) * float(standoff_m)
+    return center_array + normal_array / norm * float(standoff_m)
 
 
 def _finite(payload: Mapping[str, object], key: str) -> float | None:
@@ -423,127 +446,52 @@ def _finite(payload: Mapping[str, object], key: str) -> float | None:
         return None
     value = float(value)
     return value if math.isfinite(value) else None
-
-
-def finalize_parent_result(
-    *,
-    child_payload: Mapping[str, object],
-    subprocess_exit_status: int,
-    parent_hard_timed_out: bool,
-    console_log_path: str,
-    child_result_parse_status: str,
-    truth_center_world_m: Sequence[float],
-    truth_normal_world: Sequence[float],
-    preinsert_standoff_m: float,
-) -> dict[str, object]:
-    result = dict(child_payload)
-    expected_target = expected_preinsert_target_world_m(
-        truth_center_world_m,
-        truth_normal_world,
-        preinsert_standoff_m,
-    )
-    try:
-        final_target = np.asarray(
-            result["final_tool_target_world_m"],
-            dtype=np.float64,
-        ).reshape(3)
-        if not np.all(np.isfinite(final_target)):
-            raise ValueError("non-finite final target")
-        target_error_mm = 1000.0 * float(np.linalg.norm(final_target - expected_target))
-    except Exception:
-        target_error_mm = math.nan
-
-    result.update(
-        {
-            "subprocess_exit_status": int(subprocess_exit_status),
-            "parent_hard_timed_out": bool(parent_hard_timed_out),
-            "console_log_path": str(console_log_path),
-            "child_result_parse_status": str(child_result_parse_status),
-            "expected_preinsert_target_world_m": [float(v) for v in expected_target],
-            "ground_truth_target_error_mm": target_error_mm,
-        }
-    )
-
-    failed: list[str] = []
-    boolean_gates = {
-        "subprocess_exit_status": subprocess_exit_status == 0,
-        "internal_timeout": result.get("internal_timed_out") is False,
-        "parent_hard_timeout": parent_hard_timed_out is False,
-        "completed": result.get("completed") is True,
-        "track_acquired": result.get("track_acquired") is True,
-        "visual_alignment_locked": result.get("visual_alignment_locked") is True,
-        "child_result_parse": child_result_parse_status == "valid",
-        "fatal_error": not str(result.get("fatal_error", "")).strip(),
-        "no_insertion": result.get("insertion_command_count") == 0,
-    }
-    failed.extend(name for name, passed in boolean_gates.items() if not passed)
-
-    measured = {
-        "runtime_duration_s": _finite(result, "runtime_duration_s"),
-        "final_center_error_px": _finite(result, "final_center_error_px"),
-        "absolute_final_range_error_mm": (
-            None
-            if _finite(result, "final_range_error_mm") is None
-            else abs(float(result["final_range_error_mm"]))
-        ),
-        "final_physical_tracking_error_mm": _finite(
-            result, "final_physical_tracking_error_mm"
-        ),
-        "ground_truth_target_error_mm": (
-            target_error_mm if math.isfinite(target_error_mm) else None
-        ),
-        "maximum_target_step_mm": _finite(result, "maximum_target_step_mm"),
-        "maximum_orientation_deviation_deg": _finite(
-            result, "maximum_orientation_deviation_deg"
-        ),
-    }
-    limits = {
-        "runtime_duration_s": 240.0,
-        "final_center_error_px": 2.0,
-        "absolute_final_range_error_mm": 3.0,
-        "final_physical_tracking_error_mm": 0.3,
-        "ground_truth_target_error_mm": 1.0,
-        "maximum_target_step_mm": STEP_LIMIT_MM,
-        "maximum_orientation_deviation_deg": ORIENTATION_LIMIT_DEG,
-    }
-    for name, limit in limits.items():
-        value = measured[name]
-        if value is None or value > limit:
-            failed.append(name)
-
-    result["failed_gates"] = sorted(set(failed))
-    result["qualified"] = not result["failed_gates"]
-    return result
 ```
 
-- [ ] **Step 6: Implement 27/27 aggregation**
-
-`aggregate_suite(results, execution_order)` must return:
+`finalize_parent_result()` must preserve child fields and add:
 
 ```python
 {
-    "schema_version": 1,
-    "seed": 20260722,
-    "required_run_count": 27,
-    "completed_run_count": len(results),
-    "passed_run_count": passed,
-    "failed_run_count": len(results) - passed,
-    "QUALIFIED": len(results) == 27 and passed == 27,
-    "execution_order": list(execution_order),
-    "failure_counts_by_pose": pose_failures,
-    "failure_counts_by_gate": gate_failures,
-    "duration_s": {
-        "minimum": min(durations),
-        "median": median(durations),
-        "p95": percentile_95,
-        "maximum": max(durations),
-    },
+    "subprocess_exit_status": int(subprocess_exit_status),
+    "parent_hard_timed_out": bool(parent_hard_timed_out),
+    "console_log_path": console_log_path,
+    "child_result_parse_status": child_result_parse_status,
+    "expected_preinsert_target_world_m": expected_target.tolist(),
+    "ground_truth_target_error_mm": target_error_mm,
+    "failed_gates": sorted(set(failed)),
+    "qualified": not failed,
 }
 ```
 
-Add tests proving 26/27 fails, missing/non-finite values fail, wrong-port target error fails, and failure grouping is exact.
+Boolean failures: nonzero process status, internal timeout, parent timeout, incomplete run, no track, no alignment lock, parse status not `valid`, fatal error text, or insertion count not zero.
 
-- [ ] **Step 7: Run pure tests and commit**
+Numeric failures:
+
+```python
+{
+    "runtime_duration_s": 240.0,
+    "final_center_error_px": 2.0,
+    "absolute_final_range_error_mm": 3.0,
+    "final_physical_tracking_error_mm": 0.3,
+    "ground_truth_target_error_mm": 1.0,
+    "maximum_target_step_mm": 1.000001,
+    "maximum_orientation_deviation_deg": 0.572958,
+}
+```
+
+Missing or non-finite values fail.
+
+- [ ] **Step 7: Implement aggregation and test 27/27**
+
+`aggregate_suite()` must include seed, required/completed/passed/failed counts, exact execution order, failures by pose/gate, duration min/median/p95/max, and:
+
+```python
+"QUALIFIED": len(results) == 27 and passed_run_count == 27
+```
+
+Tests must prove 26/27 fails and failed gates cannot be hidden by averages.
+
+- [ ] **Step 8: Run and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v tests.test_alignment_stress
@@ -560,16 +508,12 @@ git commit -m "Add alignment stress domain model"
 - Modify: `single_rack_cv/sim.py`
 - Modify: `single_rack_cv/tests/test_alignment_stress.py`
 
-**Interfaces:**
-- Produces `SimulationRuntime.stress_snapshot() -> dict[str, object]` matching the child schema fields.
-- Instrumentation observes the existing target and actual ToolCenter; it does not create a new control path.
-
-- [ ] **Step 1: Add failing quaternion-distance tests**
+- [ ] **Step 1: Add failing quaternion tests**
 
 ```python
 from stress_alignment import quaternion_angular_distance_deg
 
-    def test_quaternion_distance_treats_sign_flip_as_zero(self):
+    def test_quaternion_sign_flip_is_zero(self):
         self.assertAlmostEqual(
             quaternion_angular_distance_deg(
                 (1.0, 0.0, 0.0, 0.0),
@@ -579,7 +523,7 @@ from stress_alignment import quaternion_angular_distance_deg
             places=12,
         )
 
-    def test_quaternion_distance_reports_ten_degrees(self):
+    def test_known_ten_degree_rotation(self):
         half = math.radians(5.0)
         q = (math.cos(half), 0.0, math.sin(half), 0.0)
         self.assertAlmostEqual(
@@ -592,10 +536,7 @@ from stress_alignment import quaternion_angular_distance_deg
 - [ ] **Step 2: Implement pure quaternion distance**
 
 ```python
-def quaternion_angular_distance_deg(
-    first: Sequence[float],
-    second: Sequence[float],
-) -> float:
+def quaternion_angular_distance_deg(first, second) -> float:
     a = np.asarray(first, dtype=np.float64).reshape(4)
     b = np.asarray(second, dtype=np.float64).reshape(4)
     if not np.all(np.isfinite(a)) or not np.all(np.isfinite(b)):
@@ -605,11 +546,10 @@ def quaternion_angular_distance_deg(
     if a_norm <= 1.0e-12 or b_norm <= 1.0e-12:
         raise ValueError("quaternions must be nonzero")
     cosine = abs(float(np.dot(a / a_norm, b / b_norm)))
-    cosine = min(1.0, max(-1.0, cosine))
-    return math.degrees(2.0 * math.acos(cosine))
+    return math.degrees(2.0 * math.acos(min(1.0, max(-1.0, cosine))))
 ```
 
-- [ ] **Step 3: Add passive fields to `VisualServoState`**
+- [ ] **Step 3: Add passive `VisualServoState` fields**
 
 ```python
     track_acquired_ever: bool = False
@@ -628,64 +568,25 @@ In `SimulationRuntime.__init__`:
         self._initial_tool_orientation_wxyz: np.ndarray | None = None
 ```
 
-- [ ] **Step 4: Instrument existing events**
+- [ ] **Step 4: Instrument existing events without adding commands**
 
-In `note_perception_failure()`:
+- Increment `perception_rejection_count` at the start of `note_perception_failure()`.
+- Record center/range errors at the start of `observe_visual_servo()` after the IK guard.
+- Update `maximum_target_step_m` immediately after `compute_bounded_step()`.
+- Set `track_acquired_ever=True` and increment `track_acquisition_count` when acquisition succeeds.
+- Set `visual_alignment_locked_ever=True` when alignment locks.
+- Capture initial ToolCenter orientation in `_create_ik()`.
+- Measure target-orientation deviation in `update_ik()` with `quaternion_angular_distance_deg()`.
 
-```python
-        state.perception_rejection_count += 1
-```
-
-At the start of `observe_visual_servo()` after the IK guard:
-
-```python
-        state.final_center_error_px = float(np.linalg.norm(observation.center_error_px))
-        state.final_range_error_m = float(observation.range_error_m)
-```
-
-After `compute_bounded_step()`:
+Exact measurement statements:
 
 ```python
-        state.maximum_target_step_m = max(
-            state.maximum_target_step_m,
-            float(np.linalg.norm(step_world_m)),
-        )
-```
-
-When acquisition succeeds:
-
-```python
-        state.track_acquired_ever = True
-        state.track_acquisition_count += 1
-```
-
-When alignment locks:
-
-```python
-                state.visual_alignment_locked_ever = True
-```
-
-In `_create_ik()` after `tool_orientation` is calculated:
-
-```python
-        self._initial_tool_orientation_wxyz = np.asarray(
-            tool_orientation,
-            dtype=np.float64,
-        ).copy()
-```
-
-In `update_ik()` immediately after reading the target pose:
-
-```python
-        if self._initial_tool_orientation_wxyz is not None:
-            deviation_deg = quaternion_angular_distance_deg(
-                self._initial_tool_orientation_wxyz,
-                desired_tool_orientation,
-            )
-            self.visual_servo.maximum_orientation_deviation_deg = max(
-                self.visual_servo.maximum_orientation_deviation_deg,
-                deviation_deg,
-            )
+state.final_center_error_px = float(np.linalg.norm(observation.center_error_px))
+state.final_range_error_m = float(observation.range_error_m)
+state.maximum_target_step_m = max(
+    state.maximum_target_step_m,
+    float(np.linalg.norm(step_world_m)),
+)
 ```
 
 - [ ] **Step 5: Add `stress_snapshot()`**
@@ -697,17 +598,20 @@ In `update_ik()` immediately after reading the target pose:
         self._update_actual_tool_frame(self.ik)
         target_position, _ = self.ik.target.get_world_pose()
         actual_position, _ = self.ik.actual_tool.get_world_pose()
-        physical_error_m = self._tool_target_position_error_m()
         state = self.visual_servo
         return {
             "completed": bool(state.complete),
             "track_acquired": bool(state.track_acquired_ever),
             "visual_alignment_locked": bool(state.visual_alignment_locked_ever),
-            "final_center_error_px": float(state.final_center_error_px),
-            "final_range_error_mm": 1000.0 * float(state.final_range_error_m),
+            "final_center_error_px": _json_number_or_none(state.final_center_error_px),
+            "final_range_error_mm": _json_number_or_none(
+                1000.0 * state.final_range_error_m
+            ),
             "final_tool_target_world_m": [float(v) for v in target_position],
             "final_actual_tool_world_m": [float(v) for v in actual_position],
-            "final_physical_tracking_error_mm": 1000.0 * physical_error_m,
+            "final_physical_tracking_error_mm": _json_number_or_none(
+                1000.0 * self._tool_target_position_error_m()
+            ),
             "maximum_target_step_mm": 1000.0 * state.maximum_target_step_m,
             "maximum_orientation_deviation_deg": (
                 state.maximum_orientation_deviation_deg
@@ -718,7 +622,9 @@ In `update_ik()` immediately after reading the target pose:
         }
 ```
 
-- [ ] **Step 6: Run tests, compile, and commit**
+Define `_json_number_or_none(value)` in `sim.py` as `float(value)` when finite, otherwise `None`.
+
+- [ ] **Step 6: Test, compile, and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v tests.test_alignment_stress
@@ -731,15 +637,11 @@ git commit -m "Instrument alignment stress metrics"
 
 ---
 
-### Task 3: Opt-in child lifecycle in `main.py`
+### Task 3: Opt-in child stress mode
 
 **Files:**
 - Modify: `single_rack_cv/main.py`
 - Modify: `single_rack_cv/tests/test_runtime_wiring.py`
-
-**Interfaces:**
-- Consumes pure helpers from Task 1 and `runtime.stress_snapshot()` from Task 2.
-- Writes only `child_result.json`; it does not know subprocess exit status, parent timeout, expected target, ground-truth error, failed gates, or final qualification.
 
 - [ ] **Step 1: Add failing structural tests**
 
@@ -752,14 +654,14 @@ git commit -m "Instrument alignment stress metrics"
         self.assertIn("runtime.stress_snapshot()", source)
         self.assertIn("write_json_atomic", source)
 
-    def test_child_runtime_has_no_ground_truth_access(self):
+    def test_child_has_no_ground_truth(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8").lower()
         self.assertNotIn("front_plane_ground_truth", source)
         self.assertNotIn("expected_preinsert_target", source)
         self.assertNotIn("ground_truth_target_error", source)
 ```
 
-- [ ] **Step 2: Parse stress mode before Isaac startup**
+- [ ] **Step 2: Parse and derive config before Isaac startup**
 
 ```python
 import time
@@ -773,13 +675,6 @@ from stress_alignment import (
 
 stress_args = parse_stress_run_args(sys.argv[1:])
 RUNTIME_CONFIG = CONFIG if stress_args is None else derive_stress_config(CONFIG, stress_args)
-```
-
-Replace runtime uses of `CONFIG` with `RUNTIME_CONFIG`. Preserve the canonical import and default behavior.
-
-Use a run-local tee path in stress mode:
-
-```python
 run_output_path = (
     RUNTIME_CONFIG.camera.output_dir / "run_output_latest.txt"
     if stress_args is None
@@ -787,9 +682,9 @@ run_output_path = (
 )
 ```
 
-- [ ] **Step 3: Add internal timeout and auto-exit**
+Replace runtime uses of `CONFIG` with `RUNTIME_CONFIG` while preserving the canonical `CONFIG` import.
 
-Before the outer `try`:
+- [ ] **Step 3: Add child timeout and auto-exit**
 
 ```python
 started_at = utc_now_iso()
@@ -799,88 +694,67 @@ fatal_error = ""
 child_exit_status = 0
 ```
 
-After `runtime.update_visual_servo_completion()` in the loop:
+After `runtime.update_visual_servo_completion()`:
 
 ```python
-        if stress_args is not None:
-            elapsed_s = time.monotonic() - started_monotonic
-            if elapsed_s >= stress_args.timeout_s:
-                internal_timed_out = True
-                child_exit_status = 2
-                warn("Alignment stress run reached its internal 240 second timeout.")
-                break
-            if stress_args.exit_after_complete and runtime.visual_servo.complete:
-                break
+if stress_args is not None:
+    elapsed_s = time.monotonic() - started_monotonic
+    if elapsed_s >= stress_args.timeout_s:
+        internal_timed_out = True
+        child_exit_status = 2
+        warn("Alignment stress run reached its internal 240 second timeout.")
+        break
+    if stress_args.exit_after_complete and runtime.visual_servo.complete:
+        break
 ```
 
-In the outer exception block:
+Stress exceptions record traceback and set status 1; default mode still re-raises.
+
+- [ ] **Step 4: Always write `child_result.json` before shutdown**
 
 ```python
-except Exception:
-    fatal_error = traceback.format_exc()
-    print(
-        "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n" + fatal_error,
-        flush=True,
+if stress_args is not None:
+    child_payload = new_child_result(stress_args, started_at)
+    if runtime is not None and runtime.ik is not None:
+        child_payload.update(runtime.stress_snapshot())
+    child_payload.update(
+        {
+            "ended_at": utc_now_iso(),
+            "runtime_duration_s": time.monotonic() - started_monotonic,
+            "internal_timed_out": internal_timed_out,
+            "fatal_error": fatal_error,
+        }
     )
-    child_exit_status = 1
-    if stress_args is None:
-        raise
+    write_json_atomic(stress_args.result_json, child_payload)
 ```
 
-- [ ] **Step 4: Always write `child_result.json` in stress mode**
-
-Before runtime shutdown in `finally`:
-
-```python
-        if stress_args is not None:
-            child_payload = new_child_result(stress_args, started_at)
-            if runtime is not None and runtime.ik is not None:
-                child_payload.update(runtime.stress_snapshot())
-            child_payload.update(
-                {
-                    "ended_at": utc_now_iso(),
-                    "runtime_duration_s": time.monotonic() - started_monotonic,
-                    "internal_timed_out": internal_timed_out,
-                    "fatal_error": fatal_error,
-                }
-            )
-            write_json_atomic(stress_args.result_json, child_payload)
-```
-
-After shutdown:
+After the existing shutdown block:
 
 ```python
 if stress_args is not None:
     raise SystemExit(child_exit_status)
 ```
 
-Do not add process-exit status to the child payload. The parent observes it after termination.
+Do not write subprocess exit status, parent timeout, ground truth, failed gates, or qualification in the child.
 
-- [ ] **Step 5: Run structural tests, compile, and commit**
+- [ ] **Step 5: Test, compile, and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v tests.test_runtime_wiring
 "$HOME/isaacsim/python.sh" -m py_compile main.py sim.py stress_alignment.py
-git add single_rack_cv/main.py \
-        single_rack_cv/tests/test_runtime_wiring.py
+git add single_rack_cv/main.py single_rack_cv/tests/test_runtime_wiring.py
 git commit -m "Add isolated alignment stress child mode"
 ```
 
 ---
 
-### Task 4: Parent runner, finalized results, and reports
+### Task 4: Parent runner and finalized suite reports
 
 **Files:**
 - Create: `single_rack_cv/tools/run_alignment_stress.py`
 - Create: `single_rack_cv/tests/test_alignment_stress_runner.py`
 
-**Interfaces:**
-- Validates existing `benchmarks/front_plane_ground_truth.json` before any child starts.
-- Passes `runs/<case>/child_result.json` to the child.
-- Writes finalized `runs/<case>/result.json` after the child exits.
-- Does not regenerate missing or invalid ground truth; that is infrastructure failure exit 1 per the approved spec.
-
-- [ ] **Step 1: Write failing command, truth-validation, and synthesis tests**
+- [ ] **Step 1: Write failing command and ground-truth tests**
 
 ```python
 from __future__ import annotations
@@ -913,16 +787,13 @@ class AlignmentStressRunnerTests(unittest.TestCase):
             case,
             Path("/tmp/child_result.json"),
         )
-        self.assertIn("--start-y-offset-mm", command)
-        self.assertIn("--start-z-offset-mm", command)
         self.assertIn("--stress-run-id", command)
         self.assertIn(case.run_id, command)
         self.assertIn("--stress-result-json", command)
-        self.assertIn("--stress-timeout-s", command)
         self.assertIn("--exit-after-complete", command)
         self.assertNotIn("--stress-repeat", command)
 
-    def test_invalid_truth_aborts_instead_of_regenerating(self):
+    def test_invalid_truth_is_infrastructure_failure(self):
         runner = load_runner()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "truth.json"
@@ -931,102 +802,45 @@ class AlignmentStressRunnerTests(unittest.TestCase):
                 runner.load_valid_ground_truth(path)
 ```
 
-- [ ] **Step 2: Implement imports, constants, and exact child command**
+- [ ] **Step 2: Implement exact command and strict scene-specific truth validation**
 
 ```python
-from __future__ import annotations
-
-import csv
-from datetime import datetime, timezone
-import json
-import math
-import os
-from pathlib import Path
-import signal
-import subprocess
-import sys
-import time
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from stress_alignment import (
-    CHILD_TIMEOUT_S,
-    PARENT_TIMEOUT_S,
-    STRESS_SEED,
-    StressCase,
-    aggregate_suite,
-    build_stress_cases,
-    finalize_parent_result,
-    write_json_atomic,
-)
-
-GROUND_TRUTH_PATH = PROJECT_ROOT / "benchmarks" / "front_plane_ground_truth.json"
-OUTPUT_ROOT = PROJECT_ROOT / "camera_output" / "alignment_stress"
-
-
-def build_child_command(
-    isaac_python: Path,
-    project_root: Path,
-    case: StressCase,
-    child_result_json: Path,
-) -> list[str]:
+def build_child_command(isaac_python, project_root, case, child_result_json):
     return [
-        str(isaac_python),
-        str(project_root / "main.py"),
+        str(isaac_python), str(project_root / "main.py"),
         "--start-y-offset-mm", str(case.y_offset_mm),
         "--start-z-offset-mm", str(case.z_offset_mm),
         "--stress-run-id", case.run_id,
         "--stress-result-json", str(child_result_json),
-        "--stress-timeout-s", str(CHILD_TIMEOUT_S),
+        "--stress-timeout-s", "240.0",
         "--exit-after-complete",
     ]
 ```
 
-- [ ] **Step 3: Validate canonical ground truth without generating it**
+`load_valid_ground_truth(path)` must require:
 
 ```python
-def load_valid_ground_truth(path: Path) -> dict[str, object]:
-    if not path.is_file():
-        raise FileNotFoundError(f"ground truth not found: {path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("camera_resolution_height_width") != [960, 1280]:
-        raise ValueError("ground truth resolution is not 1280x960")
-    if not str(payload.get("control_usage", "")).lower().startswith("forbidden"):
-        raise ValueError("ground truth is not marked benchmark-only")
-    center = payload.get("center_world_m")
-    normal = payload.get("normal_world")
-    if not isinstance(center, list) or len(center) != 3:
-        raise ValueError("ground truth center_world_m is invalid")
-    if not isinstance(normal, list) or len(normal) != 3:
-        raise ValueError("ground truth normal_world is invalid")
-    if not all(math.isfinite(float(value)) for value in center + normal):
-        raise ValueError("ground truth center/normal contains non-finite values")
-    if math.sqrt(sum(float(value) ** 2 for value in normal)) <= 1.0e-12:
-        raise ValueError("ground truth normal is zero")
-    return payload
+payload["camera_resolution_height_width"] == [960, 1280]
+payload["source"] == "automatic_rtx_mesh_raycast_front_bezel_plane"
+str(payload["control_usage"]).lower().startswith("forbidden")
+len(payload["center_world_m"]) == 3
+len(payload["normal_world"]) == 3
+payload["used_prim_paths"] is a nonempty list
+all(path.startswith(CONFIG.scene.rack_path) for path in payload["used_prim_paths"])
 ```
 
-- [ ] **Step 4: Implement one fresh child process**
+Center and normal must be finite, and normal magnitude must be nonzero. Missing or invalid truth returns suite exit 1. The runner does not regenerate it.
+
+- [ ] **Step 3: Implement one fresh process with timeout and Ctrl-C cleanup**
 
 ```python
-def run_one_case(
-    isaac_python: Path,
-    case: StressCase,
-    run_directory: Path,
-) -> tuple[int, bool, float]:
+def run_one_case(isaac_python, case, run_directory):
     run_directory.mkdir(parents=True, exist_ok=False)
-    child_result_json = run_directory / "child_result.json"
+    child_result = run_directory / "child_result.json"
     console_log = run_directory / "console.log"
-    command = build_child_command(
-        isaac_python,
-        PROJECT_ROOT,
-        case,
-        child_result_json,
-    )
+    command = build_child_command(isaac_python, PROJECT_ROOT, case, child_result)
     started = time.monotonic()
-    hard_timed_out = False
+    hard_timeout = False
     with console_log.open("wb") as output:
         process = subprocess.Popen(
             command,
@@ -1036,37 +850,38 @@ def run_one_case(
             start_new_session=True,
         )
         try:
-            exit_status = process.wait(timeout=PARENT_TIMEOUT_S)
+            exit_status = process.wait(timeout=270.0)
         except subprocess.TimeoutExpired:
-            hard_timed_out = True
+            hard_timeout = True
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 exit_status = process.wait(timeout=10.0)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 exit_status = process.wait(timeout=10.0)
-    return exit_status, hard_timed_out, time.monotonic() - started
+        except KeyboardInterrupt:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=10.0)
+            raise
+    return exit_status, hard_timeout, time.monotonic() - started
 ```
 
-- [ ] **Step 5: Load or synthesize the child payload**
+- [ ] **Step 4: Implement child parsing and finalized result**
 
-`load_child_result(case, path)` must return `(payload, parse_status)`:
+`load_child_result(case, path)` returns `(payload, parse_status)` where status is `valid`, `missing`, `malformed`, or `mismatch`. Missing/malformed/mismatched data is synthesized into the full child schema with `fatal_error` and `runtime_duration_s=0.0`.
 
-- valid JSON matching case: `parse_status="valid"`;
-- missing file: a schema-shaped failed child payload and `parse_status="missing"`;
-- malformed JSON: a schema-shaped failed child payload and `parse_status="malformed"`;
-- run-ID/offset mismatch: a schema-shaped failed child payload and `parse_status="mismatch"`.
-
-The synthetic payload must include `fatal_error` describing the exact problem and finite `runtime_duration_s=0.0`; finalization will still fail parse, completion, and process gates.
-
-- [ ] **Step 6: Finalize each run only after the child exits**
+After the process exits:
 
 ```python
-child_payload, parse_status = load_child_result(case, child_result_json)
+child, parse_status = load_child_result(case, child_result_path)
 result = finalize_parent_result(
-    child_payload=child_payload,
+    child_payload=child,
     subprocess_exit_status=exit_status,
-    parent_hard_timed_out=hard_timed_out,
+    parent_hard_timed_out=hard_timeout,
     console_log_path=str(console_log.relative_to(suite_dir)),
     child_result_parse_status=parse_status,
     truth_center_world_m=truth["center_world_m"],
@@ -1076,17 +891,31 @@ result = finalize_parent_result(
 write_json_atomic(run_directory / "result.json", result)
 ```
 
-The runner must never pass truth data or truth paths to `main.py`.
+Truth data is never passed to `main.py`.
 
-- [ ] **Step 7: Implement unique output directory and suite reports**
+- [ ] **Step 5: Implement unique suite directory**
 
-Use UTC timestamp with collision suffix and `exist_ok=False`.
+```python
+def create_suite_directory() -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for suffix in range(100):
+        name = stamp if suffix == 0 else f"{stamp}-{suffix:02d}"
+        candidate = OUTPUT_ROOT / name
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return candidate
+    raise RuntimeError("could not allocate a unique suite directory")
+```
 
-`write_suite_outputs(suite_dir, results, execution_order)` must write:
+- [ ] **Step 6: Implement reports and progress**
 
-- `summary.json` from `aggregate_suite`, plus worst center, absolute range, target error, physical error, target step, orientation deviation, rejection total, and reacquisition total;
-- `summary.csv` with one row per finalized run;
-- `report.txt` starting with:
+`write_suite_outputs()` writes after every completed run so interruption leaves usable partial evidence:
+
+- `summary.json`: aggregate plus worst center, absolute range, target error, physical error, step, orientation, rejection total, reacquisition total.
+- `summary.csv`: one finalized run per row.
+- `report.txt` starts exactly:
 
 ```text
 ALIGNMENT STRESS QUALIFICATION
@@ -1111,71 +940,15 @@ CSV_FIELDS = [
 ]
 ```
 
-- [ ] **Step 8: Implement suite lifecycle and exit codes**
+- [ ] **Step 7: Implement suite `main()` and exit codes**
 
-```python
-def main() -> int:
-    isaac_python = Path.home() / "isaacsim" / "python.sh"
-    if not isaac_python.is_file():
-        print(f"ERROR: Isaac launcher not found: {isaac_python}", file=sys.stderr)
-        return 1
-    try:
-        truth = load_valid_ground_truth(GROUND_TRUTH_PATH)
-        suite_dir = create_suite_directory()
-    except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+Before launching children, validate Isaac launcher, truth file, and output directory. Iterate `build_stress_cases(20260722)` sequentially. Print `[01/27] START ...` and PASS/FAIL. Return 0 only for 27/27, 2 for completed qualification failure, and 1 for infrastructure failure or interruption.
 
-    cases = build_stress_cases(STRESS_SEED)
-    execution_order = [case.run_id for case in cases]
-    results = []
-    try:
-        for index, case in enumerate(cases, start=1):
-            print(f"[{index:02d}/27] START {case.run_id}", flush=True)
-            run_directory = suite_dir / "runs" / case.directory_name
-            exit_status, hard_timeout, _ = run_one_case(
-                isaac_python,
-                case,
-                run_directory,
-            )
-            child, parse_status = load_child_result(
-                case,
-                run_directory / "child_result.json",
-            )
-            result = finalize_parent_result(
-                child_payload=child,
-                subprocess_exit_status=exit_status,
-                parent_hard_timed_out=hard_timeout,
-                console_log_path=str(
-                    (run_directory / "console.log").relative_to(suite_dir)
-                ),
-                child_result_parse_status=parse_status,
-                truth_center_world_m=truth["center_world_m"],
-                truth_normal_world=truth["normal_world"],
-                preinsert_standoff_m=0.050,
-            )
-            write_json_atomic(run_directory / "result.json", result)
-            results.append(result)
-            write_suite_outputs(suite_dir, results, execution_order)
-            print(
-                f"[{index:02d}/27] "
-                f"{'PASS' if result['qualified'] else 'FAIL'} {case.run_id}",
-                flush=True,
-            )
-    except KeyboardInterrupt:
-        write_suite_outputs(suite_dir, results, execution_order)
-        return 1
+- [ ] **Step 8: Complete runner tests**
 
-    summary = write_suite_outputs(suite_dir, results, execution_order)
-    print((suite_dir / "report.txt").read_text(encoding="utf-8"))
-    return 0 if summary["QUALIFIED"] else 2
-```
+Tests must cover command construction, 270-second constant, missing/malformed/mismatched child result, scene-specific truth validation, normalized normal target, unique directory allocation, CSV serialization, 26/27 failure, and process-group termination by mocking `Popen`, `os.killpg`, and timeout exceptions.
 
-- [ ] **Step 9: Finish pure runner tests**
-
-Cover exact command, missing/malformed/mismatched child result, 270-second timeout constant, invalid truth, normalized normal target derivation, unique directory allocation, 26/27 report failure, and CSV serialization.
-
-- [ ] **Step 10: Run tests and commit**
+- [ ] **Step 9: Run and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v \
@@ -1207,7 +980,7 @@ git commit -m "Add alignment stress parent runner"
         self.assertLess(child_index, finalize_index)
         self.assertIn("front_plane_ground_truth.json", runner)
 
-    def test_child_has_no_truth_and_no_insertion(self):
+    def test_child_has_no_truth_or_insertion(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8").lower()
         sim_source = (ROOT / "sim.py").read_text(encoding="utf-8")
         self.assertNotIn("front_plane_ground_truth", main_source)
@@ -1219,32 +992,19 @@ git commit -m "Add alignment stress parent runner"
         self.assertIn("max_target_step_m: float = 0.001", config_source)
 ```
 
-- [ ] **Step 2: Create sanitized launcher**
+- [ ] **Step 2: Create launcher**
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
-
-unset LD_LIBRARY_PATH
-unset PYTHONPATH
-unset AMENT_PREFIX_PATH
-unset COLCON_PREFIX_PATH
-unset CMAKE_PREFIX_PATH
-unset ROS_DISTRO
-unset ROS_VERSION
-unset ROS_PYTHON_VERSION
-unset GZ_CONFIG_PATH
-unset IGN_CONFIG_PATH
-unset CONDA_PREFIX
-unset VIRTUAL_ENV
-
+unset LD_LIBRARY_PATH PYTHONPATH AMENT_PREFIX_PATH COLCON_PREFIX_PATH
+unset CMAKE_PREFIX_PATH ROS_DISTRO ROS_VERSION ROS_PYTHON_VERSION
+unset GZ_CONFIG_PATH IGN_CONFIG_PATH CONDA_PREFIX VIRTUAL_ENV
 printf '[ALIGNMENT STRESS] 3x3 world Y/Z grid, 3 repeats, 27 runs\n'
 printf '[ALIGNMENT STRESS] child timeout=240s parent timeout=270s\n'
 printf '[ALIGNMENT STRESS] qualification requires 27/27\n'
-
 exec /usr/bin/python3 tools/run_alignment_stress.py
 ```
 
@@ -1254,10 +1014,7 @@ chmod +x tools/run_alignment_stress.sh
 
 - [ ] **Step 3: Update README**
 
-Add:
-
-```markdown
-## Alignment start-pose stress qualification
+Add the exact command:
 
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
@@ -1268,14 +1025,9 @@ status=${PIPESTATUS[0]}
 echo "alignment stress exit status: $status"
 ```
 
-- `0`: all 27 runs qualified.
-- `2`: suite completed with at least one failed run.
-- `1`: invalid/missing ground truth, missing Isaac launcher, unwritable output, or interruption.
+Document exit codes 0/2/1, output layout containing `console.log`, `child_result.json`, and `result.json`, and the kill switch: do not start insertion unless `passed_run_count=27`, `failed_run_count=0`, and `QUALIFIED=True`.
 
-Each run contains `console.log`, `child_result.json`, and finalized `result.json`. Do not proceed to insertion unless `report.txt` shows `passed_run_count=27`, `failed_run_count=0`, and `QUALIFIED=True`.
-```
-
-Remove the obsolete README recovery-branch section because those temporary branches were deleted after the cleanup merge.
+Remove the obsolete README recovery-branch section because those branches were intentionally deleted.
 
 - [ ] **Step 4: Test and commit**
 
@@ -1292,11 +1044,7 @@ git commit -m "Document alignment stress qualification"
 
 ### Task 6: Verification and workstation qualification
 
-**Files:**
-- No source files unless a test exposes a defect.
-- Generated evidence remains ignored under `single_rack_cv/camera_output/`.
-
-- [ ] **Step 1: Run complete tests**
+- [ ] **Step 1: Run all tests**
 
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
@@ -1335,7 +1083,7 @@ echo "benchmark exit status: $benchmark_status"
 cat camera_output/front_plane_benchmark/report.txt
 ```
 
-Expected: status 0 and `QUALIFIED=True`. Do not tune estimator thresholds to recover regressions.
+Expected: status 0 and `QUALIFIED=True`. Do not tune thresholds to hide regression.
 
 - [ ] **Step 4: Run one nominal child smoke test**
 
@@ -1356,19 +1104,9 @@ echo "smoke exit status: $status"
 cat camera_output/alignment_stress_smoke/child_result.json
 ```
 
-Expected:
+Expected: automatic status 0, completed/track/alignment true, target and actual poses present, no parent or truth fields, max step `<=1.000001`, orientation `<=0.572958`, insertion count 0.
 
-- exits automatically with status 0;
-- `completed=true`;
-- `track_acquired=true`;
-- `visual_alignment_locked=true`;
-- target and actual ToolCenter world positions are present;
-- no parent fields or ground-truth fields are present;
-- max step `<=1.000001 mm`;
-- orientation deviation `<=0.572958°`;
-- insertion count 0.
-
-Kill switch: do not launch 27 runs if this child lifecycle fails.
+Kill switch: do not launch 27 runs if smoke lifecycle fails.
 
 - [ ] **Step 5: Run full suite**
 
@@ -1379,11 +1117,10 @@ bash tools/run_alignment_stress.sh \
 stress_status=${PIPESTATUS[0]}
 echo "alignment stress exit status: $stress_status"
 latest_dir=$(find camera_output/alignment_stress -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)
-echo "latest suite: $latest_dir"
 cat "$latest_dir/report.txt"
 ```
 
-Required result:
+Required:
 
 ```text
 passed_run_count=27
@@ -1391,9 +1128,9 @@ failed_run_count=0
 QUALIFIED=True
 ```
 
-Also verify seed `20260722`, 27 unique run IDs, every pose exactly three times, no insertion, max step `<=1.000001 mm`, orientation `<=0.572958°`, target error `<=1 mm`, physical error `<=0.3 mm`, center error `<=2 px`, and absolute range error `<=3 mm`.
+Verify seed, 27 unique IDs, every pose three times, no insertion, step/orientation/target/physical/center/range limits.
 
-- [ ] **Step 6: Inspect failures without weakening gates**
+- [ ] **Step 6: Inspect failures without changing gates**
 
 ```bash
 /usr/bin/python3 - "$latest_dir" <<'PY'
@@ -1408,7 +1145,7 @@ for path in sorted((root / "runs").glob("*/result.json")):
 PY
 ```
 
-Inspect each sibling `console.log`. Fix perception, reachability, process lifecycle, or instrumentation. Do not remove poses or enlarge tolerances.
+Inspect each sibling `console.log`. Fix the actual defect. Do not remove poses or widen tolerances.
 
 - [ ] **Step 7: Verify repository cleanliness**
 
@@ -1418,8 +1155,8 @@ git diff --check
 git ls-files single_rack_cv/camera_output
 ```
 
-Expected: no generated output tracked and no whitespace errors.
+Expected: generated output untracked and no whitespace errors.
 
 - [ ] **Step 8: Final evidence checkpoint**
 
-Before merge, record test pass count, benchmark metrics, smoke result, full suite directory, exact 27/27 status, and confirmation that no insertion path was added.
+Before merge, record test pass count, frozen benchmark metrics, nominal smoke result, full suite path, exact 27/27 result, and confirmation that no insertion path was added.
