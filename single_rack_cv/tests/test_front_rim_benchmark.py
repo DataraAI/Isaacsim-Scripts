@@ -35,29 +35,29 @@ class FrontRimBenchmarkTests(unittest.TestCase):
             source,
         )
 
-    def test_benchmark_uses_local_sgbm_without_ground_truth_input(self) -> None:
-        source = (
+    def test_sgbm_diagnostic_records_accuracy_before_strict_rejection(self) -> None:
+        diagnostic = (
             PROJECT_ROOT
             / "benchmarks"
-            / "front_rim_sgbm_benchmark.py"
+            / "front_rim_sgbm_diagnostic.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("compute_local_disparity(", source)
-        self.assertIn("estimate_front_plane_sgbm(", source)
-        self.assertIn("left_detection.center_uv", source)
-        self.assertIn("right_detection.center_uv", source)
-        self.assertIn('"mode": "local_sgbm_v5"', source)
-        self.assertNotIn("truth_center=", source)
-        self.assertNotIn("truth_normal=", source)
+        self.assertIn("replace(", diagnostic)
+        self.assertIn("center_max_gap_m=0.0020", diagnostic)
+        self.assertIn("plane_max_residual_m=0.0010", diagnostic)
+        self.assertIn('"plane_residual_p95_mm"', diagnostic)
+        self.assertIn("STRICT_PLANE_RESIDUAL_P95_MM", diagnostic)
+        self.assertIn("and plane_residual_p95_mm <=", diagnostic)
+        self.assertIn('"mode": "local_sgbm_diagnostic_v6"', diagnostic)
 
         bootstrap = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark_isaac.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("front_rim_sgbm_benchmark.py", bootstrap)
+        self.assertIn("front_rim_sgbm_diagnostic.py", bootstrap)
 
         launcher = (
             PROJECT_ROOT / "tools" / "run_front_rim_benchmark.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("mode=local-sgbm-v5", launcher)
+        self.assertIn("mode=local-sgbm-diagnostic-v6", launcher)
 
     def test_point_to_plane_error(self) -> None:
         error = point_to_plane_error_m(
