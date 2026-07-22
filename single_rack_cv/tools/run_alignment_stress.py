@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -25,6 +26,7 @@ from stress_alignment import (
     CHILD_REQUIRED_FIELDS,
     CHILD_TIMEOUT_S,
     PARENT_TIMEOUT_S,
+    STRESS_SCHEMA_VERSION,
     STRESS_SEED,
     StressCase,
     StressRunArgs,
@@ -187,7 +189,7 @@ def run_one_case(
         except subprocess.TimeoutExpired:
             hard_timeout = True
             exit_status = _terminate_process_group(process)
-        except KeyboardInterrupt:
+        except BaseException:
             _terminate_process_group(process)
             raise
     return exit_status, hard_timeout, time.monotonic() - started
