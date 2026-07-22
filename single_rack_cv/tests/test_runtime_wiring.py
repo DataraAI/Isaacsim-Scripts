@@ -62,6 +62,42 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertLess(normal_assignment, stress_guard)
         self.assertLess(stress_guard, stress_assignment)
 
+    def test_parent_scores_truth_only_after_child_returns(self):
+        source = (ROOT / "tools" / "run_alignment_stress.py").read_text(
+            encoding="utf-8"
+        )
+        main_loop = source.index("for index, case in enumerate(cases")
+        child_call = source.index("= run_one_case(", main_loop)
+        finalize = source.index("result = finalize_parent_result(", child_call)
+        self.assertLess(child_call, finalize)
+        self.assertIn("front_plane_ground_truth.json", source)
+        command_block = source[
+            source.index("def build_child_command"):
+            source.index("def _finite_vector3")
+        ]
+        self.assertNotIn("front_plane_ground_truth", command_block)
+
+    def test_no_insertion_path_and_step_limit_unchanged(self):
+        main_source = (ROOT / "main.py").read_text(encoding="utf-8").lower()
+        stress_source = (ROOT / "stress_runtime.py").read_text(encoding="utf-8")
+        config_source = (ROOT / "config.py").read_text(encoding="utf-8")
+        self.assertNotIn("insert_along", main_source)
+        self.assertIn('"insertion_command_count": 0', stress_source)
+        self.assertNotIn("insert_along", stress_source)
+        self.assertIn("max_target_step_m: float = 0.001", config_source)
+
+    def test_launcher_and_readme_lock_27_of_27(self):
+        launcher = (ROOT / "tools" / "run_alignment_stress.sh").read_text(
+            encoding="utf-8"
+        )
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("qualification requires 27/27", launcher)
+        self.assertIn("exec /usr/bin/python3 tools/run_alignment_stress.py", launcher)
+        self.assertIn("passed_run_count=27", readme)
+        self.assertIn("failed_run_count=0", readme)
+        self.assertIn("QUALIFIED=True", readme)
+        self.assertNotIn("recovery/pre-single-rack-cleanup", readme)
+
 
 if __name__ == "__main__":
     unittest.main()
