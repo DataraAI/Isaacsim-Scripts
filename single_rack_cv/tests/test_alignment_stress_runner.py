@@ -162,6 +162,24 @@ class AlignmentStressRunnerTests(unittest.TestCase):
         killpg.assert_called_once_with(1234, runner.signal.SIGTERM)
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
+    def test_unexpected_wait_error_terminates_child_group(self):
+        runner = load_runner()
+        process = mock.Mock()
+        process.pid = 5555
+        process.poll.return_value = None
+        process.wait.side_effect = [OSError("wait failed"), 143]
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(runner.subprocess, "Popen", return_value=process):
+                with mock.patch.object(runner.os, "killpg") as killpg:
+                    with self.assertRaises(OSError):
+                        runner.run_one_case(
+                            Path("/isaac/python.sh"),
+                            ROOT,
+                            StressCase(0, 0, 1),
+                            Path(directory) / "run",
+                        )
+        killpg.assert_called_once_with(5555, runner.signal.SIGTERM)
+
     def test_keyboard_interrupt_terminates_child_group(self):
         runner = load_runner()
         process = mock.Mock()
