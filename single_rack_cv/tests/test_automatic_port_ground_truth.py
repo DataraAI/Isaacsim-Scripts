@@ -31,6 +31,22 @@ class AutomaticGroundTruthTests(unittest.TestCase):
             source,
         )
 
+    def test_highres_metadata_is_written_before_simulation_shutdown(self) -> None:
+        source = (
+            PROJECT_ROOT
+            / "tools"
+            / "extract_front_rim_ground_truth_bootstrap.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "original_write_result = implementation._write_result",
+            source,
+        )
+        self.assertIn(
+            "implementation._write_result = write_result_with_resolution",
+            source,
+        )
+        self.assertIn("_stamp_resolution_metadata()", source)
+
     def test_bbox_side_samples_follow_refined_cavity_box(self) -> None:
         samples = _bbox_side_samples(
             (10, 20, 21, 11),
