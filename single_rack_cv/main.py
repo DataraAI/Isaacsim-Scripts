@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the single-rack synchronized stereo RGB visual-servo demo."""
+"""Run the canonical 1280x960 stereo front-opening visual servo."""
 
 from __future__ import annotations
 
@@ -13,17 +13,10 @@ from config import CONFIG
 
 
 class RunOutputTee:
-    """
-    Mirror process stdout/stderr to the terminal and one overwrite-on-run file.
-
-    This operates at the OS file-descriptor level, so it captures ordinary
-    Python prints plus native Isaac/RTX output written directly to stdout or
-    stderr.
-    """
+    """Mirror process stdout/stderr to the terminal and one run log."""
 
     def __init__(self, output_path: Path):
         self.output_path = Path(output_path)
-
         self._saved_stdout_fd: int | None = None
         self._saved_stderr_fd: int | None = None
         self._log_fd: int | None = None
@@ -35,13 +28,10 @@ class RunOutputTee:
     @staticmethod
     def _write_all(fd: int, data: bytes) -> None:
         view = memoryview(data)
-
         while view:
             written = os.write(fd, view)
-
             if written <= 0:
                 raise RuntimeError("Console tee write returned no progress.")
-
             view = view[written:]
 
     def _copy_output(self) -> None:
@@ -51,51 +41,34 @@ class RunOutputTee:
             or self._log_fd is None
         ):
             return
-
         try:
             while True:
                 chunk = os.read(self._pipe_read_fd, 65536)
-
                 if not chunk:
                     break
-
                 self._write_all(self._saved_stdout_fd, chunk)
                 self._write_all(self._log_fd, chunk)
         except OSError:
-            # Shutdown may close descriptors while the reader is exiting.
             pass
 
     def start(self) -> None:
         if self._started:
             return
-
-        self.output_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
         sys.stdout.flush()
         sys.stderr.flush()
-
         self._saved_stdout_fd = os.dup(1)
         self._saved_stderr_fd = os.dup(2)
-
         self._log_fd = os.open(
             self.output_path,
             os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
             0o644,
         )
-
-        (
-            self._pipe_read_fd,
-            self._pipe_write_fd,
-        ) = os.pipe()
-
+        self._pipe_read_fd, self._pipe_write_fd = os.pipe()
         os.dup2(self._pipe_write_fd, 1)
         os.dup2(self._pipe_write_fd, 2)
         os.close(self._pipe_write_fd)
         self._pipe_write_fd = None
-
         self._thread = threading.Thread(
             target=self._copy_output,
             name="run-output-tee",
@@ -107,35 +80,26 @@ class RunOutputTee:
     def stop(self) -> None:
         if not self._started:
             return
-
         sys.stdout.flush()
         sys.stderr.flush()
-
         if self._saved_stdout_fd is not None:
             os.dup2(self._saved_stdout_fd, 1)
-
         if self._saved_stderr_fd is not None:
             os.dup2(self._saved_stderr_fd, 2)
-
         if self._thread is not None:
             self._thread.join(timeout=5.0)
-
-        descriptors = (
+        for fd in (
             self._pipe_read_fd,
             self._log_fd,
             self._saved_stdout_fd,
             self._saved_stderr_fd,
-        )
-
-        for fd in descriptors:
+        ):
             if fd is None:
                 continue
-
             try:
                 os.close(fd)
             except OSError:
                 pass
-
         self._pipe_read_fd = None
         self._log_fd = None
         self._saved_stdout_fd = None
@@ -144,10 +108,7 @@ class RunOutputTee:
         self._started = False
 
 
-run_output_path = (
-    CONFIG.camera.output_dir
-    / "run_output_latest.txt"
-)
+run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
 run_output_tee = RunOutputTee(run_output_path)
 run_output_tee.start()
 
@@ -172,7 +133,7 @@ try:
     )
 
     from debug import DebugOutputs
-    from live_front_plane import refine_live_observation_to_front_plane
+    from live_control import refine_live_observation
     from perception import YOLOEPortDetector, process_stereo_port
     from sim import SimulationRuntime, warn
 
@@ -188,7 +149,7 @@ try:
         "full-frame stereo inference is active.",
         flush=True,
     )
-    if CONFIG.front_rim.enabled:
+    if CONFIG.front_plane.enabled:
         print(
             "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
             "no manual depth offset and no RTX/USD ground truth in runtime.",
@@ -196,10 +157,8 @@ try:
         )
 
     capture_index = 0
-
     while runtime.is_running():
         runtime.step()
-
         try:
             runtime.update_ik()
             runtime.update_visual_servo_completion()
@@ -208,7 +167,6 @@ try:
 
         if not runtime.capture_due():
             continue
-
         capture_index += 1
 
         try:
@@ -227,15 +185,13 @@ try:
                 previous_right=previous_right,
                 detector=detector,
             )
-            if CONFIG.front_rim.enabled:
-                observation, front_plane = (
-                    refine_live_observation_to_front_plane(
-                        frame=frame,
-                        observation=observation,
-                        desired_port_virtual_camera_usd=(
-                            runtime.desired_port_virtual_camera_usd
-                        ),
-                    )
+            if CONFIG.front_plane.enabled:
+                observation, front_plane = refine_live_observation(
+                    frame=frame,
+                    observation=observation,
+                    desired_port_virtual_camera_usd=(
+                        runtime.desired_port_virtual_camera_usd
+                    ),
                 )
                 print(
                     "[LIVE FRONT PLANE] "
@@ -254,18 +210,12 @@ try:
                     flush=True,
                 )
             runtime.observe_visual_servo(observation)
-            debug.handle(
-                frame,
-                observation,
-                capture_index,
-            )
+            debug.handle(frame, observation, capture_index)
         except Exception as exc:
-            # A rejected detector or front-plane estimate holds the current
-            # target; repeated misses trigger a clean image-space reacquisition.
+            # Any rejected detector or front-plane estimate holds the current
+            # target; repeated misses trigger clean image-space reacquisition.
             runtime.note_perception_failure()
-            warn(
-                f"RGB stereo capture {capture_index} skipped: {exc}"
-            )
+            warn(f"RGB stereo capture {capture_index} skipped: {exc}")
 
 except Exception:
     print(
@@ -279,7 +229,6 @@ finally:
     try:
         if runtime is not None:
             runtime.stop()
-
         if simulation_app is not None:
             simulation_app.close()
     finally:

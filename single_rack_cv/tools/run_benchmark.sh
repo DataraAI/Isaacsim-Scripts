@@ -18,8 +18,8 @@ unset CONDA_PREFIX
 unset VIRTUAL_ENV
 
 DATASET="camera_output/prompt_ab_benchmark_v1/manifest.json"
-GROUND_TRUTH="benchmarks/front_rim_ground_truth.json"
-SUMMARY="camera_output/front_rim_benchmark_v1/summary.json"
+GROUND_TRUTH="benchmarks/front_plane_ground_truth.json"
+SUMMARY="camera_output/front_plane_benchmark/summary.json"
 EXPECTED_HEIGHT=960
 EXPECTED_WIDTH=1280
 
@@ -44,37 +44,36 @@ raise SystemExit(0 if payload.get(key) == expected else 1)
 PY
 }
 
-printf '[FRONT RIM BENCHMARK] mode=local-sgbm-refined-highres-v8\n'
-printf '[FRONT RIM BENCHMARK] camera resolution: %sx%s\n' \
-  "$EXPECTED_WIDTH" "$EXPECTED_HEIGHT"
+printf '[FRONT-PLANE BENCHMARK] mode=front-plane-highres-v1\n'
+printf '[FRONT-PLANE BENCHMARK] camera resolution: 1280x960\n'
 
 if ! json_resolution_matches "$DATASET" "resolution_height_width"; then
-  printf '[FRONT RIM BENCHMARK] frozen frames missing/stale; recapturing at 1280x960\n'
+  printf '[FRONT-PLANE BENCHMARK] dataset missing/stale; recapturing at 1280x960\n'
   rm -rf camera_output/prompt_ab_benchmark_v1
-  "$HOME/isaacsim/python.sh" benchmarks/prompt_benchmark_capture_highres.py
+  "$HOME/isaacsim/python.sh" benchmarks/capture_dataset.py
 fi
 
 if ! json_resolution_matches "$DATASET" "resolution_height_width"; then
-  printf 'ERROR: high-resolution capture did not create a valid %s\n' "$DATASET" >&2
+  printf 'ERROR: dataset capture did not create a valid %s\n' "$DATASET" >&2
   exit 1
 fi
 
 if ! json_resolution_matches "$GROUND_TRUTH" "camera_resolution_height_width"; then
-  printf '[FRONT RIM BENCHMARK] ground truth missing/stale; regenerating at 1280x960\n'
+  printf '[FRONT-PLANE BENCHMARK] ground truth missing/stale; regenerating at 1280x960\n'
   rm -f "$GROUND_TRUTH"
-  bash tools/run_front_rim_ground_truth.sh
+  "$HOME/isaacsim/python.sh" tools/generate_ground_truth.py
 fi
 
 if ! json_resolution_matches "$GROUND_TRUTH" "camera_resolution_height_width"; then
-  printf 'ERROR: high-resolution ground truth is invalid: %s\n' "$GROUND_TRUTH" >&2
+  printf 'ERROR: ground truth is invalid: %s\n' "$GROUND_TRUTH" >&2
   exit 1
 fi
 
-printf '[FRONT RIM BENCHMARK] high-resolution inputs ready\n'
-rm -f "$SUMMARY"
+printf '[FRONT-PLANE BENCHMARK] high-resolution inputs ready\n'
+rm -rf camera_output/front_plane_benchmark
 
 set +e
-"$HOME/isaacsim/python.sh" tools/run_front_rim_benchmark_isaac.py
+"$HOME/isaacsim/python.sh" tools/run_benchmark_isaac.py
 python_status=$?
 set -e
 
@@ -85,9 +84,9 @@ if [[ ! -s "$SUMMARY" ]]; then
 fi
 
 if grep -q '"QUALIFIED": true' "$SUMMARY"; then
-  printf '[FRONT RIM BENCHMARK] QUALIFIED=true\n'
+  printf '[FRONT-PLANE BENCHMARK] QUALIFIED=true\n'
   exit 0
 fi
 
-printf '[FRONT RIM BENCHMARK] QUALIFIED=false\n' >&2
+printf '[FRONT-PLANE BENCHMARK] QUALIFIED=false\n' >&2
 exit 2

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Live image-only front-opening plane control geometry."""
+"""Live image-only front-opening control geometry."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
 import numpy as np
+
+from front_plane import estimate_front_plane
 
 
 @dataclass(frozen=True)
@@ -42,8 +44,14 @@ def _camera_error_to_world(
     desired_camera_usd_m,
     camera,
 ) -> np.ndarray:
-    current = np.asarray(current_camera_usd_m, dtype=np.float64).reshape(3)
-    desired = np.asarray(desired_camera_usd_m, dtype=np.float64).reshape(3)
+    current = np.asarray(
+        current_camera_usd_m,
+        dtype=np.float64,
+    ).reshape(3)
+    desired = np.asarray(
+        desired_camera_usd_m,
+        dtype=np.float64,
+    ).reshape(3)
     matrix = np.asarray(camera.world_from_camera, dtype=np.float64)
     if matrix.shape != (4, 4):
         raise ValueError("virtual camera transform must be 4x4.")
@@ -56,7 +64,7 @@ def apply_front_plane_result(
     desired_port_virtual_camera_usd,
     front_plane_result,
 ):
-    """Replace recessed cavity geometry with the fitted front-plane opening."""
+    """Replace recessed cavity geometry with fitted front-opening geometry."""
     virtual_camera = frame.virtual_camera
     center_world = np.asarray(
         front_plane_result.center_world_m,
@@ -65,7 +73,9 @@ def apply_front_plane_result(
     center_virtual = virtual_camera.camera_point_from_world(center_world)
     opening_range_m = -float(center_virtual[2])
     if opening_range_m <= 0.0:
-        raise RuntimeError("Estimated front opening lies behind the virtual camera.")
+        raise RuntimeError(
+            "Estimated front opening lies behind the virtual camera."
+        )
 
     desired = np.asarray(
         desired_port_virtual_camera_usd,
@@ -103,7 +113,10 @@ def apply_front_plane_result(
         center_error_px=np.asarray(center_error_px, dtype=np.float64),
         estimated_range_m=float(opening_range_m),
         range_error_m=float(range_error_m),
-        correction_world_m=np.asarray(correction_world_m, dtype=np.float64),
+        correction_world_m=np.asarray(
+            correction_world_m,
+            dtype=np.float64,
+        ),
         width_m=float(front_plane_result.width_m),
         height_m=float(front_plane_result.height_m),
         mean_disparity_px=float(front_plane_result.median_disparity_px),
@@ -120,7 +133,9 @@ def apply_front_plane_result(
         recess_depth_m=float(cavity_range_m - opening_range_m),
         plane_residual_m=float(front_plane_result.plane_residual_m),
         max_ray_gap_m=float(front_plane_result.max_ray_gap_m),
-        valid_disparity_count=int(front_plane_result.valid_disparity_count),
+        valid_disparity_count=int(
+            front_plane_result.valid_disparity_count
+        ),
         consistent_disparity_count=int(
             front_plane_result.consistent_disparity_count
         ),
@@ -134,15 +149,13 @@ def apply_front_plane_result(
     return refined, diagnostics
 
 
-def refine_live_observation_to_front_plane(
+def refine_live_observation(
     frame,
     observation,
     desired_port_virtual_camera_usd,
 ):
-    """Run qualified local SGBM and return front-opening control geometry."""
-    from front_rim_sgbm_refined import estimate_front_plane_sgbm_refined
-
-    result = estimate_front_plane_sgbm_refined(
+    """Run qualified SGBM and return front-opening control geometry."""
+    result = estimate_front_plane(
         left_rgb=frame.left.rgb,
         right_rgb=frame.right.rgb,
         left_bbox_xywh=observation.left.detection.bbox_xywh,

@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from live_front_plane import apply_front_plane_result
+from live_control import apply_front_plane_result
 
 
 class FakeCamera:
@@ -53,8 +53,8 @@ class Observation:
     plane_residual_m: float
 
 
-class LiveFrontPlaneTests(unittest.TestCase):
-    def test_front_plane_replaces_recessed_cavity_geometry_without_offset(self):
+class LiveControlTests(unittest.TestCase):
+    def test_front_plane_replaces_recessed_cavity_without_offset(self):
         camera = FakeCamera()
         frame = SimpleNamespace(virtual_camera=camera)
         cavity = Observation(
@@ -110,15 +110,36 @@ class LiveFrontPlaneTests(unittest.TestCase):
 
         self.assertAlmostEqual(refined.estimated_range_m, 0.13, places=12)
         self.assertAlmostEqual(refined.range_error_m, 0.0, places=12)
-        self.assertTrue(np.allclose(refined.correction_world_m, np.zeros(3)))
-        self.assertTrue(np.allclose(refined.center_world_xyz_m, opening.center_world_m))
-        self.assertAlmostEqual(diagnostics.cavity_range_m, 0.14, places=12)
-        self.assertAlmostEqual(diagnostics.opening_range_m, 0.13, places=12)
-        self.assertAlmostEqual(diagnostics.recess_depth_m, 0.01, places=12)
+        self.assertTrue(
+            np.allclose(refined.correction_world_m, np.zeros(3))
+        )
+        self.assertTrue(
+            np.allclose(
+                refined.center_world_xyz_m,
+                opening.center_world_m,
+            )
+        )
+        self.assertAlmostEqual(
+            diagnostics.cavity_range_m,
+            0.14,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            diagnostics.opening_range_m,
+            0.13,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            diagnostics.recess_depth_m,
+            0.01,
+            places=12,
+        )
 
-    def test_api_has_no_manual_offset_parameter(self):
+    def test_public_api_has_no_manual_offset_parameter(self):
         parameters = inspect.signature(apply_front_plane_result).parameters
-        self.assertFalse(any("offset" in name.lower() for name in parameters))
+        self.assertFalse(
+            any("offset" in name.lower() for name in parameters)
+        )
 
 
 if __name__ == "__main__":
