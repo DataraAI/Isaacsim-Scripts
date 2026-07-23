@@ -41,6 +41,11 @@ class CableMountContractTests(unittest.TestCase):
             source.index("from config import CONFIG"),
         )
 
+    def test_schema_probe_uses_isaac_sim_6_prim_path_keyword(self):
+        source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
+        self.assertIn("prim_path=cfg.root_path", source)
+        self.assertNotIn("\n            path=cfg.root_path", source)
+
     def test_schema_probe_prohibits_legacy_fallback(self):
         source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
         self.assertIn('HasAPI("OmniPhysicsDeformableBodyAPI")', source)
