@@ -78,6 +78,21 @@ class CableMountContractTests(unittest.TestCase):
         self.assertNotIn("PhysxPhysicsAttachment", source)
         self.assertNotIn("PhysxAutoAttachmentAPI", source)
 
+    def test_runtime_mount_contract_exposes_fingers_validation_and_diagnostics(self):
+        source = Path("cable_mount.py").read_text(encoding="utf-8")
+        for token in (
+            "def configure_fingers",
+            "finger_joint_names",
+            "set_joint_position_targets",
+            "def sample_validation",
+            "fixed_joint_is_valid",
+            "built_in_attachment_is_preserved",
+            "[CABLE MOUNT]",
+            "built-in attachment: preserved",
+            "cable tail: deformable",
+        ):
+            self.assertIn(token, source)
+
 
 if __name__ == "__main__":
     unittest.main()
