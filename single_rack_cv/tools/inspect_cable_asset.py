@@ -104,7 +104,7 @@ def main() -> int:
             simulation_app.update()
         stage_utils.add_reference_to_stage(
             usd_path=cfg.usd_path,
-            path=cfg.root_path,
+            prim_path=cfg.root_path,
         )
         for _ in range(30):
             simulation_app.update()
