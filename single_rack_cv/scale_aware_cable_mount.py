@@ -12,6 +12,7 @@ import cable_mount as cable_mount_module
 from affine_root_geometry import (
     compute_world_from_root_for_tip_preserving_affine,
 )
+from articulation_host_bridge import HostSafeDofPropertiesArticulation
 from cable_geometry import (
     matrix_to_quaternion_wxyz,
     rigid_pose_from_affine,
@@ -167,4 +168,6 @@ class ScaleAwareCableMount(CableMount):
             self.diagnostics.plug_dimensions_m = tuple(
                 float(value) for value in physical_dimensions_m
             )
-        super().configure_fingers(articulation)
+        super().configure_fingers(
+            HostSafeDofPropertiesArticulation(articulation)
+        )
