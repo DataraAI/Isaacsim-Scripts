@@ -9,15 +9,27 @@ from cable_geometry import (
     compute_world_from_root_for_tip,
     detect_plug_frame,
     matrix_to_quaternion_wxyz,
+    rigid_pose_from_affine,
+    validate_affine_transform,
     validate_mount_window,
     validate_transform,
 )
 
 
-def matrix(rotation=None, translation=(0.0, 0.0, 0.0)):
+def matrix(
+    rotation=None,
+    translation=(0.0, 0.0, 0.0),
+    scale=(1.0, 1.0, 1.0),
+):
     result = np.eye(4, dtype=np.float64)
-    if rotation is not None:
-        result[:3, :3] = np.asarray(rotation, dtype=np.float64)
+    rotation_value = (
+        np.eye(3, dtype=np.float64)
+        if rotation is None
+        else np.asarray(rotation, dtype=np.float64)
+    )
+    result[:3, :3] = rotation_value @ np.diag(
+        np.asarray(scale, dtype=np.float64)
+    )
     result[:3, 3] = np.asarray(translation, dtype=np.float64)
     return result
 
@@ -72,6 +84,30 @@ class CableGeometryTests(unittest.TestCase):
             np.array([+0.018, +0.005, +0.006]),
             matrix(rotation, (1.0, 2.0, 3.0)),
             np.array([1.0, 1.8, 3.0]),
+            axis_ratio_min=1.5,
+            cable_projection_min_m=0.002,
+        )
+        np.testing.assert_allclose(frame.nose_axis_local, [1.0, 0.0, 0.0])
+
+    def test_scaled_world_transform_is_used_when_classifying_cable_side(self):
+        rotation = np.array([
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        world_from_plug = matrix(
+            rotation,
+            (1.0, 2.0, 3.0),
+            scale=(0.01, 0.02, 0.03),
+        )
+        cable_center_world = (
+            world_from_plug @ np.array([-0.20, 0.0, 0.0, 1.0])
+        )[:3]
+        frame = detect_plug_frame(
+            np.array([-0.018, -0.005, -0.006]),
+            np.array([+0.018, +0.005, +0.006]),
+            world_from_plug,
+            cable_center_world,
             axis_ratio_min=1.5,
             cable_projection_min_m=0.002,
         )
@@ -150,6 +186,85 @@ class CableGeometryTests(unittest.TestCase):
         root_from_plug = np.linalg.inv(world_from_root) @ world_from_plug
         actual = mounted @ root_from_plug @ frame.plug_from_tip
         np.testing.assert_allclose(actual, desired, atol=1e-9)
+
+    def test_scaled_root_mapping_preserves_scale_and_aligns_rigid_tip_pose(self):
+        rotation = np.array([
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        world_from_root = matrix(translation=(0.2, -0.1, 0.4))
+        world_from_plug = matrix(
+            rotation,
+            translation=(0.5, 0.0, 0.2),
+            scale=(0.01, 0.02, 0.03),
+        )
+        cable_center_world = (
+            world_from_plug @ np.array([-0.2, 0.0, 0.0, 1.0])
+        )[:3]
+        desired = matrix(
+            rotation=np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0],
+                [0.0, 1.0, 0.0],
+            ]),
+            translation=(0.7, -0.2, 1.3),
+        )
+        frame = detect_plug_frame(
+            np.array([-0.018, -0.005, -0.006]),
+            np.array([+0.018, +0.005, +0.006]),
+            world_from_plug,
+            cable_center_world,
+            axis_ratio_min=1.5,
+            cable_projection_min_m=0.002,
+        )
+        mounted = compute_world_from_root_for_tip(
+            world_from_root,
+            world_from_plug,
+            frame,
+            desired,
+        )
+        root_from_plug = np.linalg.inv(world_from_root) @ world_from_plug
+        actual_affine = mounted @ root_from_plug @ frame.plug_from_tip
+        actual_pose = rigid_pose_from_affine(actual_affine, "actual")
+        np.testing.assert_allclose(actual_pose, desired, atol=1e-9)
+
+        original_scales = np.linalg.svd(
+            world_from_plug[:3, :3] @ frame.plug_from_tip[:3, :3],
+            compute_uv=False,
+        )
+        actual_scales = np.linalg.svd(
+            actual_affine[:3, :3],
+            compute_uv=False,
+        )
+        np.testing.assert_allclose(actual_scales, original_scales, atol=1e-12)
+        validate_transform(mounted, "mounted")
+
+    def test_rigid_pose_from_affine_discards_scale_without_changing_translation(self):
+        rotation = np.array([
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        affine = matrix(
+            rotation,
+            translation=(1.0, 2.0, 3.0),
+            scale=(2.0, 0.5, 1.5),
+        )
+        pose = rigid_pose_from_affine(affine, "affine")
+        np.testing.assert_allclose(pose[:3, :3], rotation, atol=1e-9)
+        np.testing.assert_allclose(pose[:3, 3], [1.0, 2.0, 3.0])
+        validate_transform(pose, "pose")
+
+    def test_affine_validation_rejects_reflection_and_singular_scale(self):
+        reflection = matrix(scale=(-1.0, 1.0, 1.0))
+        singular = matrix(scale=(1.0, 0.0, 1.0))
+        for invalid in (reflection, singular):
+            with self.assertRaisesRegex(
+                ValueError,
+                "nonsingular and right handed",
+            ):
+                validate_affine_transform(invalid, "invalid")
 
     def test_angular_error_is_zero_for_parallel_axes(self):
         self.assertAlmostEqual(
