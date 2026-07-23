@@ -10,6 +10,7 @@ import numpy as np
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
 from cable_geometry import (
+    CableMountValidation,
     PlugFrame,
     angular_error_deg,
     compute_world_from_root_for_tip,
@@ -154,6 +155,15 @@ class CableMount:
                 "The asset-authored plug-to-tail attachment changed during placement"
             )
 
+        self._author_fixed_joint()
+        self._filter_hand_and_finger_collisions()
+        if not self.fixed_joint_is_valid():
+            raise RuntimeError("Direct hand-to-plug fixed joint is invalid")
+        if not self.built_in_attachment_is_preserved():
+            raise RuntimeError(
+                "The asset-authored plug-to-tail attachment changed during joint authoring"
+            )
+
         self.diagnostics = CableMountDiagnostics(
             plug_dimensions_m=tuple(
                 float(value) for value in self.plug_frame.dimensions_m
@@ -165,16 +175,272 @@ class CableMount:
             existing_attachment_path=self.topology.existing_attachment_path,
         )
 
+    def configure_fingers(self, articulation) -> None:
+        """Set a symmetric cosmetic gap around the rigidly mounted plug."""
+
+        if self.plug_frame is None or self.diagnostics is None:
+            raise RuntimeError(
+                "Cable geometry must be authored before finger setup"
+            )
+        indices = np.asarray(
+            [
+                articulation.get_dof_index(name)
+                for name in self.mount_cfg.finger_joint_names
+            ],
+            dtype=np.int32,
+        )
+        if indices.shape != (2,) or np.any(indices < 0):
+            raise RuntimeError(
+                "Could not resolve both Franka finger joints: "
+                f"{self.mount_cfg.finger_joint_names}"
+            )
+
+        properties = articulation.dof_properties
+        try:
+            lower = np.asarray(properties["lower"], dtype=np.float64)[indices]
+            upper = np.asarray(properties["upper"], dtype=np.float64)[indices]
+        except (IndexError, KeyError, TypeError, ValueError):
+            array = np.asarray(properties)
+            if array.ndim != 2 or array.shape[1] < 4:
+                raise RuntimeError(
+                    "Unsupported articulation DOF property layout"
+                )
+            lower = np.asarray(array[indices, 2], dtype=np.float64)
+            upper = np.asarray(array[indices, 3], dtype=np.float64)
+
+        if (
+            lower.shape != (2,)
+            or upper.shape != (2,)
+            or not np.all(np.isfinite(lower))
+            or not np.all(np.isfinite(upper))
+            or np.any(upper < lower)
+        ):
+            raise RuntimeError(
+                f"Invalid Franka finger limits: lower={lower}, upper={upper}"
+            )
+
+        plug_width_m = float(
+            self.plug_frame.dimensions_m[
+                self.plug_frame.wide_transverse_axis_index
+            ]
+        )
+        total_gap_m = plug_width_m + self.mount_cfg.finger_total_clearance_m
+        desired = np.full(2, 0.5 * total_gap_m, dtype=np.float64)
+        commanded = np.clip(desired, lower, upper)
+        articulation.set_joint_positions(
+            commanded,
+            joint_indices=indices,
+        )
+        articulation.set_joint_position_targets(
+            commanded,
+            joint_indices=indices,
+        )
+        self.diagnostics.finger_total_gap_m = float(np.sum(commanded))
+
+    def sample_validation(self, runtime) -> tuple[float, float]:
+        """Measure one strict cable-mount validation frame."""
+
+        if (
+            self.stage is None
+            or self.topology is None
+            or self.plug_frame is None
+        ):
+            raise RuntimeError("Cable mount is not initialized")
+        plug = self.stage.GetPrimAtPath(self.mount_cfg.tracked_plug_path)
+        deformable = self.stage.GetPrimAtPath(
+            self.topology.deformable_body_path
+        )
+        if not plug.IsValid() or not plug.HasAPI(UsdPhysics.RigidBodyAPI):
+            raise RuntimeError("Tracked RJ45 plug lost rigid-body validity")
+        if not deformable.IsValid() or not deformable.HasAPI(_DEFORMABLE_API):
+            raise RuntimeError(
+                "Cable tail lost Omni Physics deformable validity"
+            )
+        if not self.fixed_joint_is_valid():
+            raise RuntimeError("Direct hand-to-plug fixed joint is invalid")
+        if not self.built_in_attachment_is_preserved():
+            raise RuntimeError("Built-in plug-to-tail attachment changed")
+
+        physics_scene = getattr(runtime, "physics_scene", None)
+        if (
+            physics_scene is None
+            or not physics_scene.get_enabled_gpu_dynamics()
+        ):
+            raise RuntimeError("Cable mount requires active GPU dynamics")
+
+        world_from_plug = _world_transform(
+            self.stage,
+            self.mount_cfg.tracked_plug_path,
+        )
+        tip_world = (
+            world_from_plug @ np.r_[self.plug_frame.tip_local_m, 1.0]
+        )[:3]
+        nose_world = (
+            world_from_plug[:3, :3] @ self.plug_frame.nose_axis_local
+        )
+
+        hand_position, hand_orientation = runtime._get_world_pose(
+            self.hand_path
+        )
+        world_from_hand = _quaternion_wxyz_to_matrix(hand_orientation)
+        hand_from_tool = _quaternion_wxyz_to_matrix(
+            np.asarray(
+                self.cfg.ik.tool_center_local_orientation_wxyz,
+                dtype=np.float64,
+            )
+        )
+        tool_position = (
+            np.asarray(hand_position, dtype=np.float64)
+            + world_from_hand
+            @ np.asarray(
+                self.cfg.ik.tool_center_local_position_m,
+                dtype=np.float64,
+            )
+        )
+        tool_axis = (world_from_hand @ hand_from_tool)[:, 2]
+        tip_error_m = float(np.linalg.norm(tip_world - tool_position))
+        axis_error_deg = angular_error_deg(nose_world, tool_axis)
+        return tip_error_m, axis_error_deg
+
+    def log_success(self, validation: CableMountValidation) -> None:
+        """Print the complete validated mount state."""
+
+        if self.diagnostics is None or self.topology is None:
+            raise RuntimeError("Cable mount diagnostics are unavailable")
+        dimensions_mm = [
+            round(value * 1000.0, 3)
+            for value in self.diagnostics.plug_dimensions_m
+        ]
+        tip_local = [
+            round(value, 6) for value in self.diagnostics.tip_local_m
+        ]
+        print(
+            "[CABLE MOUNT]\n"
+            f"  cable USD: {self.mount_cfg.usd_path}\n"
+            f"  tracked plug: {self.mount_cfg.tracked_plug_path}\n"
+            f"  deformable body: {self.topology.deformable_body_path}\n"
+            f"  preserved attachment: "
+            f"{self.topology.existing_attachment_path}\n"
+            f"  plug dimensions mm: {dimensions_mm}\n"
+            f"  insertion-tip local position m: {tip_local}\n"
+            f"  finger total gap mm: "
+            f"{self.diagnostics.finger_total_gap_m * 1000.0:.3f}\n"
+            f"  validation frames: {validation.frame_count}/"
+            f"{self.mount_cfg.validation_frames}\n"
+            f"  maximum tip error mm: "
+            f"{validation.maximum_tip_error_m * 1000.0:.6f}\n"
+            f"  maximum axis error deg: "
+            f"{validation.maximum_axis_error_deg:.6f}\n"
+            "  fixed joint: valid\n"
+            "  built-in attachment: preserved\n"
+            "  cable tail: deformable\n"
+            "  GPU dynamics: enabled",
+            flush=True,
+        )
+
+    def fixed_joint_is_valid(self) -> bool:
+        """Return whether the direct panda_hand-to-plug joint is intact."""
+
+        if self.stage is None or not self.hand_path:
+            return False
+        joint_prim = self.stage.GetPrimAtPath(
+            self.mount_cfg.fixed_joint_path
+        )
+        if (
+            not joint_prim.IsValid()
+            or not joint_prim.IsA(UsdPhysics.FixedJoint)
+        ):
+            return False
+        joint = UsdPhysics.FixedJoint(joint_prim)
+        body0 = [str(path) for path in joint.GetBody0Rel().GetTargets()]
+        body1 = [str(path) for path in joint.GetBody1Rel().GetTargets()]
+        return body0 == [self.hand_path] and body1 == [
+            self.mount_cfg.tracked_plug_path
+        ]
+
+    def _author_fixed_joint(self) -> None:
+        if self.stage is None:
+            raise RuntimeError("Cable mount stage is not initialized")
+        world_from_hand = _world_transform(self.stage, self.hand_path)
+        world_from_plug = _world_transform(
+            self.stage,
+            self.mount_cfg.tracked_plug_path,
+        )
+        hand_from_plug = np.linalg.inv(world_from_hand) @ world_from_plug
+        hand_from_plug = validate_transform(
+            hand_from_plug,
+            "hand_from_plug",
+        )
+
+        joint = UsdPhysics.FixedJoint.Define(
+            self.stage,
+            Sdf.Path(self.mount_cfg.fixed_joint_path),
+        )
+        joint.CreateBody0Rel().SetTargets([Sdf.Path(self.hand_path)])
+        joint.CreateBody1Rel().SetTargets(
+            [Sdf.Path(self.mount_cfg.tracked_plug_path)]
+        )
+        joint.CreateLocalPos0Attr().Set(
+            Gf.Vec3f(
+                *[float(value) for value in hand_from_plug[:3, 3]]
+            )
+        )
+        joint.CreateLocalRot0Attr().Set(
+            _matrix_to_gf_quatf(hand_from_plug[:3, :3])
+        )
+        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        joint.CreateLocalRot1Attr().Set(
+            Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0))
+        )
+
+    def _filter_hand_and_finger_collisions(self) -> None:
+        if self.stage is None:
+            raise RuntimeError("Cable mount stage is not initialized")
+        root = self.stage.GetPrimAtPath(
+            self.cfg.scene.franka_asset_path
+        )
+        if not root.IsValid():
+            raise RuntimeError(
+                "Franka asset root is invalid: "
+                f"{self.cfg.scene.franka_asset_path}"
+            )
+
+        names = (
+            self.mount_cfg.hand_link_name,
+            *self.mount_cfg.finger_link_names,
+        )
+        filtered_paths: list[str] = []
+        for name in names:
+            path = _find_unique_descendant(root, name)
+            prim = self.stage.GetPrimAtPath(path)
+            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                raise RuntimeError(
+                    f"Collision-filter target is not a rigid body: {path}"
+                )
+            filtered_paths.append(path)
+
+        plug = self.stage.GetPrimAtPath(
+            self.mount_cfg.tracked_plug_path
+        )
+        api = UsdPhysics.FilteredPairsAPI.Apply(plug)
+        relationship = api.CreateFilteredPairsRel()
+        existing = {str(path) for path in relationship.GetTargets()}
+        combined = sorted(existing.union(filtered_paths))
+        relationship.SetTargets([Sdf.Path(path) for path in combined])
+
     def built_in_attachment_is_preserved(self) -> bool:
-        """Return whether the asset-authored plug-to-tail relationship is unchanged."""
+        """Return whether the asset-authored plug-to-tail link is unchanged."""
 
         if self.stage is None or self.topology is None:
             return False
         attachment = self.stage.GetPrimAtPath(
             self.topology.existing_attachment_path
         )
-        if not attachment.IsValid() or not attachment.HasAPI(
-            "PhysxAutoDeformableAttachmentAPI"
+        if (
+            not attachment.IsValid()
+            or not attachment.HasAPI(
+                "PhysxAutoDeformableAttachmentAPI"
+            )
         ):
             return False
         return (
@@ -219,8 +485,14 @@ class CableMount:
         for prim in Usd.PrimRange(root):
             if not prim.HasAPI("PhysxAutoDeformableAttachmentAPI"):
                 continue
-            target0 = _single_relationship_target(prim, _ATTACHABLE0_REL)
-            target1 = _single_relationship_target(prim, _ATTACHABLE1_REL)
+            target0 = _single_relationship_target(
+                prim,
+                _ATTACHABLE0_REL,
+            )
+            target1 = _single_relationship_target(
+                prim,
+                _ATTACHABLE1_REL,
+            )
             if {target0, target1} == expected_targets:
                 matching.append((prim, target0, target1))
 
@@ -240,10 +512,76 @@ class CableMount:
         )
 
 
+def _quaternion_wxyz_to_matrix(quaternion) -> np.ndarray:
+    value = np.asarray(quaternion, dtype=np.float64)
+    if value.shape != (4,) or not np.all(np.isfinite(value)):
+        raise ValueError("Quaternion must be finite with shape (4,)")
+    norm = float(np.linalg.norm(value))
+    if norm <= 1.0e-12:
+        raise ValueError("Quaternion cannot have zero length")
+    w, x, y, z = value / norm
+    return np.array(
+        [
+            [
+                1.0 - 2.0 * (y * y + z * z),
+                2.0 * (x * y - z * w),
+                2.0 * (x * z + y * w),
+            ],
+            [
+                2.0 * (x * y + z * w),
+                1.0 - 2.0 * (x * x + z * z),
+                2.0 * (y * z - x * w),
+            ],
+            [
+                2.0 * (x * z - y * w),
+                2.0 * (y * z + x * w),
+                1.0 - 2.0 * (x * x + y * y),
+            ],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _find_unique_descendant(root: Usd.Prim, name: str) -> str:
+    matches = [
+        str(prim.GetPath())
+        for prim in Usd.PrimRange(root)
+        if prim.GetName() == name
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected one '{name}' below {root.GetPath()}, found {matches}"
+        )
+    return matches[0]
+
+
+def _matrix_to_gf_quatf(rotation: np.ndarray) -> Gf.Quatf:
+    rotation = np.asarray(rotation, dtype=np.float64)
+    candidate = np.eye(4, dtype=np.float64)
+    candidate[:3, :3] = rotation
+    validate_transform(candidate, "rotation")
+    row_rotation = rotation.T
+    gf_rotation = Gf.Matrix3d(
+        *[float(value) for value in row_rotation.reshape(-1)]
+    )
+    quat = Gf.Rotation(gf_rotation).GetQuat()
+    imaginary = quat.GetImaginary()
+    return Gf.Quatf(
+        float(quat.GetReal()),
+        Gf.Vec3f(
+            float(imaginary[0]),
+            float(imaginary[1]),
+            float(imaginary[2]),
+        ),
+    )
+
+
 def _single_relationship_target(prim: Usd.Prim, name: str) -> str:
     relationship = prim.GetRelationship(name)
     if not relationship.IsValid():
-        raise RuntimeError(f"Missing relationship {name} on {prim.GetPath()}")
+        raise RuntimeError(
+            f"Missing relationship {name} on {prim.GetPath()}"
+        )
     targets = [str(path) for path in relationship.GetTargets()]
     if len(targets) != 1:
         raise RuntimeError(
@@ -285,8 +623,14 @@ def _local_bounds(
 ) -> tuple[np.ndarray, np.ndarray]:
     prim = stage.GetPrimAtPath(path)
     if not prim.IsValid():
-        raise RuntimeError(f"Cannot compute bounds for invalid prim: {path}")
-    aligned = _bbox_cache().ComputeUntransformedBound(prim).ComputeAlignedRange()
+        raise RuntimeError(
+            f"Cannot compute bounds for invalid prim: {path}"
+        )
+    aligned = (
+        _bbox_cache()
+        .ComputeUntransformedBound(prim)
+        .ComputeAlignedRange()
+    )
     minimum = np.asarray(aligned.GetMin(), dtype=np.float64)
     maximum = np.asarray(aligned.GetMax(), dtype=np.float64)
     if (
@@ -297,7 +641,8 @@ def _local_bounds(
         or np.any(maximum <= minimum)
     ):
         raise RuntimeError(
-            f"Tracked plug has invalid local bounds: min={minimum}, max={maximum}"
+            "Tracked plug has invalid local bounds: "
+            f"min={minimum}, max={maximum}"
         )
     return minimum, maximum
 
@@ -305,26 +650,29 @@ def _local_bounds(
 def _world_bounds_center(stage: Usd.Stage, path: str) -> np.ndarray:
     prim = stage.GetPrimAtPath(path)
     if not prim.IsValid():
-        raise RuntimeError(f"Cannot compute bounds for invalid prim: {path}")
+        raise RuntimeError(
+            f"Cannot compute bounds for invalid prim: {path}"
+        )
     aligned = _bbox_cache().ComputeWorldBound(prim).ComputeAlignedRange()
     minimum = np.asarray(aligned.GetMin(), dtype=np.float64)
     maximum = np.asarray(aligned.GetMax(), dtype=np.float64)
     center = 0.5 * (minimum + maximum)
     if center.shape != (3,) or not np.all(np.isfinite(center)):
-        raise RuntimeError(f"Cable root has invalid world bounds: {path}")
+        raise RuntimeError(
+            f"Cable root has invalid world bounds: {path}"
+        )
     return center
 
 
 def _world_transform(stage: Usd.Stage, path: str) -> np.ndarray:
     prim = stage.GetPrimAtPath(path)
     if not prim.IsValid():
-        raise RuntimeError(f"Cannot read transform for invalid prim: {path}")
+        raise RuntimeError(
+            f"Cannot read transform for invalid prim: {path}"
+        )
     gf_matrix = UsdGeom.XformCache(
         Usd.TimeCode.Default()
     ).GetLocalToWorldTransform(prim)
-    # Gf uses row-vector transforms with translation in the last row. The
-    # pure geometry module uses column vectors with translation in the last
-    # column, so transpose at this boundary.
     return np.asarray(gf_matrix, dtype=np.float64).T
 
 
