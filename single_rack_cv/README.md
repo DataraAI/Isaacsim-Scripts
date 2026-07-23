@@ -14,11 +14,13 @@ Runtime control is image-only. RTX/USD raycasts and ground-truth JSON are used o
 
 ## Cable mount
 
-The cable asset already contains one Omni Physics deformable tail and rigid connector bodies. The tracked plug is fixed-jointed directly to `panda_hand`; the asset-authored plug-to-tail deformable attachment is preserved.
+The cable asset already contains one Omni Physics deformable tail and rigid connector bodies. The tracked plug uses a direct fixed joint to `panda_hand`; the asset-authored built-in deformable attachment between the plug and tail is preserved.
+
+The controlled ToolCenter represents the RJ45 insertion tip. Startup placement aligns that tip with the existing calibrated ToolCenter frame without changing the visual-servo orientation contract.
 
 The cable hierarchy contains authored affine scale on both the root and plug transforms. Startup placement therefore applies a rigid world correction on top of the existing affine root transform. It must not require the root or plug matrices to be orthonormal, and it must not strip, invert, or bake away the authored cable scale.
 
-The mount must validate for 30 consecutive frames before perception starts:
+The mount must validate for 30/30 consecutive frames before perception starts:
 
 - RJ45 tip error ≤ 0.5 mm
 - RJ45 axis error ≤ 1.0°
@@ -96,20 +98,3 @@ Qualification gates:
 ## Generated files
 
 `camera_output/`, model weights, Python caches, generated ground truth, and local worktrees are ignored by Git.
-
-## Recovery point
-
-The exact working repository before this hard prune is preserved on:
-
-```text
-recovery/pre-single-rack-cleanup-2026-07-22
-```
-
-Local annotated tag command:
-
-```bash
-git tag -a single-rack-working-pre-cleanup-2026-07-22 \
-  recovery/pre-single-rack-cleanup-2026-07-22 \
-  -m "Working 1280x960 automatic front-plane controller before hard prune"
-git push origin single-rack-working-pre-cleanup-2026-07-22
-```
