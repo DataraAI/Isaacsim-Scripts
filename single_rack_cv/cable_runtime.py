@@ -2,7 +2,6 @@
 """Cable-mounted startup wrapper around the canonical visual-servo runtime."""
 
 from __future__ import annotations
-
 import os
 
 import numpy as np
@@ -16,7 +15,7 @@ from isaacsim.sensors.experimental.rtx import CameraSensor
 from isaacsim.storage.native import get_assets_root_path
 
 from cable_geometry import validate_mount_window
-from cable_mount import CableMount
+from scale_aware_cable_mount import ScaleAwareCableMount
 from sim import (
     SimulationRuntime,
     hand_pose_to_tool_pose,
@@ -29,7 +28,7 @@ class CableMountedSimulationRuntime(SimulationRuntime):
     """Canonical controller with cable-specific pre-play scene authoring."""
 
     def __init__(self, simulation_app, cfg):
-        self.cable_mount: CableMount | None = None
+        self.cable_mount: ScaleAwareCableMount | None = None
         self.physics_scene = None
         super().__init__(simulation_app=simulation_app, cfg=cfg)
 
@@ -154,7 +153,7 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         world_from_toolcenter[:3, 3] = tool_position
 
         if self.cfg.cable_mount.enabled:
-            self.cable_mount = CableMount(self.cfg)
+            self.cable_mount = ScaleAwareCableMount(self.cfg)
             self.cable_mount.author_before_play(
                 stage=stage,
                 hand_path=hand_path,
