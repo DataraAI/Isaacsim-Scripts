@@ -30,3 +30,44 @@ def to_numpy_cpu(value, *, shape: tuple[int, ...], label: str) -> np.ndarray:
     if not np.all(np.isfinite(array)):
         raise ValueError(f"{label} must contain only finite values")
     return array.copy()
+
+
+def pose_to_numpy_cpu(
+    position,
+    orientation,
+    *,
+    label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return one host position/quaternion pair from a device-backed pose."""
+
+    return (
+        to_numpy_cpu(
+            position,
+            shape=(3,),
+            label=f"{label} position",
+        ),
+        to_numpy_cpu(
+            orientation,
+            shape=(4,),
+            label=f"{label} orientation",
+        ),
+    )
+
+
+class HostSafePoseObject:
+    """Delegate an Isaac object while returning world poses as host NumPy arrays."""
+
+    def __init__(self, wrapped, *, label: str) -> None:
+        self._wrapped = wrapped
+        self._label = label
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def get_world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        position, orientation = self._wrapped.get_world_pose()
+        return pose_to_numpy_cpu(
+            position,
+            orientation,
+            label=self._label,
+        )
