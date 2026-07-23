@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import unittest
 
@@ -94,7 +95,26 @@ class HostArrayBridgeTests(unittest.TestCase):
         self.assertIn("original_set_robot_base_pose", source)
         self.assertIn("host_safe_set_robot_base_pose", source)
         self.assertIn("finally:", source)
-        self.assertIn("set_robot_base_pose = original_set_robot_base_pose", source)
+
+        tree = ast.parse(source)
+        restoration_found = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            value = node.value
+            if (
+                isinstance(target, ast.Attribute)
+                and target.attr == "set_robot_base_pose"
+                and isinstance(value, ast.Name)
+                and value.id == "original_set_robot_base_pose"
+            ):
+                restoration_found = True
+                break
+        self.assertTrue(
+            restoration_found,
+            "LulaKinematicsSolver.set_robot_base_pose must be restored in finally",
+        )
 
     def test_real_cuda_tensor_when_available(self):
         try:
