@@ -46,6 +46,19 @@ class CableMountContractTests(unittest.TestCase):
         self.assertIn("prim_path=cfg.root_path", source)
         self.assertNotIn("\n            path=cfg.root_path", source)
 
+    def test_schema_probe_reports_asset_connection_topology(self):
+        source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
+        for token in (
+            '"tracked_plug_is_rigid_body"',
+            '"tracked_plug_parent_path"',
+            '"deformable_candidate_schemas"',
+            '"joint_connections"',
+            '"auto_deformable_attachments"',
+            "prim.IsA(UsdPhysics.Joint)",
+            'HasAPI("PhysxAutoDeformableAttachmentAPI")',
+        ):
+            self.assertIn(token, source)
+
     def test_schema_probe_prohibits_legacy_fallback(self):
         source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
         self.assertIn('HasAPI("OmniPhysicsDeformableBodyAPI")', source)
