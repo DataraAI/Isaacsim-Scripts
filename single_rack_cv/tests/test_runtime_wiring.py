@@ -84,6 +84,16 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertLess(prepare, yolo)
         self.assertLess(yolo, loop)
 
+    def test_readme_documents_direct_mount_and_kill_switch(self):
+        source = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("direct fixed joint", source)
+        self.assertIn("built-in deformable attachment", source)
+        self.assertIn("RJ45 insertion tip", source)
+        self.assertIn("GPU dynamics", source)
+        self.assertIn("30/30", source)
+        self.assertIn("No insertion motion", source)
+        self.assertNotIn("recovery/pre-single-rack-cleanup", source)
+
 
 if __name__ == "__main__":
     unittest.main()
