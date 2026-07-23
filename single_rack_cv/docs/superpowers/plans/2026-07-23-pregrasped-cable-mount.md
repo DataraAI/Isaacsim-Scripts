@@ -2,46 +2,48 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Start the canonical `single_rack_cv` runtime with the supplied network cable permanently mounted to the Franka hand, with the RJ45 insertion tip coincident with the existing ToolCenter and the cable tail remaining deformable.
+**Goal:** Start the canonical `single_rack_cv` runtime with the supplied cable permanently mounted by directly fixed-jointing the existing rigid RJ45 plug to `panda_hand`, while preserving the asset-authored plug-to-deformable-tail attachment.
 
-**Architecture:** `cable_geometry.py` owns all pure connector-frame, attachment-volume, root-transform, angular-error, and validation-window logic. `cable_mount.py` owns Isaac/USD/PhysX integration: asset loading, schema validation, one-time placement, rigid proxy, fixed joint, masked auto deformable attachment, cosmetic finger gap, and mount diagnostics. `SimulationRuntime.prepare_for_perception()` blocks YOLOE and camera acquisition until 30 consecutive validation frames pass.
+**Architecture:** `cable_geometry.py` owns pure connector-frame and one-time placement math. `cable_mount.py` owns asset loading, topology verification, direct hand-to-plug fixed joint, narrow collision filtering, finger presentation, and mount validation. The runtime verifies but never reauthors the existing `PhysxAutoDeformableAttachmentAPI` linking `/World/NetworkCable/E_line_35` to `/World/NetworkCable/E_crystal_head1_45`.
 
-**Tech Stack:** Ubuntu 24.04, Isaac Sim 6.0.0 / Kit 110, Python 3.12, NumPy, OpenUSD (`pxr`), Omni PhysX deformables, Lula IK, `unittest`, Bash.
+**Tech Stack:** Ubuntu 24.04, Isaac Sim 6.0.0 / Kit 110, Python 3.12, NumPy, OpenUSD (`pxr`), Omni Physics deformables, Lula IK, `unittest`, Bash.
 
 ## Global Constraints
 
-- Branch: `feature/pregrasped-cable-mount`, based on `main` commit `6ded651ef8db386aaa21ae2445f49e103b921da9`.
+- Branch: `feature/pregrasped-cable-mount`.
 - Cable USD: `/home/aayush/isaacsim_assets/Network cable 001/model_Networkcable1_69323.usd`.
 - Cable root: `/World/NetworkCable`.
-- Tracked plug: `/World/NetworkCable/E_crystal_head1_45`.
+- Tracked rigid plug: `/World/NetworkCable/E_crystal_head1_45`.
+- Discovered deformable tail: `/World/NetworkCable/E_line_35`.
+- Preserved built-in attachment: `/World/NetworkCable/E_line_35/attachment`.
+- Built-in attachment targets must remain exactly tail ↔ tracked plug.
 - Permanent mount for the complete process lifetime; no release or regrasp.
 - Cable tail remains deformable; never rigidify the complete asset.
 - Existing ToolCenter transform remains numerically unchanged: translation `(0.0, 0.0, 0.1034)` and identity local orientation relative to `panda_hand`.
-- Mount the RJ45 nose-face center exactly onto ToolCenter. No second connector offset is allowed in perception, control, or future insertion code.
-- Detect the plug longitudinal axis from local bounds and require `longest / second_longest >= 1.5`.
-- Determine the cable-side sign from the cable-root center projected into the plug-local longitudinal axis. Ambiguity is fatal.
+- Mount the RJ45 nose-face center exactly onto ToolCenter. No second connector offset is allowed.
+- Detect longitudinal axis from local bounds and require `longest / second_longest >= 1.5`.
 - Align plug nose axis to ToolCenter local `+Z`; align widest transverse plug axis to ToolCenter local `+Y`.
-- Attachment mask covers complete plug bounds, adds `0.5 mm` on both transverse directions and at the nose, and adds zero extension past the cable-side face.
-- Use current `OmniPhysicsDeformableBodyAPI` and `PhysxAutoDeformableAttachmentAPI`. Removed legacy attachment schemas are unsupported.
-- This feature branch uses `cuda:0` globally, including explicit mount-disabled diagnostic runs. GPU dynamics enabled, broadphase `GPU`, solver `TGS`, timestep unchanged at `1/60 s` initially.
-- Cosmetic finger total clearance: `1.0 mm`. The rigid proxy, not finger contact, carries the connector.
-- Mount validation: exactly 30 consecutive frames; every frame must satisfy tip error `<= 0.5 mm` and axis error `<= 1.0 degree`.
+- Use a direct `UsdPhysics.FixedJoint` between dynamically discovered `panda_hand` and the tracked rigid plug.
+- Do not create `/World/CableMountProxy`, a new auto deformable attachment, or an attachment mask.
+- Preserve tracked-plug collisions against rack, port, tail, and ground.
+- Filter collisions only against Franka hand/finger rigid bodies.
+- Scene device `cuda:0`; GPU dynamics enabled; broadphase `GPU`; solver `TGS`; timestep `1/60 s` initially.
+- Cosmetic finger total clearance: `1.0 mm`.
+- Mount validation: exactly 30 consecutive frames; every frame tip error `<= 0.5 mm`, axis error `<= 1.0 degree`.
 - Existing physical ToolCenter tracking tolerance remains `<= 0.3 mm`; target steps remain `<= 1.0 mm`.
-- No insertion command, per-frame cable transform, hard-coded world insertion direction, or manual tip-depth offset.
-- Unsupported schema, invalid attachment, unstable mount, or failed nominal alignment is a kill switch.
+- No insertion command, post-play cable transform, hard-coded world insertion direction, or manual tip-depth offset.
 
 ---
 
 ## File Map
 
-- Create `single_rack_cv/cable_geometry.py` — pure connector frame, attachment bounds, root transform, angular error, and validation-window logic.
-- Create `single_rack_cv/cable_mount.py` — Isaac/USD/PhysX integration.
-- Create `single_rack_cv/tools/inspect_cable_asset.py` — local asset-schema probe.
-- Create `single_rack_cv/tests/test_cable_geometry.py`.
-- Create `single_rack_cv/tests/test_cable_mount_contract.py`.
-- Modify `single_rack_cv/config.py`.
-- Modify `single_rack_cv/sim.py`.
-- Modify `single_rack_cv/main.py`.
+- Existing `single_rack_cv/cable_geometry.py` — pure geometry and validation logic.
+- Create `single_rack_cv/cable_mount.py` — topology verification and direct plug mount.
+- Existing `single_rack_cv/tools/inspect_cable_asset.py` — schema and topology probe.
+- Modify `single_rack_cv/config.py` — remove obsolete proxy/new-attachment fields and add hand/finger names.
+- Modify `single_rack_cv/sim.py` — GPU scene, cable startup, direct joint, bounded validation.
+- Modify `single_rack_cv/main.py` — block debug/YOLOE until mount validation passes.
+- Modify `single_rack_cv/tests/test_cable_mount_contract.py`.
 - Modify `single_rack_cv/tests/test_runtime_wiring.py`.
 - Modify `single_rack_cv/README.md`.
 
@@ -49,426 +51,101 @@
 
 ### Task 1: Pure connector geometry and validation-window logic
 
+**Status:** Completed and locally verified.
+
 **Files:**
-- Create: `single_rack_cv/cable_geometry.py`
-- Create: `single_rack_cv/tests/test_cable_geometry.py`
+- `single_rack_cv/cable_geometry.py`
+- `single_rack_cv/tests/test_cable_geometry.py`
 
-**Interfaces produced:**
+**Evidence:** 15 geometry tests pass; Python compilation passes.
 
-- `PlugFrame`
-- `AttachmentBounds`
-- `CableMountValidation`
-- `validate_transform(matrix: np.ndarray, label: str) -> np.ndarray`
-- `detect_plug_frame(local_min_m: np.ndarray, local_max_m: np.ndarray, world_from_plug: np.ndarray, cable_center_world_m: np.ndarray, *, axis_ratio_min: float, cable_projection_min_m: float) -> PlugFrame`
-- `compute_attachment_bounds(frame: PlugFrame, padding_m: float) -> AttachmentBounds`
-- `compute_world_from_root_for_tip(world_from_root: np.ndarray, world_from_plug: np.ndarray, frame: PlugFrame, desired_world_from_tip: np.ndarray) -> np.ndarray`
-- `angular_error_deg(axis_a: np.ndarray, axis_b: np.ndarray) -> float`
-- `validate_mount_window(samples: list[tuple[float, float]], required_frames: int, max_tip_error_m: float, max_axis_error_deg: float) -> CableMountValidation`
+---
 
-- [ ] **Step 1: Write failing tests for X, Y, and Z longitudinal axes**
+### Task 2: Configuration and asset topology probe
 
-Create `tests/test_cable_geometry.py`:
+**Status:** Completed through topology discovery; configuration cleanup is folded into Task 3.
 
-```python
-from __future__ import annotations
+**Files:**
+- `single_rack_cv/tools/inspect_cable_asset.py`
+- `single_rack_cv/tests/test_cable_mount_contract.py`
+- `single_rack_cv/config.py`
 
-import unittest
-import numpy as np
+**Workstation evidence:**
 
-from cable_geometry import (
-    compute_attachment_bounds,
-    compute_world_from_root_for_tip,
-    detect_plug_frame,
-    validate_mount_window,
-)
-
-
-def matrix(rotation=None, translation=(0.0, 0.0, 0.0)):
-    result = np.eye(4, dtype=np.float64)
-    if rotation is not None:
-        result[:3, :3] = np.asarray(rotation, dtype=np.float64)
-    result[:3, 3] = np.asarray(translation, dtype=np.float64)
-    return result
-
-
-class CableGeometryTests(unittest.TestCase):
-    def test_x_axis_with_cable_on_negative_side_selects_positive_nose(self):
-        frame = detect_plug_frame(
-            np.array([-0.018, -0.005, -0.006]),
-            np.array([+0.018, +0.005, +0.006]),
-            matrix(),
-            np.array([-0.20, 0.0, 0.0]),
-            axis_ratio_min=1.5,
-            cable_projection_min_m=0.002,
-        )
-        np.testing.assert_allclose(frame.tip_local_m, [0.018, 0.0, 0.0])
-        np.testing.assert_allclose(frame.nose_axis_local, [1.0, 0.0, 0.0])
-        np.testing.assert_allclose(frame.wide_axis_local, [0.0, 0.0, 1.0])
-
-    def test_y_axis_with_cable_on_positive_side_selects_negative_nose(self):
-        frame = detect_plug_frame(
-            np.array([-0.005, -0.018, -0.006]),
-            np.array([+0.005, +0.018, +0.006]),
-            matrix(),
-            np.array([0.0, +0.20, 0.0]),
-            axis_ratio_min=1.5,
-            cable_projection_min_m=0.002,
-        )
-        np.testing.assert_allclose(frame.tip_local_m, [0.0, -0.018, 0.0])
-        np.testing.assert_allclose(frame.nose_axis_local, [0.0, -1.0, 0.0])
-
-    def test_z_axis_is_supported(self):
-        frame = detect_plug_frame(
-            np.array([-0.005, -0.006, -0.018]),
-            np.array([+0.005, +0.006, +0.018]),
-            matrix(),
-            np.array([0.0, 0.0, -0.20]),
-            axis_ratio_min=1.5,
-            cable_projection_min_m=0.002,
-        )
-        np.testing.assert_allclose(frame.nose_axis_local, [0.0, 0.0, 1.0])
-```
-
-- [ ] **Step 2: Run and verify import failure**
-
-```bash
-cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
-/usr/bin/python3 -m unittest -v tests.test_cable_geometry
-```
-
-Expected: import failure because `cable_geometry.py` does not exist.
-
-- [ ] **Step 3: Implement immutable result types and strict transform validation**
-
-Create `cable_geometry.py`:
-
-```python
-from __future__ import annotations
-
-from dataclasses import dataclass
-import math
-import numpy as np
-
-
-@dataclass(frozen=True)
-class PlugFrame:
-    local_min_m: np.ndarray
-    local_max_m: np.ndarray
-    dimensions_m: np.ndarray
-    longitudinal_axis_index: int
-    wide_transverse_axis_index: int
-    cable_side_sign: int
-    tip_local_m: np.ndarray
-    nose_axis_local: np.ndarray
-    wide_axis_local: np.ndarray
-    narrow_axis_local: np.ndarray
-    plug_from_tip: np.ndarray
-
-
-@dataclass(frozen=True)
-class AttachmentBounds:
-    local_min_m: np.ndarray
-    local_max_m: np.ndarray
-    center_local_m: np.ndarray
-    size_m: np.ndarray
-
-
-@dataclass(frozen=True)
-class CableMountValidation:
-    frame_count: int
-    maximum_tip_error_m: float
-    maximum_axis_error_deg: float
-
-
-def _finite(value, shape, label):
-    array = np.asarray(value, dtype=np.float64)
-    if array.shape != shape or not np.all(np.isfinite(array)):
-        raise ValueError(f"{label} must be finite with shape {shape}")
-    return array
-
-
-def validate_transform(matrix, label):
-    matrix = _finite(matrix, (4, 4), label)
-    if not np.allclose(matrix[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9):
-        raise ValueError(f"{label} must be homogeneous")
-    rotation = matrix[:3, :3]
-    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-7):
-        raise ValueError(f"{label} rotation must be orthonormal")
-    if not math.isclose(float(np.linalg.det(rotation)), 1.0, abs_tol=1e-7):
-        raise ValueError(f"{label} rotation must be right handed")
-    return matrix
-```
-
-- [ ] **Step 4: Implement deterministic plug-frame detection**
-
-```python
-def detect_plug_frame(
-    local_min_m,
-    local_max_m,
-    world_from_plug,
-    cable_center_world_m,
-    *,
-    axis_ratio_min,
-    cable_projection_min_m,
-):
-    local_min = _finite(local_min_m, (3,), "local_min_m")
-    local_max = _finite(local_max_m, (3,), "local_max_m")
-    world_from_plug = validate_transform(world_from_plug, "world_from_plug")
-    cable_center_world = _finite(cable_center_world_m, (3,), "cable_center_world_m")
-    if np.any(local_max <= local_min):
-        raise ValueError("plug bounds must have positive dimensions")
-    dimensions = local_max - local_min
-    order = np.argsort(dimensions)
-    longitudinal = int(order[-1])
-    second = int(order[-2])
-    if dimensions[longitudinal] / dimensions[second] < axis_ratio_min:
-        raise ValueError("ambiguous longitudinal axis")
-    plug_center = 0.5 * (local_min + local_max)
-    plug_from_world = np.linalg.inv(world_from_plug)
-    cable_local = (plug_from_world @ np.r_[cable_center_world, 1.0])[:3]
-    projection = float(cable_local[longitudinal] - plug_center[longitudinal])
-    if abs(projection) < cable_projection_min_m:
-        raise ValueError("ambiguous cable-side projection")
-    cable_side_sign = 1 if projection > 0.0 else -1
-    nose_sign = -cable_side_sign
-    transverse = [index for index in range(3) if index != longitudinal]
-    wide = max(transverse, key=lambda index: dimensions[index])
-    narrow = next(index for index in transverse if index != wide)
-    nose_axis = np.zeros(3)
-    nose_axis[longitudinal] = nose_sign
-    wide_axis = np.zeros(3)
-    wide_axis[wide] = 1.0
-    narrow_axis = np.cross(wide_axis, nose_axis)
-    narrow_axis /= np.linalg.norm(narrow_axis)
-    tip = plug_center.copy()
-    tip[longitudinal] = (
-        local_max[longitudinal]
-        if nose_sign > 0
-        else local_min[longitudinal]
-    )
-    plug_from_tip = np.eye(4)
-    plug_from_tip[:3, 0] = narrow_axis
-    plug_from_tip[:3, 1] = wide_axis
-    plug_from_tip[:3, 2] = nose_axis
-    plug_from_tip[:3, 3] = tip
-    return PlugFrame(
-        local_min_m=local_min,
-        local_max_m=local_max,
-        dimensions_m=dimensions,
-        longitudinal_axis_index=longitudinal,
-        wide_transverse_axis_index=wide,
-        cable_side_sign=cable_side_sign,
-        tip_local_m=tip,
-        nose_axis_local=nose_axis,
-        wide_axis_local=wide_axis,
-        narrow_axis_local=narrow_axis,
-        plug_from_tip=plug_from_tip,
-    )
-```
-
-- [ ] **Step 5: Add failing tests for ambiguity, attachment trimming, exact root mapping, and one bad validation frame**
-
-```python
-    def test_ambiguous_axis_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "ambiguous longitudinal axis"):
-            detect_plug_frame(
-                np.array([-0.010, -0.009, -0.006]),
-                np.array([+0.010, +0.009, +0.006]),
-                matrix(),
-                np.array([-0.1, 0.0, 0.0]),
-                axis_ratio_min=1.5,
-                cable_projection_min_m=0.002,
-            )
-
-    def test_ambiguous_cable_projection_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "ambiguous cable-side projection"):
-            detect_plug_frame(
-                np.array([-0.018, -0.005, -0.006]),
-                np.array([+0.018, +0.005, +0.006]),
-                matrix(),
-                np.array([0.0, 0.1, 0.0]),
-                axis_ratio_min=1.5,
-                cable_projection_min_m=0.002,
-            )
-
-    def test_attachment_does_not_extend_past_cable_side(self):
-        frame = detect_plug_frame(
-            np.array([-0.018, -0.005, -0.006]),
-            np.array([+0.018, +0.005, +0.006]),
-            matrix(),
-            np.array([-0.2, 0.0, 0.0]),
-            axis_ratio_min=1.5,
-            cable_projection_min_m=0.002,
-        )
-        bounds = compute_attachment_bounds(frame, padding_m=0.0005)
-        self.assertAlmostEqual(bounds.local_min_m[0], -0.018)
-        self.assertAlmostEqual(bounds.local_max_m[0], +0.0185)
-        self.assertAlmostEqual(bounds.local_min_m[1], -0.0055)
-        self.assertAlmostEqual(bounds.local_max_m[1], +0.0055)
-
-    def test_root_mapping_puts_tip_frame_on_toolcenter(self):
-        world_from_root = matrix(translation=(0.2, -0.1, 0.4))
-        world_from_plug = matrix(translation=(0.5, 0.0, 0.2))
-        desired = matrix(translation=(0.7, -0.2, 1.3))
-        frame = detect_plug_frame(
-            np.array([-0.018, -0.005, -0.006]),
-            np.array([+0.018, +0.005, +0.006]),
-            world_from_plug,
-            np.array([0.1, 0.0, 0.2]),
-            axis_ratio_min=1.5,
-            cable_projection_min_m=0.002,
-        )
-        mounted = compute_world_from_root_for_tip(
-            world_from_root,
-            world_from_plug,
-            frame,
-            desired,
-        )
-        root_from_plug = np.linalg.inv(world_from_root) @ world_from_plug
-        actual = mounted @ root_from_plug @ frame.plug_from_tip
-        np.testing.assert_allclose(actual, desired, atol=1e-9)
-
-    def test_one_bad_validation_frame_fails_window(self):
-        samples = [(0.0001, 0.1)] * 29 + [(0.0006, 0.1)]
-        with self.assertRaisesRegex(RuntimeError, "tip mount error"):
-            validate_mount_window(samples, 30, 0.0005, 1.0)
-```
-
-- [ ] **Step 6: Implement attachment bounds, root mapping, angular error, and validation window**
-
-```python
-def compute_attachment_bounds(frame, padding_m):
-    if not math.isfinite(padding_m) or padding_m < 0.0:
-        raise ValueError("padding_m must be finite and nonnegative")
-    local_min = frame.local_min_m.copy()
-    local_max = frame.local_max_m.copy()
-    longitudinal = frame.longitudinal_axis_index
-    for axis in range(3):
-        if axis != longitudinal:
-            local_min[axis] -= padding_m
-            local_max[axis] += padding_m
-    if frame.nose_axis_local[longitudinal] > 0.0:
-        local_max[longitudinal] += padding_m
-    else:
-        local_min[longitudinal] -= padding_m
-    center = 0.5 * (local_min + local_max)
-    return AttachmentBounds(local_min, local_max, center, local_max - local_min)
-
-
-def compute_world_from_root_for_tip(
-    world_from_root,
-    world_from_plug,
-    frame,
-    desired_world_from_tip,
-):
-    world_from_root = validate_transform(world_from_root, "world_from_root")
-    world_from_plug = validate_transform(world_from_plug, "world_from_plug")
-    desired = validate_transform(desired_world_from_tip, "desired_world_from_tip")
-    root_from_plug = np.linalg.inv(world_from_root) @ world_from_plug
-    root_from_tip = root_from_plug @ frame.plug_from_tip
-    return desired @ np.linalg.inv(root_from_tip)
-
-
-def angular_error_deg(axis_a, axis_b):
-    axis_a = _finite(axis_a, (3,), "axis_a")
-    axis_b = _finite(axis_b, (3,), "axis_b")
-    axis_a = axis_a / np.linalg.norm(axis_a)
-    axis_b = axis_b / np.linalg.norm(axis_b)
-    cosine = float(np.clip(np.dot(axis_a, axis_b), -1.0, 1.0))
-    return math.degrees(math.acos(cosine))
-
-
-def validate_mount_window(
-    samples,
-    required_frames,
-    max_tip_error_m,
-    max_axis_error_deg,
-):
-    samples = list(samples)
-    if len(samples) != required_frames:
-        raise ValueError("mount validation requires the complete frame window")
-    max_tip = max(float(sample[0]) for sample in samples)
-    max_axis = max(float(sample[1]) for sample in samples)
-    if not math.isfinite(max_tip) or max_tip < 0.0:
-        raise ValueError("tip errors must be finite and nonnegative")
-    if not math.isfinite(max_axis) or max_axis < 0.0:
-        raise ValueError("axis errors must be finite and nonnegative")
-    if max_tip > max_tip_error_m:
-        raise RuntimeError("RJ45 tip mount error exceeds limit")
-    if max_axis > max_axis_error_deg:
-        raise RuntimeError("RJ45 axis error exceeds limit")
-    return CableMountValidation(required_frames, max_tip, max_axis)
-```
-
-- [ ] **Step 7: Run, compile, and commit**
-
-```bash
-/usr/bin/python3 -m unittest -v tests.test_cable_geometry
-/usr/bin/python3 -m py_compile cable_geometry.py tests/test_cable_geometry.py
-git add single_rack_cv/cable_geometry.py single_rack_cv/tests/test_cable_geometry.py
-git commit -m "Add automatic RJ45 mount geometry"
+```text
+tracked plug rigid body: /World/NetworkCable/E_crystal_head1_45
+deformable tail: /World/NetworkCable/E_line_35
+existing attachment: /World/NetworkCable/E_line_35/attachment
+attachment attachable0: /World/NetworkCable/E_line_35
+attachment attachable1: /World/NetworkCable/E_crystal_head1_45
+schema family: omniphysics
+supported: true
 ```
 
 ---
 
-### Task 2: Configuration and mandatory local asset-schema probe
+### Task 3: Correct configuration and topology contract
 
 **Files:**
-- Modify: `single_rack_cv/config.py:19-40, 177-224, 287-304`
-- Create: `single_rack_cv/tools/inspect_cable_asset.py`
-- Create: `single_rack_cv/tests/test_cable_mount_contract.py`
+- Modify: `single_rack_cv/config.py`
+- Modify: `single_rack_cv/tests/test_cable_mount_contract.py`
 
-**Interface produced:** `CableMountConfig`, exposed as `CONFIG.cable_mount`.
-
-- [ ] **Step 1: Write failing configuration tests**
+**Interfaces produced:**
 
 ```python
-from __future__ import annotations
+@dataclass(frozen=True)
+class CableMountConfig:
+    enabled: bool
+    usd_path: str
+    root_path: str
+    tracked_plug_path: str
+    fixed_joint_path: str
+    hand_link_name: str
+    finger_link_names: tuple[str, str]
+    finger_joint_names: tuple[str, str]
+    axis_ratio_min: float
+    cable_projection_min_m: float
+    finger_total_clearance_m: float
+    initial_settle_frames: int
+    validation_frames: int
+    max_tip_error_m: float
+    max_axis_error_deg: float
+```
 
-from pathlib import Path
-import unittest
+- [ ] **Step 1: Write failing tests for corrected configuration**
 
-from config import CONFIG
+Add to `tests/test_cable_mount_contract.py`:
 
-
-class CableMountContractTests(unittest.TestCase):
-    def test_canonical_paths_and_limits(self):
-        cfg = CONFIG.cable_mount
-        self.assertTrue(cfg.enabled)
-        self.assertEqual(
-            cfg.usd_path,
-            "/home/aayush/isaacsim_assets/Network cable 001/model_Networkcable1_69323.usd",
-        )
-        self.assertEqual(cfg.root_path, "/World/NetworkCable")
-        self.assertEqual(
-            cfg.tracked_plug_path,
-            "/World/NetworkCable/E_crystal_head1_45",
-        )
-        self.assertEqual(cfg.proxy_path, "/World/CableMountProxy")
-        self.assertEqual(cfg.fixed_joint_path, "/World/CableMountFixedJoint")
-        self.assertEqual(cfg.attachment_path, "/World/CableMountAttachment")
-        self.assertEqual(cfg.mask_path, "/World/CableMountAttachment/MaskShape")
-        self.assertEqual(cfg.validation_frames, 30)
-        self.assertAlmostEqual(cfg.attachment_padding_m, 0.0005)
-        self.assertAlmostEqual(cfg.finger_total_clearance_m, 0.001)
-        self.assertAlmostEqual(cfg.max_tip_error_m, 0.0005)
-        self.assertAlmostEqual(cfg.max_axis_error_deg, 1.0)
-
-    def test_feature_branch_uses_cuda_for_all_diagnostic_modes(self):
-        self.assertEqual(CONFIG.scene.device, "cuda:0")
+```python
+def test_config_uses_direct_rigid_plug_mount(self):
+    cfg = CONFIG.cable_mount
+    self.assertEqual(cfg.fixed_joint_path, "/World/CableMountFixedJoint")
+    self.assertEqual(cfg.hand_link_name, "panda_hand")
+    self.assertEqual(
+        cfg.finger_link_names,
+        ("panda_leftfinger", "panda_rightfinger"),
+    )
+    self.assertEqual(
+        cfg.finger_joint_names,
+        ("panda_finger_joint1", "panda_finger_joint2"),
+    )
+    self.assertFalse(hasattr(cfg, "proxy_path"))
+    self.assertFalse(hasattr(cfg, "attachment_path"))
+    self.assertFalse(hasattr(cfg, "mask_path"))
 ```
 
 - [ ] **Step 2: Run and verify failure**
 
 ```bash
+cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 /usr/bin/python3 -m unittest -v tests.test_cable_mount_contract
 ```
 
-Expected: `Config` has no `cable_mount` field.
+Expected: obsolete fields still exist and hand/finger fields are missing.
 
-- [ ] **Step 3: Add `CableMountConfig`, `CONFIG.cable_mount`, and CUDA scene device**
+- [ ] **Step 3: Replace obsolete fields in `CableMountConfig`**
 
-Add before `IKConfig`:
+Use:
 
 ```python
 @dataclass(frozen=True)
@@ -480,14 +157,18 @@ class CableMountConfig:
     )
     root_path: str = "/World/NetworkCable"
     tracked_plug_path: str = "/World/NetworkCable/E_crystal_head1_45"
-    proxy_path: str = "/World/CableMountProxy"
     fixed_joint_path: str = "/World/CableMountFixedJoint"
-    attachment_path: str = "/World/CableMountAttachment"
-    mask_path: str = "/World/CableMountAttachment/MaskShape"
     hand_link_name: str = "panda_hand"
+    finger_link_names: tuple[str, str] = (
+        "panda_leftfinger",
+        "panda_rightfinger",
+    )
+    finger_joint_names: tuple[str, str] = (
+        "panda_finger_joint1",
+        "panda_finger_joint2",
+    )
     axis_ratio_min: float = 1.5
     cable_projection_min_m: float = 0.002
-    attachment_padding_m: float = 0.0005
     finger_total_clearance_m: float = 0.001
     initial_settle_frames: int = 60
     validation_frames: int = 30
@@ -495,157 +176,156 @@ class CableMountConfig:
     max_axis_error_deg: float = 1.0
 ```
 
-Change `SceneConfig.device` from `"cpu"` to `"cuda:0"`. Add to `Config`:
-
-```python
-cable_mount: CableMountConfig = field(default_factory=CableMountConfig)
-```
-
-- [ ] **Step 4: Create the Isaac asset-schema inspector**
-
-Create `tools/inspect_cable_asset.py` with this lifecycle:
-
-1. Start `SimulationApp`.
-2. Create a new stage.
-3. Add the cable reference at `CONFIG.cable_mount.root_path`.
-4. Update the app for 30 frames.
-5. Validate the tracked plug.
-6. Walk upward from the plug for `HasAPI("OmniPhysicsDeformableBodyAPI")`.
-7. Search root descendants only when the ancestor walk finds no candidate.
-8. Require exactly one candidate.
-9. Write atomically to `camera_output/cable_asset_schema.json`.
-
-Required report:
-
-```python
-report = {
-    "asset_exists": asset_exists,
-    "root_valid": root_valid,
-    "tracked_plug_valid": tracked_plug_valid,
-    "tracked_plug_applied_schemas": tracked_plug_schemas,
-    "deformable_candidates": deformable_candidates,
-    "schema_family": schema_family,
-    "supported": supported,
-}
-```
-
-Exit codes:
-
-```text
-0 = exactly one supported OmniPhysics deformable body
-2 = composed asset is unsupported or ambiguous
-1 = file, stage, or runtime failure
-```
-
-- [ ] **Step 5: Add structural tests that prohibit legacy fallback**
-
-```python
-source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
-self.assertIn('HasAPI("OmniPhysicsDeformableBodyAPI")', source)
-self.assertIn("cable_asset_schema.json", source)
-self.assertNotIn("PhysxPhysicsAttachment", source)
-self.assertNotIn("PhysxAutoAttachmentAPI", source)
-```
-
-- [ ] **Step 6: Run tests and mandatory workstation schema probe**
+- [ ] **Step 4: Run, compile, and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v \
   tests.test_cable_geometry \
   tests.test_cable_mount_contract
-
-set -o pipefail
-"$HOME/isaacsim/python.sh" tools/inspect_cable_asset.py \
-  2>&1 | tee camera_output/cable_asset_schema_console.txt
-status=${PIPESTATUS[0]}
-cat camera_output/cable_asset_schema.json
-test "$status" -eq 0
-```
-
-Required before Task 3:
-
-```text
-schema_family=omniphysics
-supported=true
-exactly one deformable candidate
-```
-
-Kill switch: status `2` stops implementation. Convert or rebuild the cable asset with Isaac Sim 6 Omni Physics deformable schemas. Do not add a legacy fallback.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add single_rack_cv/config.py \
-        single_rack_cv/tools/inspect_cable_asset.py \
-        single_rack_cv/tests/test_cable_mount_contract.py
-git commit -m "Add cable mount configuration and schema gate"
+/usr/bin/python3 -m py_compile config.py tests/test_cable_mount_contract.py
+git add single_rack_cv/config.py single_rack_cv/tests/test_cable_mount_contract.py
+git commit -m "Correct cable mount configuration for rigid plug"
 ```
 
 ---
 
-### Task 3: GPU scene, cable loading, and one-time cable placement
+### Task 4: Cable topology verification and one-time placement
 
 **Files:**
 - Create: `single_rack_cv/cable_mount.py`
-- Modify: `single_rack_cv/sim.py`
 - Modify: `single_rack_cv/tests/test_runtime_wiring.py`
 
 **Interfaces produced:**
 
-- `CableMount.__init__(cfg: Config) -> None`
-- `CableMount.author_before_play(stage: Usd.Stage, hand_path: str, world_from_toolcenter: np.ndarray) -> None`
-
-- [ ] **Step 1: Add structural tests for GPU setup and no runtime cable teleport**
-
-```python
-self.assertIn('set_enabled_gpu_dynamics(True)', sim_source)
-self.assertIn('set_broadphase_type("GPU")', sim_source)
-self.assertIn('set_solver_type("TGS")', sim_source)
-self.assertNotIn('set_enabled_gpu_dynamics(False)', sim_source)
-self.assertIn('class CableMount', cable_mount_source)
-self.assertNotIn('set_world_pose', cable_mount_source)
-```
-
-- [ ] **Step 2: Create `CableMount` state and strict USD query helpers**
-
 ```python
 @dataclass(frozen=True)
-class CableMountDiagnostics:
+class CableTopology:
     deformable_body_path: str
+    existing_attachment_path: str
+    attachment_target0: str
+    attachment_target1: str
+
+@dataclass
+class CableMountDiagnostics:
     plug_dimensions_m: tuple[float, float, float]
-    longitudinal_axis_index: int
-    cable_side_sign: int
-    insertion_tip_local_m: tuple[float, float, float]
-    attachment_min_local_m: tuple[float, float, float]
-    attachment_max_local_m: tuple[float, float, float]
+    tip_local_m: tuple[float, float, float]
+    deformable_body_path: str
+    existing_attachment_path: str
     finger_total_gap_m: float
 
-
 class CableMount:
-    def __init__(self, cfg):
-        self.cfg = cfg
-        self.mount_cfg = cfg.cable_mount
-        self.stage = None
-        self.hand_path = ""
-        self.deformable_body_path = ""
-        self.plug_frame = None
-        self.attachment_bounds = None
-        self.diagnostics = None
+    def __init__(self, cfg: Config) -> None
+    def author_before_play(
+        self,
+        stage: Usd.Stage,
+        hand_path: str,
+        world_from_toolcenter: np.ndarray,
+    ) -> None
+    def fixed_joint_is_valid(self) -> bool
+    def built_in_attachment_is_preserved(self) -> bool
 ```
 
-Implement these exact private functions:
+- [ ] **Step 1: Write failing structural tests**
 
-- `_local_bounds(stage: Usd.Stage, path: str) -> tuple[np.ndarray, np.ndarray]`
-- `_world_bounds_center(stage: Usd.Stage, path: str) -> np.ndarray`
-- `_world_transform(stage: Usd.Stage, path: str) -> np.ndarray`
-- `_set_single_transform_op(stage: Usd.Stage, path: str, world_from_prim: np.ndarray) -> None`
-- `_discover_omniphysics_deformable(stage: Usd.Stage, root_path: str, plug_path: str) -> str`
+Add to `tests/test_runtime_wiring.py`:
 
-`_set_single_transform_op` may be called only before play and only for `/World/NetworkCable`.
+```python
+def test_cable_mount_uses_existing_rigid_plug_topology(self):
+    source = (ROOT / "cable_mount.py").read_text(encoding="utf-8")
+    self.assertIn("PhysicsRigidBodyAPI", source)
+    self.assertIn("PhysxAutoDeformableAttachmentAPI", source)
+    self.assertIn("built_in_attachment_is_preserved", source)
+    self.assertNotIn("CableMountProxy", source)
+    self.assertNotIn("create_auto_deformable_attachment", source)
+    self.assertNotIn("maskShapes", source)
+```
 
-- [ ] **Step 3: Switch the existing physics scene to GPU PhysX and verify it**
+- [ ] **Step 2: Run and verify import/file failure**
 
-Replace the current CPU/GPU-disable block with:
+```bash
+/usr/bin/python3 -m unittest -v tests.test_runtime_wiring
+```
+
+Expected: `cable_mount.py` does not exist.
+
+- [ ] **Step 3: Implement strict topology discovery**
+
+`CableMount._discover_topology(stage)` must:
+
+1. Validate `tracked_plug_path` exists.
+2. Require `tracked_plug.HasAPI(UsdPhysics.RigidBodyAPI)`.
+3. Find exactly one descendant under `root_path` with `HasAPI("OmniPhysicsDeformableBodyAPI")`.
+4. Find exactly one prim under the deformable body with `HasAPI("PhysxAutoDeformableAttachmentAPI")` whose two attachable relationships target the deformable body and tracked plug, in either relationship order.
+5. Record the exact paths and targets in `CableTopology`.
+6. Raise on zero, multiple, or mismatched candidates.
+
+Use helpers:
+
+```python
+def _relationship_targets(prim: Usd.Prim, names: tuple[str, ...]) -> list[str]:
+    for name in names:
+        relationship = prim.GetRelationship(name)
+        if relationship.IsValid():
+            targets = [str(path) for path in relationship.GetTargets()]
+            if targets:
+                return targets
+    return []
+```
+
+Support the relationship names actually reported by the probe and fail closed if neither exists.
+
+- [ ] **Step 4: Implement one-time asset placement**
+
+`author_before_play` must:
+
+1. Require the USD file.
+2. Add the cable reference at `root_path` before play.
+3. Discover and store topology.
+4. Query plug-local bounds, plug world transform, root world transform, and cable-root world-bounds center.
+5. Call `detect_plug_frame`.
+6. Call `compute_world_from_root_for_tip`.
+7. Clear root xform op order and author one matrix transform on `/World/NetworkCable`.
+8. Re-query the tip transform and require pre-play position error `< 1e-6 m` and axis error `< 1e-6 degree`.
+9. Never move the tracked plug child independently.
+
+- [ ] **Step 5: Run, compile, and commit**
+
+```bash
+/usr/bin/python3 -m unittest -v \
+  tests.test_cable_geometry \
+  tests.test_cable_mount_contract \
+  tests.test_runtime_wiring
+"$HOME/isaacsim/python.sh" -m py_compile cable_mount.py
+git add single_rack_cv/cable_mount.py single_rack_cv/tests/test_runtime_wiring.py
+git commit -m "Verify and place connected cable asset"
+```
+
+---
+
+### Task 5: GPU scene and direct hand-to-plug fixed joint
+
+**Files:**
+- Modify: `single_rack_cv/cable_mount.py`
+- Modify: `single_rack_cv/sim.py`
+- Modify: `single_rack_cv/tests/test_runtime_wiring.py`
+
+- [ ] **Step 1: Add failing structural tests for direct joint and GPU scene**
+
+```python
+def test_direct_plug_joint_and_gpu_scene_are_wired(self):
+    mount = (ROOT / "cable_mount.py").read_text(encoding="utf-8")
+    sim = (ROOT / "sim.py").read_text(encoding="utf-8")
+    self.assertIn("UsdPhysics.FixedJoint.Define", mount)
+    self.assertIn("tracked_plug_path", mount)
+    self.assertNotIn("CableMountProxy", mount)
+    self.assertIn("set_enabled_gpu_dynamics(True)", sim)
+    self.assertIn('set_broadphase_type("GPU")', sim)
+    self.assertIn('set_solver_type("TGS")', sim)
+```
+
+- [ ] **Step 2: Switch the shared scene to GPU PhysX and verify settings**
+
+Replace the CPU/GPU-disable block in `sim.py` with:
 
 ```python
 physics_scenes = SimulationManager.get_physics_scenes()
@@ -663,156 +343,63 @@ if physics_scene.get_solver_type() != "TGS":
     raise RuntimeError("Cable mount requires TGS")
 ```
 
-- [ ] **Step 4: Implement one-time cable loading and placement**
+- [ ] **Step 3: Create the direct fixed joint**
 
-`author_before_play` must perform these operations in order:
-
-1. Validate the USD file exists.
-2. Add the reference at `/World/NetworkCable`.
-3. Validate tracked plug and exactly one OmniPhysics deformable body.
-4. Query plug-local bounds, plug world transform, root world transform, and cable-root world center.
-5. Call `detect_plug_frame` and `compute_attachment_bounds`.
-6. Receive the startup ToolCenter transform computed from the existing hand pose and existing ToolCenter offset.
-7. Call `compute_world_from_root_for_tip`.
-8. Author exactly one transform op on the cable root.
-9. Re-query and require pre-play tip placement error `< 1e-6 m`.
-
-Do not move the tracked plug child independently.
-
-- [ ] **Step 5: Integrate cable authoring into `_build_scene` before play**
-
-In `SimulationRuntime.__init__`:
-
-```python
-self.cable_mount = None
-```
-
-In `_build_scene`, compute `startup_world_from_toolcenter` with the existing `hand_pose_to_tool_pose`, then call:
-
-```python
-if self.cfg.cable_mount.enabled:
-    self.cable_mount = CableMount(self.cfg)
-    self.cable_mount.author_before_play(
-        stage=stage,
-        hand_path=self._find_unique_descendant(
-            self.cfg.scene.franka_asset_path,
-            self.cfg.cable_mount.hand_link_name,
-        ),
-        world_from_toolcenter=startup_world_from_toolcenter,
-    )
-```
-
-- [ ] **Step 6: Test, compile, and commit**
-
-```bash
-/usr/bin/python3 -m unittest -v \
-  tests.test_cable_geometry \
-  tests.test_cable_mount_contract \
-  tests.test_runtime_wiring
-"$HOME/isaacsim/python.sh" -m py_compile cable_mount.py sim.py
-git add single_rack_cv/cable_mount.py \
-        single_rack_cv/sim.py \
-        single_rack_cv/tests/test_runtime_wiring.py
-git commit -m "Load and place pregrasped deformable cable"
-```
-
----
-
-### Task 4: Rigid proxy, fixed joint, mask, and auto deformable attachment
-
-**Files:**
-- Modify: `single_rack_cv/cable_mount.py`
-- Modify: `single_rack_cv/tests/test_runtime_wiring.py`
-
-**Interfaces produced:**
-
-- `CableMount.fixed_joint_is_valid() -> bool`
-- `CableMount.attachment_is_valid() -> bool`
-
-- [ ] **Step 1: Add failing structural tests for current attachment APIs**
-
-```python
-self.assertIn("UsdPhysics.RigidBodyAPI.Apply", source)
-self.assertIn("UsdPhysics.CollisionAPI.Apply", source)
-self.assertIn("UsdPhysics.FixedJoint.Define", source)
-self.assertIn("deformableUtils.create_auto_deformable_attachment", source)
-self.assertIn('physxAutoDeformableAttachment:maskShapes', source)
-self.assertIn("UsdPhysics.FilteredPairsAPI", source)
-self.assertNotIn("PhysxPhysicsAttachment", source)
-self.assertNotIn("PhysxAutoAttachmentAPI", source)
-```
-
-- [ ] **Step 2: Create a world-level hidden rigid proxy matching the attachment volume**
-
-Use `UsdGeom.Cube.Define(stage, cfg.proxy_path)`, set size `1.0`, and author a transform derived from the mounted plug transform plus `attachment_bounds.center_local_m` and `attachment_bounds.size_m`. Apply:
-
-```python
-UsdPhysics.RigidBodyAPI.Apply(proxy_prim).CreateRigidBodyEnabledAttr(True)
-UsdPhysics.CollisionAPI.Apply(proxy_prim)
-UsdPhysics.MassAPI.Apply(proxy_prim).CreateMassAttr(0.001)
-UsdGeom.Imageable(proxy_prim).MakeInvisible()
-```
-
-The proxy remains at `/World/CableMountProxy`; do not parent it below `panda_hand`.
-
-- [ ] **Step 3: Create a fixed joint preserving the proxy pose**
+After one-time placement and before play:
 
 ```python
 world_from_hand = _world_transform(stage, self.hand_path)
-world_from_proxy = _world_transform(stage, cfg.proxy_path)
-hand_from_proxy = np.linalg.inv(world_from_hand) @ world_from_proxy
-joint = UsdPhysics.FixedJoint.Define(stage, Sdf.Path(cfg.fixed_joint_path))
+world_from_plug = _world_transform(stage, self.mount_cfg.tracked_plug_path)
+hand_from_plug = np.linalg.inv(world_from_hand) @ world_from_plug
+joint = UsdPhysics.FixedJoint.Define(
+    stage,
+    Sdf.Path(self.mount_cfg.fixed_joint_path),
+)
 joint.CreateBody0Rel().SetTargets([Sdf.Path(self.hand_path)])
-joint.CreateBody1Rel().SetTargets([Sdf.Path(cfg.proxy_path)])
-joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*hand_from_proxy[:3, 3]))
-joint.CreateLocalRot0Attr().Set(_matrix_to_gf_quat(hand_from_proxy[:3, :3]))
+joint.CreateBody1Rel().SetTargets([
+    Sdf.Path(self.mount_cfg.tracked_plug_path)
+])
+joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*hand_from_plug[:3, 3]))
+joint.CreateLocalRot0Attr().Set(
+    _matrix_to_gf_quat(hand_from_plug[:3, :3])
+)
 joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0))
 joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0))
 ```
 
-- [ ] **Step 4: Create the current auto attachment, then create its mask cube**
+`fixed_joint_is_valid()` must verify type and exact body targets.
 
-Call the official helper first so it creates the attachment scope:
+- [ ] **Step 4: Filter only hand/finger collisions**
+
+Resolve `panda_hand`, `panda_leftfinger`, and `panda_rightfinger` dynamically under the Franka asset. Apply `UsdPhysics.FilteredPairsAPI` to the tracked plug and set only those three rigid-body paths as filtered targets. Do not filter rack, port, tail, ground, or the full robot.
+
+- [ ] **Step 5: Verify built-in attachment preservation**
+
+Store the attachment path and targets before joint authoring. `built_in_attachment_is_preserved()` must re-read the prim and require:
+
+```text
+same prim path
+PhysxAutoDeformableAttachmentAPI still applied
+same two attachable targets
+no mask relationship added
+```
+
+- [ ] **Step 6: Integrate pre-play authoring into `_build_scene`**
+
+Before `app_utils.play()`:
 
 ```python
-from omni.physx.scripts import deformableUtils
-
-deformableUtils.create_auto_deformable_attachment(
-    stage,
-    cfg.attachment_path,
-    self.deformable_body_path,
-    cfg.proxy_path,
+self.cable_mount = CableMount(self.cfg)
+self.cable_mount.author_before_play(
+    stage=stage,
+    hand_path=hand_path,
+    world_from_toolcenter=startup_world_from_toolcenter,
 )
 ```
 
-Then define `UsdGeom.Cube` at `cfg.mask_path`, transform it to the attachment volume, and configure:
+Compute `startup_world_from_toolcenter` from the existing fixed startup hand pose and unchanged ToolCenter offset.
 
-```python
-attachment_prim = stage.GetPrimAtPath(cfg.attachment_path)
-if not attachment_prim.HasAPI("PhysxAutoDeformableAttachmentAPI"):
-    raise RuntimeError("Auto deformable attachment API was not authored")
-attachment_prim.GetRelationship(
-    "physxAutoDeformableAttachment:maskShapes"
-).SetTargets([Sdf.Path(cfg.mask_path)])
-attachment_prim.GetAttribute(
-    "physxAutoDeformableAttachment:deformableVertexOverlapOffset"
-).Set(cfg.attachment_padding_m)
-attachment_prim.GetAttribute(
-    "physxAutoDeformableAttachment:enableCollisionFiltering"
-).Set(True)
-```
-
-Do not set unsupported rigid-surface sampling fields.
-
-- [ ] **Step 5: Filter proxy collisions against Franka rigid bodies only**
-
-Apply `UsdPhysics.FilteredPairsAPI` to the proxy and set every Franka rigid-body descendant path as a filtered target. Do not filter cable collisions against the rack or ground.
-
-- [ ] **Step 6: Implement strict validity methods**
-
-`fixed_joint_is_valid()` verifies prim type plus both body relationships. `attachment_is_valid()` verifies the current API, both attachable relationships, and exactly one mask target.
-
-- [ ] **Step 7: Test and commit**
+- [ ] **Step 7: Test, compile, and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v \
@@ -820,14 +407,14 @@ Apply `UsdPhysics.FilteredPairsAPI` to the proxy and set every Franka rigid-body
   tests.test_cable_mount_contract \
   tests.test_runtime_wiring
 "$HOME/isaacsim/python.sh" -m py_compile cable_mount.py sim.py
-git add single_rack_cv/cable_mount.py \
+git add single_rack_cv/cable_mount.py single_rack_cv/sim.py \
         single_rack_cv/tests/test_runtime_wiring.py
-git commit -m "Attach deformable connector to Franka hand"
+git commit -m "Joint rigid RJ45 plug directly to Franka hand"
 ```
 
 ---
 
-### Task 5: Cosmetic fingers and bounded 30-frame mount validation
+### Task 6: Cosmetic fingers and bounded mount validation
 
 **Files:**
 - Modify: `single_rack_cv/cable_mount.py`
@@ -836,50 +423,31 @@ git commit -m "Attach deformable connector to Franka hand"
 
 **Interfaces produced:**
 
-- `CableMount.configure_fingers(articulation: Articulation) -> None`
-- `CableMount.sample_validation(runtime: SimulationRuntime) -> tuple[float, float]`
-- `CableMount.log_success(validation: CableMountValidation) -> None`
-- `SimulationRuntime.prepare_for_perception() -> None`
+```python
+CableMount.configure_fingers(articulation: Articulation) -> None
+CableMount.sample_validation(runtime: SimulationRuntime) -> tuple[float, float]
+CableMount.log_success(validation: CableMountValidation) -> None
+SimulationRuntime.prepare_for_perception() -> None
+```
 
 - [ ] **Step 1: Implement cosmetic finger positioning**
 
-`configure_fingers` must:
+Read the plug width on `wide_transverse_axis_index`, add `finger_total_clearance_m`, divide by two, resolve both configured finger joints, clamp to articulation limits, set current positions and position targets, and store the total gap in diagnostics. No gripper action is added to the main loop.
 
-1. Read plug width on `wide_transverse_axis_index`.
-2. Add `finger_total_clearance_m`.
-3. Divide by two.
-4. Resolve `panda_finger_joint1` and `panda_finger_joint2` by name.
-5. Query and normalize articulation joint limits.
-6. Clamp within limits.
-7. Set both current positions and position targets.
-8. Store final total gap in diagnostics.
+- [ ] **Step 2: Implement current-frame validation sampling**
 
-Do not add a gripper action to the main loop.
+Each sample must:
 
-- [ ] **Step 2: Implement current-frame mount measurement**
+1. Compute actual plug-tip world position and nose axis.
+2. Update `/World/ToolCenter` from the real hand pose.
+3. Compute tip and axis errors.
+4. Require direct fixed-joint validity.
+5. Require tracked-plug rigid-body validity.
+6. Require built-in attachment preservation.
+7. Require deformable-tail validity.
+8. Require GPU dynamics enabled.
 
-```python
-world_from_plug = _world_transform(
-    self.stage,
-    self.mount_cfg.tracked_plug_path,
-)
-tip_world = (
-    world_from_plug @ np.r_[self.plug_frame.tip_local_m, 1.0]
-)[:3]
-nose_world = (
-    world_from_plug[:3, :3]
-    @ self.plug_frame.nose_axis_local
-)
-runtime._update_actual_tool_frame(runtime.ik)
-tool_position, tool_orientation = runtime.ik.actual_tool.get_world_pose()
-tool_axis = quaternion_wxyz_to_matrix(tool_orientation)[:, 2]
-tip_error_m = float(np.linalg.norm(tip_world - tool_position))
-axis_error_deg = angular_error_deg(nose_world, tool_axis)
-```
-
-Before returning, require valid fixed joint, attachment, deformable body, and enabled GPU dynamics.
-
-- [ ] **Step 3: Implement bounded `prepare_for_perception()` with no unbounded loop**
+- [ ] **Step 3: Implement bounded `prepare_for_perception()`**
 
 ```python
 def prepare_for_perception(self) -> None:
@@ -916,35 +484,28 @@ def prepare_for_perception(self) -> None:
     self.cable_mount.log_success(validation)
 ```
 
-- [ ] **Step 4: Configure fingers after IK creation**
+- [ ] **Step 4: Require complete diagnostics**
 
-```python
-if self.cable_mount is not None:
-    self.cable_mount.configure_fingers(self.ik.articulation)
-```
-
-- [ ] **Step 5: Require complete diagnostics**
-
-Successful startup must print these labels with measured values:
+Print:
 
 ```text
 [CABLE MOUNT]
 tracked plug
-resolved deformable body
+deformable body
+preserved attachment
 plug dimensions mm
 insertion-tip local position m
-attachment bounds local m
 finger total gap mm
 validation frames: 30/30
 maximum tip error mm
 maximum axis error deg
 fixed joint: valid
-attachment: valid
+built-in attachment: preserved
 cable tail: deformable
 GPU dynamics: enabled
 ```
 
-- [ ] **Step 6: Test, compile, and commit**
+- [ ] **Step 5: Test, compile, and commit**
 
 ```bash
 /usr/bin/python3 -m unittest -v \
@@ -952,26 +513,22 @@ GPU dynamics: enabled
   tests.test_cable_mount_contract \
   tests.test_runtime_wiring
 "$HOME/isaacsim/python.sh" -m py_compile cable_geometry.py cable_mount.py sim.py
-git add single_rack_cv/cable_geometry.py \
-        single_rack_cv/cable_mount.py \
-        single_rack_cv/sim.py \
+git add single_rack_cv/cable_mount.py single_rack_cv/sim.py \
         single_rack_cv/tests/test_cable_mount_contract.py \
         single_rack_cv/tests/test_runtime_wiring.py
-git commit -m "Validate cable mount before perception"
+git commit -m "Validate direct cable mount before perception"
 ```
 
 ---
 
-### Task 6: Gate YOLOE startup and preserve the canonical controller
+### Task 7: Gate YOLOE and preserve the canonical controller
 
 **Files:**
-- Modify: `single_rack_cv/main.py:117-160`
+- Modify: `single_rack_cv/main.py`
 - Modify: `single_rack_cv/tests/test_runtime_wiring.py`
 - Modify: `single_rack_cv/README.md`
 
-**Interface consumed:** `SimulationRuntime.prepare_for_perception() -> None`.
-
-- [ ] **Step 1: Add exact startup-order tests**
+- [ ] **Step 1: Add startup-order and safety tests**
 
 ```python
 prepare = source.index("runtime.prepare_for_perception()")
@@ -983,44 +540,21 @@ self.assertLess(prepare, yolo)
 self.assertLess(yolo, loop)
 ```
 
-Add targeted source checks proving no post-play transform is applied to the cable root, tracked plug, proxy, or mask, and no insertion/release function exists.
+Also require no post-play transform writes to cable/plug, no proxy, no new auto attachment, no release, and no insertion function.
 
-- [ ] **Step 2: Move debug and YOLOE initialization behind mount validation**
+- [ ] **Step 2: Move debug and YOLOE initialization behind validation**
 
 ```python
-runtime = SimulationRuntime(
-    simulation_app=simulation_app,
-    cfg=CONFIG,
-)
+runtime = SimulationRuntime(simulation_app=simulation_app, cfg=CONFIG)
 runtime.prepare_for_perception()
 debug = DebugOutputs(CONFIG)
 detector = YOLOEPortDetector(CONFIG.yoloe)
 detector.initialize()
 ```
 
-Any mount exception follows the existing fatal cleanup path and closes Isaac Sim.
+- [ ] **Step 3: Update README truth claims and commands**
 
-- [ ] **Step 3: Update README commands and truth claims**
-
-Document:
-
-- pregrasped permanent connector mount,
-- deformable tail,
-- GPU physics requirement,
-- ToolCenter physically represents the RJ45 tip without changing its calibrated numerical transform,
-- runtime still ends at pre-insert hold,
-- schema probe command,
-- normal run command,
-- exact mount gates,
-- kill switch.
-
-Commands:
-
-```bash
-cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
-"$HOME/isaacsim/python.sh" tools/inspect_cable_asset.py
-"$HOME/isaacsim/python.sh" main.py
-```
+Document the direct rigid-plug joint, preserved built-in deformable attachment, GPU requirement, RJ45-tip ToolCenter meaning, schema/topology probe, normal run command, mount limits, and no-insertion boundary.
 
 - [ ] **Step 4: Run full tests and commit**
 
@@ -1035,95 +569,57 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
   tests.test_automatic_port_ground_truth \
   tests.test_cable_geometry \
   tests.test_cable_mount_contract
-
 "$HOME/isaacsim/python.sh" -m py_compile \
   cable_geometry.py cable_mount.py config.py sim.py main.py \
   tools/inspect_cable_asset.py
-
 git diff --check
-git add single_rack_cv/main.py \
-        single_rack_cv/tests/test_runtime_wiring.py \
+git add single_rack_cv/main.py single_rack_cv/tests/test_runtime_wiring.py \
         single_rack_cv/README.md
-git commit -m "Gate visual servo on cable mount validation"
+git commit -m "Gate visual servo on direct cable mount validation"
 ```
 
 ---
 
-### Task 7: Isaac workstation qualification and kill switch
+### Task 8: Workstation qualification and kill switch
 
-**Files:**
-- No source changes unless a measured defect is found.
-- Generated evidence remains under ignored `single_rack_cv/camera_output/`.
-
-- [ ] **Step 1: Confirm branch and clean worktree**
+- [ ] **Step 1: Run topology probe**
 
 ```bash
-cd "$HOME/Isaacsim-Scripts" || exit 1
-git switch feature/pregrasped-cable-mount
-git pull --ff-only origin feature/pregrasped-cable-mount
-git status --short
-cd single_rack_cv || exit 1
+cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
+"$HOME/isaacsim/python.sh" tools/inspect_cable_asset.py
 ```
 
-- [ ] **Step 2: Run schema probe**
+Require the same rigid plug, deformable tail, and built-in attachment targets discovered during planning.
+
+- [ ] **Step 2: Run complete tests and compile checks**
+
+Use the Task 7 commands; every command must exit `0`.
+
+- [ ] **Step 3: Run one nominal cable-mounted simulation**
 
 ```bash
-set -o pipefail
-"$HOME/isaacsim/python.sh" tools/inspect_cable_asset.py \
-  2>&1 | tee camera_output/cable_asset_schema_console.txt
-schema_status=${PIPESTATUS[0]}
-cat camera_output/cable_asset_schema.json
-test "$schema_status" -eq 0
-```
-
-Required: exactly one deformable candidate, `schema_family=omniphysics`, and `supported=true`.
-
-- [ ] **Step 3: Run complete tests and compile checks**
-
-```bash
-"$HOME/isaacsim/python.sh" -m unittest -v \
-  tests.test_front_plane \
-  tests.test_live_control \
-  tests.test_runtime_wiring \
-  tests.test_benchmark \
-  tests.test_ground_truth \
-  tests.test_repo_cleanliness \
-  tests.test_automatic_port_ground_truth \
-  tests.test_cable_geometry \
-  tests.test_cable_mount_contract
-
-"$HOME/isaacsim/python.sh" -m py_compile \
-  cable_geometry.py cable_mount.py config.py sim.py main.py \
-  tools/inspect_cable_asset.py
-```
-
-- [ ] **Step 4: Run one nominal cable-mounted simulation**
-
-```bash
-rm -f camera_output/cable_mount_nominal_console.txt
 set -o pipefail
 "$HOME/isaacsim/python.sh" main.py \
   2>&1 | tee camera_output/cable_mount_nominal_console.txt
-status=${PIPESTATUS[0]}
-printf 'runtime status: %s\n' "$status"
 ```
 
 Allow the run to reach `RGB STEREO VISUAL SERVO COMPLETE`, then stop with Ctrl-C.
 
-- [ ] **Step 5: Require logged evidence**
+- [ ] **Step 4: Require logged evidence**
 
 ```bash
 grep -F "[CABLE MOUNT]" camera_output/cable_mount_nominal_console.txt
 grep -F "validation frames: 30/30" camera_output/cable_mount_nominal_console.txt
 grep -F "fixed joint: valid" camera_output/cable_mount_nominal_console.txt
-grep -F "attachment: valid" camera_output/cable_mount_nominal_console.txt
+grep -F "built-in attachment: preserved" camera_output/cable_mount_nominal_console.txt
 grep -F "cable tail: deformable" camera_output/cable_mount_nominal_console.txt
 grep -F "GPU dynamics: enabled" camera_output/cable_mount_nominal_console.txt
 grep -F "RGB STEREO VISUAL SERVO COMPLETE" camera_output/cable_mount_nominal_console.txt
-grep -F "next action: hold; no insertion is commanded." camera_output/cable_mount_nominal_console.txt
+grep -F "next action: hold; no insertion is commanded." \
+  camera_output/cable_mount_nominal_console.txt
 ```
 
-Require numeric evidence:
+Require:
 
 ```text
 maximum tip error <= 0.500 mm
@@ -1132,48 +628,12 @@ physical ToolCenter tracking error <= 0.300 mm
 maximum target step <= 1.000 mm
 ```
 
-- [ ] **Step 6: Inspect viewport behavior**
+- [ ] **Step 5: Inspect viewport behavior**
 
-Require:
+Require the connector to point toward the rack, sit between fingers without obvious interpenetration, remain fixed relative to the hand, preserve the flexible tail, avoid camera occlusion, and produce no invalid-joint or attachment errors.
 
-- connector points toward rack,
-- connector sits between fingers without obvious interpenetration,
-- tail bends and settles rather than moving as a rigid stick,
-- connector does not drift relative to hand,
-- cable and fingers do not block cameras,
-- no invalid attachment actor, rest-shape, or GPU-dynamics errors.
+- [ ] **Step 6: Apply kill switch**
 
-- [ ] **Step 7: Apply kill switch**
+Do not merge or begin insertion if the direct joint is unstable, the built-in attachment changes or fails, the tail destabilizes the arm/cameras, any mount limit fails, nominal alignment fails, or physical tracking error exceeds `0.3 mm`.
 
-Do not merge or begin insertion when any of these occur:
-
-- unsupported or ambiguous schema,
-- invalid attachment actor warning,
-- any validation frame exceeds `0.5 mm` tip error,
-- any validation frame exceeds `1 degree` axis error,
-- cable destabilizes arm or cameras,
-- nominal alignment fails under GPU dynamics,
-- physical tracking error exceeds `0.3 mm`.
-
-Fix the actual asset, attachment, or physics defect. Do not widen limits, rigidify the complete cable, or add per-frame transforms.
-
-- [ ] **Step 8: Record final evidence and repository cleanliness**
-
-```bash
-git status --short
-git diff --check
-git ls-files single_rack_cv/camera_output
-```
-
-Record:
-
-```text
-schema report path and supported result
-unit-test pass count
-maximum tip error
-maximum axis error
-physical ToolCenter tracking error
-visual-servo completion evidence
-confirmation that tail remained deformable
-confirmation that no insertion path was added
-```
+Do not widen limits, duplicate attachments, rigidify the complete cable, or add per-frame transforms.
