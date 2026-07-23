@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect the configured cable for Isaac Sim 6 Omni Physics deformable schemas."""
+"""Inspect the configured cable for Isaac Sim 6 deformable and connection topology."""
 
 from __future__ import annotations
 
@@ -36,8 +36,18 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 
 
 def _has_omniphysics_deformable(prim) -> bool:
-    # Isaac Sim 6 codeless schemas are queried by API-schema token.
     return bool(prim.HasAPI("OmniPhysicsDeformableBodyAPI"))
+
+
+def _relationship_targets(prim, relationship_name: str) -> list[str]:
+    relationship = prim.GetRelationship(relationship_name)
+    if not relationship.IsValid():
+        return []
+    return [str(path) for path in relationship.GetTargets()]
+
+
+def _path_is_below(path: str, root_path: str, Sdf) -> bool:
+    return Sdf.Path(path).HasPrefix(Sdf.Path(root_path))
 
 
 def _candidate_paths(stage, root_path: str, plug_path: str) -> list[str]:
@@ -63,6 +73,77 @@ def _candidate_paths(stage, root_path: str, plug_path: str) -> list[str]:
     return sorted(set(candidates))
 
 
+def _scan_asset_connections(stage, root_path: str):
+    from pxr import Sdf, UsdPhysics
+
+    joint_connections: list[dict[str, object]] = []
+    auto_attachments: list[dict[str, object]] = []
+    attachment_like_prims: list[dict[str, object]] = []
+
+    for prim in stage.Traverse():
+        path = str(prim.GetPath())
+        applied = list(prim.GetAppliedSchemas())
+        type_name = prim.GetTypeName()
+
+        if prim.IsA(UsdPhysics.Joint):
+            body0 = _relationship_targets(prim, "physics:body0")
+            body1 = _relationship_targets(prim, "physics:body1")
+            targets = body0 + body1
+            if any(_path_is_below(target, root_path, Sdf) for target in targets):
+                joint_connections.append(
+                    {
+                        "path": path,
+                        "type_name": type_name,
+                        "body0": body0,
+                        "body1": body1,
+                        "applied_schemas": applied,
+                    }
+                )
+
+        if prim.HasAPI("PhysxAutoDeformableAttachmentAPI"):
+            attachable0 = _relationship_targets(
+                prim,
+                "physxAutoDeformableAttachment:attachable0",
+            )
+            attachable1 = _relationship_targets(
+                prim,
+                "physxAutoDeformableAttachment:attachable1",
+            )
+            mask_shapes = _relationship_targets(
+                prim,
+                "physxAutoDeformableAttachment:maskShapes",
+            )
+            targets = attachable0 + attachable1
+            if any(_path_is_below(target, root_path, Sdf) for target in targets):
+                auto_attachments.append(
+                    {
+                        "path": path,
+                        "attachable0": attachable0,
+                        "attachable1": attachable1,
+                        "mask_shapes": mask_shapes,
+                        "applied_schemas": applied,
+                    }
+                )
+
+        if (
+            "Attachment" in type_name
+            or any("Attachment" in schema for schema in applied)
+        ):
+            attachment_like_prims.append(
+                {
+                    "path": path,
+                    "type_name": type_name,
+                    "applied_schemas": applied,
+                }
+            )
+
+    return (
+        sorted(joint_connections, key=lambda item: str(item["path"])),
+        sorted(auto_attachments, key=lambda item: str(item["path"])),
+        sorted(attachment_like_prims, key=lambda item: str(item["path"])),
+    )
+
+
 def main() -> int:
     cfg = CONFIG.cable_mount
     output_path = CONFIG.camera.output_dir / "cable_asset_schema.json"
@@ -74,8 +155,14 @@ def main() -> int:
         "asset_exists": False,
         "root_valid": False,
         "tracked_plug_valid": False,
+        "tracked_plug_parent_path": "",
+        "tracked_plug_is_rigid_body": False,
         "tracked_plug_applied_schemas": [],
         "deformable_candidates": [],
+        "deformable_candidate_schemas": {},
+        "joint_connections": [],
+        "auto_deformable_attachments": [],
+        "attachment_like_prims": [],
         "schema_family": "unsupported",
         "supported": False,
         "fatal_error": "",
@@ -98,6 +185,7 @@ def main() -> int:
 
         import omni.usd
         from isaacsim.core.utils import stage as stage_utils
+        from pxr import UsdPhysics
 
         omni.usd.get_context().new_stage()
         for _ in range(5):
@@ -117,15 +205,33 @@ def main() -> int:
         plug = stage.GetPrimAtPath(cfg.tracked_plug_path)
         report["root_valid"] = bool(root.IsValid())
         report["tracked_plug_valid"] = bool(plug.IsValid())
-        report["tracked_plug_applied_schemas"] = (
-            list(plug.GetAppliedSchemas()) if plug.IsValid() else []
-        )
+        if plug.IsValid():
+            report["tracked_plug_parent_path"] = str(plug.GetParent().GetPath())
+            report["tracked_plug_is_rigid_body"] = bool(
+                plug.HasAPI(UsdPhysics.RigidBodyAPI)
+            )
+            report["tracked_plug_applied_schemas"] = list(
+                plug.GetAppliedSchemas()
+            )
+
         candidates = _candidate_paths(
             stage,
             cfg.root_path,
             cfg.tracked_plug_path,
         )
         report["deformable_candidates"] = candidates
+        report["deformable_candidate_schemas"] = {
+            candidate: list(
+                stage.GetPrimAtPath(candidate).GetAppliedSchemas()
+            )
+            for candidate in candidates
+        }
+
+        (
+            report["joint_connections"],
+            report["auto_deformable_attachments"],
+            report["attachment_like_prims"],
+        ) = _scan_asset_connections(stage, cfg.root_path)
 
         supported = (
             root.IsValid()
