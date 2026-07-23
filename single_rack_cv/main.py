@@ -132,15 +132,17 @@ try:
         }
     )
 
+    from cable_runtime import CableMountedSimulationRuntime
     from debug import DebugOutputs
     from live_control import refine_live_observation
     from perception import YOLOEPortDetector, process_stereo_port
-    from sim import SimulationRuntime, warn
+    from sim import warn
 
-    runtime = SimulationRuntime(
+    runtime = CableMountedSimulationRuntime(
         simulation_app=simulation_app,
         cfg=CONFIG,
     )
+    runtime.prepare_for_perception()
     debug = DebugOutputs(CONFIG)
     detector = YOLOEPortDetector(CONFIG.yoloe)
     detector.initialize()
