@@ -19,15 +19,27 @@ class CableMountContractTests(unittest.TestCase):
             cfg.tracked_plug_path,
             "/World/NetworkCable/E_crystal_head1_45",
         )
-        self.assertEqual(cfg.proxy_path, "/World/CableMountProxy")
         self.assertEqual(cfg.fixed_joint_path, "/World/CableMountFixedJoint")
-        self.assertEqual(cfg.attachment_path, "/World/CableMountAttachment")
-        self.assertEqual(cfg.mask_path, "/World/CableMountAttachment/MaskShape")
         self.assertEqual(cfg.validation_frames, 30)
-        self.assertAlmostEqual(cfg.attachment_padding_m, 0.0005)
         self.assertAlmostEqual(cfg.finger_total_clearance_m, 0.001)
         self.assertAlmostEqual(cfg.max_tip_error_m, 0.0005)
         self.assertAlmostEqual(cfg.max_axis_error_deg, 1.0)
+
+    def test_config_uses_direct_rigid_plug_mount(self):
+        cfg = CONFIG.cable_mount
+        self.assertEqual(cfg.hand_link_name, "panda_hand")
+        self.assertEqual(
+            cfg.finger_link_names,
+            ("panda_leftfinger", "panda_rightfinger"),
+        )
+        self.assertEqual(
+            cfg.finger_joint_names,
+            ("panda_finger_joint1", "panda_finger_joint2"),
+        )
+        self.assertFalse(hasattr(cfg, "proxy_path"))
+        self.assertFalse(hasattr(cfg, "attachment_path"))
+        self.assertFalse(hasattr(cfg, "mask_path"))
+        self.assertFalse(hasattr(cfg, "attachment_padding_m"))
 
     def test_feature_branch_uses_cuda_for_all_diagnostic_modes(self):
         self.assertEqual(CONFIG.scene.device, "cuda:0")
