@@ -2,38 +2,19 @@
 
 **Date:** 2026-07-23  
 **Branch:** `feature/pregrasped-cable-mount`  
-**Status:** Approved design awaiting implementation plan
+**Status:** Approved concept awaiting written-spec review
 
 ## Goal
 
-Start the canonical `single_rack_cv` simulation with the network cable already held by the Franka so the project can focus on port perception, pre-insert alignment, and later insertion rather than grasp acquisition.
+Start `single_rack_cv` with the network cable already mounted in the Franka hand. The project will test port perception, pre-insert alignment, and later insertion—not grasp acquisition.
 
-The RJ45 connector tip becomes the physical meaning of `/World/ToolCenter`. The connector remains permanently mounted for the entire run. The cable tail remains deformable.
+The RJ45 insertion tip becomes the physical meaning of `/World/ToolCenter`. The connector remains permanently attached for the complete run while the cable tail remains deformable.
 
-## Scope
+## Non-goals
 
-This change adds:
+This change does not add grasping, grip-force validation, slip, release, regrasp, insertion motion, per-frame cable teleporting, or a manual connector-depth offset.
 
-- the provided network-cable USD,
-- automatic RJ45 insertion-tip detection,
-- automatic rack-facing cable orientation,
-- a permanent hand-mounted rigid proxy,
-- a deformable-to-rigid connector attachment,
-- GPU PhysX dynamics,
-- a cosmetic symmetric finger opening around the connector,
-- startup validation and diagnostics.
-
-This change does **not** add:
-
-- grasp acquisition,
-- grip-force testing,
-- connector slip,
-- release or regrasp,
-- insertion motion,
-- a per-frame cable teleport,
-- manual connector depth offsets.
-
-## Required asset paths
+## Required asset
 
 ```python
 NETWORK_CABLE_USD_PATH = (
@@ -46,237 +27,246 @@ TRACKED_PLUG_PRIM_PATH = (
 )
 ```
 
-The simulation must fail before physics starts if the USD does not exist or the tracked plug prim is missing after reference composition.
+Missing files or prims are fatal startup errors.
 
-## Chosen mounting architecture
+## Chosen architecture
 
-Use a **hand-mounted rigid proxy with a connector-region deformable attachment**.
+Use a **world-level rigid mount proxy fixed to `panda_hand`, with a deformable attachment limited to the connector geometry**.
 
-1. Create a small hidden rigid proxy actor at `/World/CableMountProxy`.
-2. Constrain that proxy permanently to the Franka `panda_hand` rigid body with `/World/CableMountFixedJoint`.
-3. Position the network-cable root so the detected RJ45 insertion tip coincides with `/World/ToolCenter` and its insertion axis matches ToolCenter local `+Z`.
-4. Attach only the deformable connector region around `E_crystal_head1_45` to the proxy.
-5. Leave the cable tail governed by deformable simulation.
+1. Load the cable before physics starts.
+2. Detect the RJ45 tip and insertion frame automatically.
+3. Move the cable root once so the tip equals ToolCenter and points toward the rack.
+4. Create `/World/CableMountProxy` as a hidden rigid actor.
+5. Create `/World/CableMountFixedJoint` between the discovered `panda_hand` rigid body and the proxy.
+6. Attach only cable vertices inside the tracked plug bounds to the proxy.
+7. Keep the attachment for the entire process lifetime.
+8. Never overwrite cable transforms after physics begins.
 
-The proxy is a separate world-level rigid actor. It must not be created as a nested rigid body beneath `panda_hand`, because nested rigid bodies produce ambiguous PhysX ownership.
+The proxy is not nested under `panda_hand`; nested rigid bodies create ambiguous PhysX ownership.
 
-The connector attachment remains active for the complete process lifetime. There is no release mechanism.
+### Rejected alternatives
 
-## Why the other approaches are rejected
-
-### Direct fixed joint to `E_crystal_head1_45`
-
-Rejected because the tracked plug belongs to a deformable asset and may not be an independent rigid actor. Treating it as one risks invalid-actor errors and can rigidify or detach the wrong part of the cable.
-
-### Per-frame transform overwrite
-
-Rejected because it bypasses physics, injects energy into the deformable tail, and makes later contact behavior untrustworthy.
-
-### Rigidly moving the complete cable
-
-Rejected because it eliminates the cable behavior this asset was selected to represent.
+- Directly fixed-jointing `E_crystal_head1_45`: the prim may not be an independent rigid actor.
+- Reparenting the plug: breaks the deformable asset hierarchy.
+- Moving the cable every frame: bypasses physics and can inject instability.
+- Rigidly carrying the complete cable: destroys the deformable-tail behavior.
 
 ## ToolCenter semantics
 
-The existing configured ToolCenter transform relative to `panda_hand` remains numerically unchanged:
+The existing configured transform remains numerically unchanged:
 
 ```text
-panda_hand_T_toolcenter
+panda_hand_T_rj45_tip = panda_hand_T_toolcenter
 ```
 
-The cable is mounted so the detected RJ45 insertion tip lands exactly on that frame. Therefore:
-
-```text
-panda_hand_T_rj45_tip == panda_hand_T_toolcenter
-```
-
-This preserves the existing camera geometry, Lula IK target conversion, desired 50 mm pre-insert standoff, and controller calibration.
+The cable is mounted to that frame instead of moving the frame to the cable. This preserves the existing camera geometry, Lula IK conversion, and 50 mm pre-insert calibration.
 
 After mounting:
 
-- `/World/IK_Target` commands the RJ45 insertion tip.
-- `/World/ToolCenter` reports the actual RJ45 insertion-tip pose.
-- The 50 mm standoff is measured from the port opening to the connector tip.
-- Later insertion can advance this same frame directly along the port axis.
+- `/World/IK_Target` commands the RJ45 tip.
+- `/World/ToolCenter` reports the actual RJ45 tip.
+- The pre-insert distance is measured from the port opening to the RJ45 tip.
+- Future insertion advances this same frame along the port axis.
 
-No second connector offset may be added in perception, control, or future insertion code.
+No connector offset may be added anywhere else.
 
-## Automatic connector geometry
+## Automatic plug-frame detection
 
-A pure NumPy geometry component determines the connector insertion frame from the composed USD geometry.
+A pure NumPy module computes the connector frame from composed USD geometry.
 
-### Inputs
+### Longitudinal axis
 
-- tracked plug local bounding box,
-- tracked plug world transform,
-- whole cable root world bounding-box center,
-- ToolCenter target transform.
+1. Compute the tracked plug bounds in plug-local coordinates.
+2. Select the longest dimension as the insertion axis.
+3. Require `longest / second_longest >= 1.5` by default.
+4. Abort if the ratio is smaller.
 
-### Insertion-axis detection
+### Nose direction
 
-1. Compute the tracked plug bounds in the plug-local frame.
-2. Select the longest local dimension as the connector longitudinal axis.
-3. Require the longest dimension to exceed the second-longest dimension by a configurable ambiguity ratio. Default minimum ratio: `1.5`.
-4. Transform the cable-root center into the plug-local frame.
-5. Project the vector from plug center to cable center onto the longitudinal axis.
-6. The projected direction identifies the cable-side end.
-7. The opposite end is the RJ45 nose.
-8. The insertion tip is the center of the nose-side local bounding-box face.
+1. Transform the cable-root world-bounds center into plug-local coordinates.
+2. Project the vector from plug center to cable center onto the longitudinal axis.
+3. The projected direction is the cable side.
+4. The opposite direction is the RJ45 nose.
+5. Require the projection magnitude to exceed a configured ambiguity threshold; otherwise abort.
 
-If the longest axis or nose sign is ambiguous, startup aborts. There is no silent manual fallback.
+The insertion tip is the center of the nose-side bounding-box face.
 
-### Mount orientation
+### Roll
 
-The detected plug nose axis is aligned with ToolCenter local `+Z`.
+Align the plug's widest transverse axis with ToolCenter local `+Y`. Construct the remaining axis as a right-handed basis. This makes roll deterministic.
 
-At the canonical fixed wrist orientation, ToolCenter local `+Z` points toward the rack. The implementation must derive this from the ToolCenter transform rather than hard-code world `-X`, so the mount remains correct if the fixed wrist pose is changed later.
+### Final mount transform
 
-Roll about the insertion axis is resolved deterministically by aligning the plug's widest transverse axis with ToolCenter local `+Y`. The remaining transverse axis must form a right-handed frame.
+Align:
 
-### Mount translation
+- plug nose axis → ToolCenter local `+Z`,
+- widest transverse axis → ToolCenter local `+Y`,
+- detected nose-face center → ToolCenter origin.
 
-After rotation, translate the complete cable root so the detected insertion-tip point coincides with the configured ToolCenter world position at startup.
+ToolCenter local `+Z` is derived from its world transform. World `-X` is not hard-coded.
 
-The tracked plug child is never moved independently from the cable root during placement.
+Only `/World/NetworkCable` receives this initial transform. The tracked plug child is never moved independently.
+
+## Deformable-body discovery
+
+Select the deformable body deterministically:
+
+1. Walk upward from `TRACKED_PLUG_PRIM_PATH` and select the first ancestor carrying the required deformable-body API.
+2. If none exists, search cable-root descendants whose world bounds contain the plug center.
+3. Require exactly one valid candidate.
+4. Abort on zero or multiple candidates.
+
+The chosen prim path is printed in startup diagnostics.
+
+## Attachment region
+
+The proxy attachment volume is derived from the tracked plug local bounds:
+
+- cover the complete plug bounds,
+- add `0.5 mm` default padding on both transverse directions,
+- add `0.5 mm` at the nose face,
+- add **zero** extension beyond the cable-side longitudinal face.
+
+This captures the connector while avoiding attachment of the cable tail beyond the plug.
+
+The proxy collider is used for attachment generation. Collision between the proxy and Franka links is filtered out so the hidden proxy cannot fight the hand or fingers.
 
 ## Components
 
 ### `cable_geometry.py`
 
-Pure Python and NumPy. No Isaac, USD, PhysX, or `omni` imports.
+Pure Python/NumPy, with no Isaac, USD, PhysX, or `omni` imports.
 
-Responsibilities:
-
-- validate finite 3D bounds and transforms,
-- select the longitudinal axis,
-- determine cable side and nose side,
-- calculate the local insertion-tip point,
-- construct a deterministic plug insertion frame,
-- calculate the rigid transform that maps the plug insertion frame onto ToolCenter,
-- report ambiguity instead of guessing.
+It owns bounds validation, axis selection, nose detection, insertion-frame construction, attachment-volume calculation, and the cable-root transform onto ToolCenter.
 
 ### `cable_mount.py`
 
 Isaac/USD/PhysX integration.
 
-Responsibilities:
-
-- load and validate the cable USD,
-- find the Franka `panda_hand` descendant dynamically,
-- discover the cable's deformable body prim,
-- query composed plug and cable geometry,
-- call `cable_geometry.py`,
-- apply the calculated root transform before simulation starts,
-- create the rigid proxy and fixed joint,
-- create the connector-region deformable attachment,
-- configure finger positions,
-- validate the mounted result after settling,
-- expose mount diagnostics to `SimulationRuntime`.
+It owns asset loading, dynamic hand discovery, deformable-body discovery, geometry queries, initial cable placement, proxy creation, fixed-joint creation, deformable attachment authoring, finger positioning, mount validation, and diagnostics.
 
 ### `config.py`
 
-Add a frozen `CableMountConfig` containing:
+Add frozen `CableMountConfig` fields for:
 
-- enabled flag,
-- USD/root/tracked-plug paths,
-- proxy and joint paths,
-- geometry ambiguity ratio,
-- attachment-region padding,
-- desired cosmetic finger clearance,
-- startup settle frames,
-- maximum tip mounting error,
-- maximum axis error.
+- enable flag,
+- asset/root/plug paths,
+- proxy/joint paths,
+- axis ambiguity ratio,
+- cable-side projection threshold,
+- attachment padding,
+- finger clearance,
+- settle-frame counts,
+- tip and axis tolerances.
 
-Default required limits:
+Required defaults:
 
 ```text
-maximum tip mounting error: 0.5 mm
-maximum connector-axis error: 1.0 degree
+axis ambiguity ratio: 1.5
+attachment padding: 0.5 mm
+finger total clearance: 1.0 mm
+maximum tip error: 0.5 mm
+maximum axis error: 1.0 degree
+validation window: final 30 settled frames
 ```
 
 ### `sim.py`
 
-Integrate mounting into scene construction without adding insertion behavior.
+Integrate cable creation as startup infrastructure. Existing visual-servo control behavior remains unchanged and no insertion path is added.
 
-The canonical public visual-servo methods remain unchanged. Cable mounting is a startup concern, not a second controller.
+Expose:
 
-## GPU dynamics
+```python
+runtime.prepare_for_perception()
+```
 
-The deformable cable requires PhysX GPU dynamics.
+This method advances simulation, updates IK, settles the robot/cable, validates the mount, and returns only after validation passes.
 
-The single-rack scene changes from CPU dynamics to the CUDA physics device and must configure:
+### `main.py`
 
-- GPU dynamics enabled,
-- GPU broadphase,
-- TGS solver,
-- the existing scene timestep unless a real instability proves a change is necessary.
+Initialization becomes:
 
-This is an intentional global physics change. The Franka, rack collisions, ground plane, and deformable cable share the same physics scene.
+```text
+create SimulationRuntime
+→ runtime.prepare_for_perception()
+→ initialize DebugOutputs
+→ initialize YOLOE
+→ enter canonical visual-servo loop
+```
 
-The implementation must verify the composed physics-scene attributes after authoring them. Failure to activate GPU dynamics aborts startup.
+YOLOE initialization and RGB acquisition never happen when mount validation fails.
+
+## GPU physics
+
+Cable mounting requires the shared scene to use GPU PhysX:
+
+```text
+scene device: cuda:0
+GPU dynamics: enabled
+broadphase: GPU
+solver: TGS
+physics timestep: unchanged initially
+```
+
+The implementation verifies the composed scene attributes after authoring them. Failure is fatal.
+
+This intentionally changes the physics environment used by the previously validated no-cable runtime.
 
 ## Finger presentation
 
-The fingers do not provide the load-bearing attachment; the proxy does.
+The proxy carries the connector; the fingers are cosmetic.
 
-For visual consistency:
+1. Determine the plug width aligned with ToolCenter local `+Y`.
+2. Add `1.0 mm` total clearance.
+3. Set both finger joints symmetrically to half the total gap.
+4. Clamp to joint limits.
+5. Hold those finger targets during the run.
 
-1. Use the two smaller transverse plug dimensions.
-2. Choose the dimension aligned with ToolCenter local `+Y` as the required total finger gap.
-3. Add a small configurable clearance, initially `1.0 mm` total.
-4. Command both finger joints symmetrically to half that total gap.
-5. Clamp against the Franka joint limits.
+The fingers must not visibly interpenetrate or squeeze the connector strongly enough to create competing contact forces.
 
-The fingers must not squeeze the attached plug hard enough to create competing contact forces or visible interpenetration.
-
-## Startup order
+## Startup sequence
 
 ```text
-create rack and Franka references
-→ find panda_hand
+create rack and Franka
+→ discover panda_hand
 → create cameras
-→ create physics scene on CUDA
-→ enable GPU dynamics
-→ load cable reference
-→ discover deformable body and connector geometry
-→ detect RJ45 insertion frame
-→ align cable root to ToolCenter
-→ create rigid proxy and fixed joint
-→ author connector-region deformable attachment
+→ create CUDA physics scene and enable GPU dynamics
+→ load cable
+→ discover deformable body
+→ detect plug frame and attachment bounds
+→ place cable root onto ToolCenter
+→ create proxy and fixed joint
+→ author deformable attachment
 → initialize articulation and IK
-→ set cosmetic finger gap
+→ set finger gap
 → begin simulation
-→ settle robot and cable
-→ validate mount
-→ begin stereo visual acquisition
+→ prepare_for_perception(): settle and validate
+→ initialize YOLOE
+→ begin stereo acquisition
 ```
 
-Visual acquisition must not begin before mount validation passes.
+## Mount validation
 
-## Runtime validation
+During the final 30 settled frames, measure every frame:
 
-After the configured settling period, calculate:
-
-- actual insertion-tip position,
-- actual connector nose axis,
-- ToolCenter position and local `+Z` axis,
-- tip-to-ToolCenter position error,
-- connector-axis angular error,
-- attachment validity,
-- deformable-body validity,
+- RJ45 tip position versus ToolCenter,
+- connector nose axis versus ToolCenter local `+Z`,
+- proxy-to-hand fixed-joint validity,
+- deformable attachment validity,
 - GPU-dynamics state.
 
-Startup passes only when:
+Pass only when the complete window satisfies:
 
 ```text
-tip error <= 0.5 mm
-axis error <= 1.0 degree
-attachment is valid
-deformable body is valid
-GPU dynamics is enabled
+maximum tip error <= 0.5 mm
+maximum axis error <= 1.0 degree
+fixed joint valid
+attachment valid
+deformable body valid
+GPU dynamics enabled
 ```
 
-On failure, stop the simulation and print the measured values. Do not start YOLOE or issue visual-servo corrections.
+A single out-of-limit frame fails startup. No averaging hides intermittent mount motion.
 
 ## Diagnostics
 
@@ -291,85 +281,65 @@ Successful startup prints:
   longitudinal local axis: ...
   cable-side sign: ...
   insertion-tip local position m: [...]
+  attachment bounds local m: min=[...] max=[...]
   insertion axis world: [...]
   hand-to-tip translation m: [...]
   hand-to-tip orientation WXYZ: [...]
   finger total gap mm: ...
-  tip mounting error mm: ...
-  axis error deg: ...
+  validation frames: 30/30
+  maximum tip error mm: ...
+  maximum axis error deg: ...
+  fixed joint: valid
   attachment: valid
   cable tail: deformable
   GPU dynamics: enabled
 ```
 
-Failures include the same fields plus a specific reason.
+Failures print the same measured context and a specific fatal reason.
 
-## Error handling
+## Fail-closed conditions
 
-Fail closed for:
+Abort before perception for missing/invalid assets, non-finite or zero bounds, ambiguous axes, ambiguous nose direction, ambiguous deformable-body discovery, missing hand, invalid proxy/joint/attachment, inactive GPU dynamics, or mount validation outside tolerance.
 
-- missing cable file,
-- missing tracked plug,
-- zero or non-finite bounds,
-- ambiguous longest axis,
-- ambiguous cable-side projection,
-- missing or multiple deformable bodies when one cannot be selected deterministically,
-- missing `panda_hand`,
-- invalid proxy rigid body,
-- invalid fixed joint,
-- invalid deformable attachment,
-- GPU dynamics not active,
-- tip or axis validation outside tolerance.
-
-No error path may fall back to an unattached cable, root teleporting, a hard-coded tip offset, or the old empty-gripper ToolCenter meaning.
+No failure path may fall back to an unattached cable, a rigid whole cable, root teleporting, a hard-coded tip offset, or the old empty-gripper ToolCenter meaning.
 
 ## Tests
 
-### Pure geometry tests
+### Pure tests
 
-Synthetic tests must cover:
-
-- longest axis along local X, Y, and Z,
-- rotated world transforms,
-- cable center on either end of the plug,
-- correct nose-face center,
-- deterministic transverse roll,
-- correct root transform onto ToolCenter,
-- zero-length and non-finite bounds rejection,
-- ambiguous aspect-ratio rejection,
-- ambiguous cable-side projection rejection.
+Cover longitudinal axes X/Y/Z, rotated transforms, both cable-side signs, face-center calculation, deterministic roll, attachment-volume trimming, ToolCenter mapping, non-finite data, degenerate bounds, ambiguous aspect ratios, and ambiguous cable-side projections.
 
 ### Structural tests
 
-Tests must prove:
+Prove that:
 
-- cable mounting happens before visual acquisition,
-- ToolCenter offset is not duplicated elsewhere,
-- no insertion command is introduced,
-- no per-frame cable-root or plug teleport exists,
-- `panda_hand` is discovered dynamically,
-- GPU dynamics is enabled when cable mounting is enabled,
-- cable mounting can be disabled only through explicit configuration for diagnostic comparison.
+- mounting and validation precede YOLOE,
+- ToolCenter offset is not duplicated,
+- no insertion command exists,
+- no per-frame cable or plug transform exists,
+- `panda_hand` and deformable body are discovered dynamically,
+- GPU dynamics is required when mounting is enabled,
+- mounting can be disabled only through explicit diagnostic configuration.
 
 ### Isaac workstation smoke test
 
-Run the simulation and require:
+Require:
 
-- cable loads,
-- no invalid deformable-attachment actor error,
-- connector remains attached while the robot reaches its initial pose,
-- tip error is at most 0.5 mm,
-- axis error is at most 1 degree,
-- cable tail visibly settles under deformable physics,
-- visual acquisition begins only after mount validation,
+- no invalid attachment-actor error,
+- connector remains mounted while robot/cable settle,
+- 30/30 validation frames pass,
+- tail visibly deforms and settles,
+- YOLOE starts only after validation,
 - nominal visual alignment completes,
+- physical ToolCenter tracking error remains `<= 0.3 mm`,
+- target steps remain `<= 1.0 mm`,
 - no insertion occurs.
 
-## Safety and regression boundary
+## Regression boundary and kill switch
 
-Enabling GPU dynamics changes the physics environment that produced the previous nominal no-cable alignment result. That result cannot be treated as proof that the cable-mounted runtime works.
+The previous no-cable nominal result does not validate the GPU/deformable runtime.
 
-Before insertion work begins, the cable-mounted nominal run must demonstrate:
+Do not begin insertion work unless the cable-mounted nominal run demonstrates:
 
 ```text
 mount validation: PASS
@@ -379,16 +349,4 @@ maximum target step <= 1.0 mm
 no insertion command
 ```
 
-Do not widen mount or controller limits to force a pass.
-
-## Kill switch
-
-Do not implement insertion if any of these remain true:
-
-- connector attachment is invalid or intermittently lost,
-- cable tail destabilizes the arm or camera,
-- tip error exceeds 0.5 mm,
-- connector-axis error exceeds 1 degree,
-- nominal visual alignment no longer completes under GPU dynamics.
-
-The correct response is to fix the mount or physics setup, not add insertion on top of an unstable frame.
+If the attachment is unstable, the tail destabilizes the arm/cameras, mount limits fail, or nominal alignment no longer completes, fix the mount or physics setup. Do not widen limits or add insertion on top of an unstable frame.
