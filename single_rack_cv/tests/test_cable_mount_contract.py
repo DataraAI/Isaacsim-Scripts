@@ -32,6 +32,15 @@ class CableMountContractTests(unittest.TestCase):
     def test_feature_branch_uses_cuda_for_all_diagnostic_modes(self):
         self.assertEqual(CONFIG.scene.device, "cuda:0")
 
+    def test_schema_probe_adds_project_root_before_importing_config(self):
+        source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
+        self.assertIn("Path(__file__).resolve().parents[1]", source)
+        self.assertIn("sys.path.insert(0", source)
+        self.assertLess(
+            source.index("sys.path.insert(0"),
+            source.index("from config import CONFIG"),
+        )
+
     def test_schema_probe_prohibits_legacy_fallback(self):
         source = Path("tools/inspect_cable_asset.py").read_text(encoding="utf-8")
         self.assertIn('HasAPI("OmniPhysicsDeformableBodyAPI")', source)
