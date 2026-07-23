@@ -7,7 +7,9 @@ import unittest
 import numpy as np
 
 from host_array_bridge import (
+    HostSafeJointSubset,
     HostSafePoseObject,
+    install_host_safe_ik_warm_start,
     pose_to_numpy_cpu,
     to_numpy_cpu,
 )
@@ -20,6 +22,10 @@ class _FakeCudaTensor:
         self._values = np.asarray(values, dtype=np.float32)
         self.events: list[str] = []
         self.on_cpu = False
+
+    @property
+    def shape(self):
+        return self._values.shape
 
     def detach(self):
         self.events.append("detach")
@@ -45,6 +51,25 @@ class _FakePoseObject:
 
     def get_world_pose(self):
         return self.position, self.orientation
+
+
+class _FakeJointSubset:
+    def __init__(self):
+        self.positions = _FakeCudaTensor(
+            [0.01, -0.57, 0.0, -1.01, 0.0, -0.02, -0.52]
+        )
+        self.marker = "subset delegated"
+
+    def get_joint_positions(self):
+        return self.positions
+
+
+class _FakeArticulationKinematicsSolver:
+    def __init__(self):
+        self._joints_view = _FakeJointSubset()
+
+    def get_joints_subset(self):
+        return self._joints_view
 
 
 class HostArrayBridgeTests(unittest.TestCase):
@@ -85,9 +110,40 @@ class HostArrayBridgeTests(unittest.TestCase):
                 label="ToolCenter",
             )
 
+    def test_joint_subset_copies_cuda_warm_start_to_host(self):
+        subset = _FakeJointSubset()
+        wrapped = HostSafeJointSubset(subset, label="Lula IK warm start")
+
+        result = wrapped.get_joint_positions()
+
+        self.assertIsInstance(result, np.ndarray)
+        self.assertEqual(result.dtype, np.float64)
+        self.assertEqual(result.shape, (7,))
+        np.testing.assert_allclose(
+            result,
+            [0.01, -0.57, 0.0, -1.01, 0.0, -0.02, -0.52],
+        )
+        self.assertEqual(subset.positions.events, ["detach", "cpu", "numpy"])
+        self.assertEqual(wrapped.marker, "subset delegated")
+
+    def test_ik_solver_internal_joint_subset_is_replaced_once(self):
+        solver = _FakeArticulationKinematicsSolver()
+        original_subset = solver.get_joints_subset()
+
+        returned = install_host_safe_ik_warm_start(solver)
+
+        self.assertIs(returned, solver)
+        self.assertIsInstance(solver.get_joints_subset(), HostSafeJointSubset)
+        self.assertIs(solver.get_joints_subset()._wrapped, original_subset)
+        np.testing.assert_allclose(
+            solver.get_joints_subset().get_joint_positions(),
+            [0.01, -0.57, 0.0, -1.01, 0.0, -0.02, -0.52],
+        )
+
     def test_cable_runtime_wraps_all_cuda_pose_sources_once(self):
         source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
         self.assertIn("HostSafePoseObject", source)
+        self.assertIn("install_host_safe_ik_warm_start", source)
         self.assertIn('label="Franka articulation"', source)
         self.assertIn('label="IK target"', source)
         self.assertIn('label="actual ToolCenter"', source)
