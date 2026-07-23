@@ -67,9 +67,7 @@ def _finite_positive(value: float, label: str) -> float:
     return number
 
 
-def validate_transform(matrix: np.ndarray, label: str) -> np.ndarray:
-    """Validate and return a rigid right-handed homogeneous transform."""
-
+def _validate_homogeneous(matrix: np.ndarray, label: str) -> np.ndarray:
     transform = _finite(matrix, (4, 4), label)
     if not np.allclose(
         transform[3],
@@ -78,7 +76,25 @@ def validate_transform(matrix: np.ndarray, label: str) -> np.ndarray:
         rtol=0.0,
     ):
         raise ValueError(f"{label} must be homogeneous")
+    return transform
 
+
+def validate_affine_transform(matrix: np.ndarray, label: str) -> np.ndarray:
+    """Validate a finite, nonsingular, right-handed affine transform."""
+
+    transform = _validate_homogeneous(matrix, label)
+    determinant = float(np.linalg.det(transform[:3, :3]))
+    if not math.isfinite(determinant) or determinant <= 1.0e-12:
+        raise ValueError(
+            f"{label} linear transform must be nonsingular and right handed"
+        )
+    return transform
+
+
+def validate_transform(matrix: np.ndarray, label: str) -> np.ndarray:
+    """Validate and return a rigid right-handed homogeneous transform."""
+
+    transform = _validate_homogeneous(matrix, label)
     rotation = transform[:3, :3]
     if not np.allclose(
         rotation.T @ rotation,
@@ -94,6 +110,29 @@ def validate_transform(matrix: np.ndarray, label: str) -> np.ndarray:
     ):
         raise ValueError(f"{label} rotation must be right handed")
     return transform
+
+
+def rigid_pose_from_affine(matrix: np.ndarray, label: str) -> np.ndarray:
+    """Return translation plus the nearest proper rotation, discarding scale/shear."""
+
+    affine = validate_affine_transform(matrix, label)
+    left, singular_values, right_t = np.linalg.svd(affine[:3, :3])
+    if (
+        singular_values.shape != (3,)
+        or not np.all(np.isfinite(singular_values))
+        or float(np.min(singular_values)) <= 1.0e-12
+    ):
+        raise ValueError(f"{label} linear transform is singular")
+
+    rotation = left @ right_t
+    if float(np.linalg.det(rotation)) < 0.0:
+        left[:, -1] *= -1.0
+        rotation = left @ right_t
+
+    pose = np.eye(4, dtype=np.float64)
+    pose[:3, :3] = rotation
+    pose[:3, 3] = affine[:3, 3]
+    return validate_transform(pose, f"{label}_rigid_pose")
 
 
 def matrix_to_quaternion_wxyz(rotation_matrix: np.ndarray) -> np.ndarray:
@@ -156,7 +195,10 @@ def detect_plug_frame(
 
     local_min = _finite(local_min_m, (3,), "local_min_m")
     local_max = _finite(local_max_m, (3,), "local_max_m")
-    world_from_plug = validate_transform(world_from_plug, "world_from_plug")
+    world_from_plug = validate_affine_transform(
+        world_from_plug,
+        "world_from_plug",
+    )
     cable_center_world = _finite(
         cable_center_world_m,
         (3,),
@@ -274,17 +316,27 @@ def compute_world_from_root_for_tip(
     frame: PlugFrame,
     desired_world_from_tip: np.ndarray,
 ) -> np.ndarray:
-    """Compute the one-time cable-root transform that mounts tip on ToolCenter."""
+    """Return a rigid root correction that preserves the plug's authored scale."""
 
     world_from_root = validate_transform(world_from_root, "world_from_root")
-    world_from_plug = validate_transform(world_from_plug, "world_from_plug")
+    world_from_plug = validate_affine_transform(
+        world_from_plug,
+        "world_from_plug",
+    )
     desired = validate_transform(
         desired_world_from_tip,
         "desired_world_from_tip",
     )
-    root_from_plug = np.linalg.inv(world_from_root) @ world_from_plug
-    root_from_tip = root_from_plug @ frame.plug_from_tip
-    mounted = desired @ np.linalg.inv(root_from_tip)
+
+    current_world_from_tip_affine = world_from_plug @ frame.plug_from_tip
+    current_world_from_tip_pose = rigid_pose_from_affine(
+        current_world_from_tip_affine,
+        "current_world_from_tip",
+    )
+    rigid_world_correction = desired @ np.linalg.inv(
+        current_world_from_tip_pose
+    )
+    mounted = rigid_world_correction @ world_from_root
     return validate_transform(mounted, "mounted_world_from_root")
 
 
