@@ -1,59 +1,41 @@
 # Single-Rack Automatic Front-Opening Alignment
 
-This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port and move a Franka-mounted RJ45 insertion tip to a 50 mm pre-insert standoff from the **physical front opening**, not the recessed dark cavity.
+This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port and move a Franka ToolCenter to a 50 mm pre-insert standoff from the **physical front opening**, not the recessed dark cavity.
 
-## Cable-mounted runtime
+## Supported architecture
 
-The supplied network-cable asset starts already mounted in the Franka hand:
+1. `perception.py` uses YOLOE plus dark-cavity refinement to select the same port in both eyes.
+2. `front_plane.py` computes local left-right-consistent SGBM disparity around the cavity, selects the nearest coherent four-sided bezel cluster, fits a stabilized front plane, and intersects a fused cavity-center ray with that plane.
+3. `live_control.py` replaces the recessed cavity observation with the automatically calculated opening-plane observation.
+4. `main.py` sends only that refined observation to the translation-only stop-and-look controller and debug marker.
+5. `cable_runtime.py` loads the connected cable before play, enables GPU PhysX, mounts the existing rigid RJ45 plug directly to `panda_hand`, and validates the mount before YOLOE starts.
 
-- `/World/NetworkCable/E_crystal_head1_45` is the existing rigid tracked plug.
-- `/World/NetworkCable/E_line_35` is the existing deformable tail.
-- The asset's built-in deformable attachment between the tail and tracked plug is verified and preserved.
-- `/World/CableMountFixedJoint` is a direct fixed joint from `panda_hand` to the tracked plug.
-- `/World/ToolCenter` keeps its calibrated numerical transform, but physically represents the RJ45 insertion tip.
-- GPU dynamics, GPU broadphase, and the TGS solver are mandatory.
+Runtime control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark.
 
-The runtime does not create a proxy, duplicate the deformable attachment, move the cable every frame, grasp, release, or insert the connector.
+## Cable mount
 
-## Supported perception and control architecture
+The cable asset already contains one Omni Physics deformable tail and rigid connector bodies. The tracked plug is fixed-jointed directly to `panda_hand`; the asset-authored plug-to-tail deformable attachment is preserved.
 
-1. `cable_runtime.py` builds the canonical rack/Franka/camera scene, enables GPU physics, mounts the cable, and blocks perception until mount validation passes.
-2. `perception.py` uses YOLOE plus dark-cavity refinement to select the same port in both eyes.
-3. `front_plane.py` computes local left-right-consistent SGBM disparity, selects the nearest coherent four-sided bezel cluster, fits a stabilized front plane, and intersects the fused cavity-center ray with that plane.
-4. `live_control.py` replaces the recessed-cavity observation with the automatically calculated opening-plane observation.
-5. `main.py` sends only that refined observation to the translation-only stop-and-look controller and debug marker.
+The cable hierarchy contains authored affine scale on both the root and plug transforms. Startup placement therefore applies a rigid world correction on top of the existing affine root transform. It must not require the root or plug matrices to be orthonormal, and it must not strip, invert, or bake away the authored cable scale.
 
-Runtime control remains image-only. RTX/USD raycasts and ground-truth JSON are used only by offline benchmarks and asset validation.
+The mount must validate for 30 consecutive frames before perception starts:
 
-## Inspect the cable topology
+- RJ45 tip error ≤ 0.5 mm
+- RJ45 axis error ≤ 1.0°
+- fixed joint remains valid
+- built-in deformable attachment remains unchanged
+- GPU dynamics remains active
 
-```bash
-cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
-"$HOME/isaacsim/python.sh" tools/inspect_cable_asset.py
-cat camera_output/cable_asset_schema.json
-```
-
-The probe must report one Omni Physics deformable body, a rigid tracked plug, and an existing auto deformable attachment connecting those two bodies.
-
-## Run
+## Runtime
 
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 "$HOME/isaacsim/python.sh" main.py
 ```
 
-Before YOLOE initializes, the simulation requires **30/30** consecutive cable-mount validation frames with:
+Canonical camera resolution is 1280×960. The controller keeps a fixed wrist orientation, limits each target update to 1 mm, holds position on detector/SGBM/plane-fit failure, and does not command insertion.
 
-- RJ45-tip error no greater than 0.5 mm,
-- connector-axis error no greater than 1 degree,
-- valid direct fixed joint,
-- unchanged built-in deformable attachment,
-- valid deformable tail,
-- active GPU dynamics.
-
-The controller then keeps a fixed wrist orientation, limits every target update to 1 mm, holds position on detector/SGBM/plane-fit failure, and stops at the 50 mm pre-insert pose.
-
-## Tests
+## Pure and structural tests
 
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
@@ -66,40 +48,68 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
   tests.test_repo_cleanliness \
   tests.test_automatic_port_ground_truth \
   tests.test_cable_geometry \
+  tests.test_affine_root_geometry \
+  tests.test_scale_aware_cable_mount \
   tests.test_cable_mount_contract
-
-"$HOME/isaacsim/python.sh" -m py_compile \
-  cable_geometry.py cable_mount.py cable_runtime.py config.py sim.py main.py \
-  tools/inspect_cable_asset.py
 ```
 
-## Front-plane benchmark
+## Qualification benchmark
 
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 set -o pipefail
-bash tools/run_benchmark.sh \
-  2>&1 | tee camera_output/front_plane_benchmark_console.txt
+bash tools/run_benchmark.sh 2>&1 | tee camera_output/front_plane_benchmark_console.txt
 status=${PIPESTATUS[0]}
 echo "benchmark exit status: $status"
 cat camera_output/front_plane_benchmark/report.txt
 ```
 
-Qualification still requires at least 95% pair success, zero track switches, radial 3D jitter no greater than 0.5 mm, ray-gap p95 no greater than 0.5 mm, plane-residual p95 no greater than 0.5 mm, plane-error median no greater than 0.5 mm, and plane-error p95 no greater than 1.0 mm.
+The launcher automatically recaptures the 60 stereo pairs or regenerates RTX ground truth when 1280×960 resolution metadata is missing or stale.
 
-## Safety constraints and kill switch
+Exit codes:
+
+- `0`: every qualification gate passed
+- `2`: benchmark completed but did not qualify
+- `1`: runtime or input-generation failure
+
+Qualification gates:
+
+- pair success rate ≥ 95%
+- track switches = 0
+- radial 3D jitter ≤ 0.5 mm
+- correspondence ray-gap p95 ≤ 0.5 mm
+- plane-residual p95 ≤ 0.5 mm
+- plane-error median ≤ 0.5 mm
+- plane-error p95 ≤ 1.0 mm
+
+## Safety constraints
 
 - No manual recess or depth offset.
-- No fallback to recessed-cavity depth.
+- No fallback to the recessed cavity depth.
 - No RTX, USD mesh query, or ground-truth JSON in runtime control.
-- No vision-driven orientation command.
+- No orientation commands from vision.
 - No insertion motion.
-- No release or regrasp.
-- No per-frame cable or plug transform.
 - Failed observations hold the current target and trigger reacquisition.
-
-Do not begin insertion work when the direct joint is unstable, the built-in attachment changes, the deformable tail destabilizes the arm or cameras, any mount limit fails, or nominal visual alignment no longer completes under GPU dynamics. Fix the mount or physics defect instead of weakening limits.
+- No proxy connector or duplicate deformable attachment.
+- No per-frame cable transform overwrite.
 
 ## Generated files
 
 `camera_output/`, model weights, Python caches, generated ground truth, and local worktrees are ignored by Git.
+
+## Recovery point
+
+The exact working repository before this hard prune is preserved on:
+
+```text
+recovery/pre-single-rack-cleanup-2026-07-22
+```
+
+Local annotated tag command:
+
+```bash
+git tag -a single-rack-working-pre-cleanup-2026-07-22 \
+  recovery/pre-single-rack-cleanup-2026-07-22 \
+  -m "Working 1280x960 automatic front-plane controller before hard prune"
+git push origin single-rack-working-pre-cleanup-2026-07-22
+```
