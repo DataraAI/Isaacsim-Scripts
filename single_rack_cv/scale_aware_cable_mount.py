@@ -13,12 +13,12 @@ from affine_root_geometry import (
     compute_world_from_root_for_tip_preserving_affine,
 )
 from cable_geometry import (
+    matrix_to_quaternion_wxyz,
     rigid_pose_from_affine,
     validate_affine_transform,
 )
 from cable_mount import (
     CableMount,
-    _matrix_to_gf_quatf,
     _world_transform,
 )
 
@@ -30,6 +30,18 @@ def _numpy_to_gf_matrix_affine(matrix: np.ndarray) -> Gf.Matrix4d:
     row_vector_matrix = affine.T
     return Gf.Matrix4d(
         *[float(value) for value in row_vector_matrix.reshape(-1)]
+    )
+
+
+def _matrix_to_gf_quatf_compatible(rotation: np.ndarray) -> Gf.Quatf:
+    """Convert a proper matrix without relying on unsupported GfRotation overloads."""
+
+    wxyz = matrix_to_quaternion_wxyz(rotation)
+    return Gf.Quatf(
+        float(wxyz[0]),
+        float(wxyz[1]),
+        float(wxyz[2]),
+        float(wxyz[3]),
     )
 
 
@@ -100,11 +112,11 @@ class ScaleAwareCableMount(CableMount):
             )
         )
         joint.CreateLocalRot0Attr().Set(
-            _matrix_to_gf_quatf(hand_from_plug[:3, :3])
+            _matrix_to_gf_quatf_compatible(hand_from_plug[:3, :3])
         )
         joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
         joint.CreateLocalRot1Attr().Set(
-            Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0))
+            Gf.Quatf(1.0, 0.0, 0.0, 0.0)
         )
 
     def configure_fingers(self, articulation) -> None:
