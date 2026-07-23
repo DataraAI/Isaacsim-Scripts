@@ -40,9 +40,22 @@ class _FakeCudaTensor:
 class _FakeArticulationView:
     def __init__(self, limits):
         self.limits = limits
+        self.position_calls = []
+        self.target_calls = []
 
     def get_dof_limits(self):
         return self.limits
+
+    def set_joint_positions(self, positions, indices=None, joint_indices=None):
+        self.position_calls.append((positions, indices, joint_indices))
+
+    def set_joint_position_targets(
+        self,
+        positions,
+        indices=None,
+        joint_indices=None,
+    ):
+        self.target_calls.append((positions, indices, joint_indices))
 
 
 class _FakeArticulation:
@@ -50,30 +63,13 @@ class _FakeArticulation:
         self._articulation_view = _FakeArticulationView(limits)
         self._device = "cpu"
         self.marker = "delegated"
-        self.position_calls = []
-        self.target_calls = []
 
     @property
     def dof_properties(self):
         raise AssertionError("deprecated CUDA-unsafe property was accessed")
 
     def set_joint_positions(self, positions, joint_indices=None):
-        if not isinstance(positions, torch.Tensor):
-            raise AssertionError(f"positions stayed on host: {type(positions)}")
-        if not isinstance(joint_indices, torch.Tensor):
-            raise AssertionError(
-                f"joint indices stayed on host: {type(joint_indices)}"
-            )
-        self.position_calls.append((positions, joint_indices))
-
-    def set_joint_position_targets(self, positions, joint_indices=None):
-        if not isinstance(positions, torch.Tensor):
-            raise AssertionError(f"targets stayed on host: {type(positions)}")
-        if not isinstance(joint_indices, torch.Tensor):
-            raise AssertionError(
-                f"joint indices stayed on host: {type(joint_indices)}"
-            )
-        self.target_calls.append((positions, joint_indices))
+        raise AssertionError("deprecated single-articulation setter was used")
 
 
 class HostSafeArticulationTests(unittest.TestCase):
@@ -91,7 +87,7 @@ class HostSafeArticulationTests(unittest.TestCase):
         self.assertEqual(raw_limits.events, ["detach", "cpu", "numpy"])
         self.assertEqual(wrapped.marker, "delegated")
 
-    def test_numpy_finger_commands_are_forwarded_as_backend_tensors(self):
+    def test_numpy_finger_commands_use_batched_articulation_view_tensors(self):
         articulation = _FakeArticulation(
             np.zeros((1, 9, 2), dtype=np.float32)
         )
@@ -102,16 +98,35 @@ class HostSafeArticulationTests(unittest.TestCase):
         wrapped.set_joint_positions(positions, joint_indices=indices)
         wrapped.set_joint_position_targets(positions, joint_indices=indices)
 
-        immediate_positions, immediate_indices = articulation.position_calls[0]
-        target_positions, target_indices = articulation.target_calls[0]
+        immediate_positions, immediate_rows, immediate_indices = (
+            articulation._articulation_view.position_calls[0]
+        )
+        target_positions, target_rows, target_indices = (
+            articulation._articulation_view.target_calls[0]
+        )
+        self.assertEqual(immediate_positions.shape, (1, 2))
+        self.assertEqual(target_positions.shape, (1, 2))
         self.assertEqual(immediate_positions.dtype, torch.float32)
         self.assertEqual(immediate_indices.dtype, torch.int64)
         self.assertEqual(target_positions.dtype, torch.float32)
         self.assertEqual(target_indices.dtype, torch.int64)
-        np.testing.assert_allclose(immediate_positions.numpy(), positions)
+        self.assertIsNone(immediate_rows)
+        self.assertIsNone(target_rows)
+        np.testing.assert_allclose(immediate_positions.numpy()[0], positions)
         np.testing.assert_array_equal(immediate_indices.numpy(), indices)
-        np.testing.assert_allclose(target_positions.numpy(), positions)
+        np.testing.assert_allclose(target_positions.numpy()[0], positions)
         np.testing.assert_array_equal(target_indices.numpy(), indices)
+
+    def test_non_vector_finger_commands_are_rejected(self):
+        articulation = _FakeArticulation(
+            np.zeros((1, 9, 2), dtype=np.float32)
+        )
+        wrapped = HostSafeDofPropertiesArticulation(articulation)
+        with self.assertRaisesRegex(ValueError, "one-dimensional"):
+            wrapped.set_joint_positions(
+                np.zeros((1, 2), dtype=np.float32),
+                joint_indices=np.asarray([7, 8], dtype=np.int32),
+            )
 
     def test_only_one_articulation_and_two_limit_columns_are_accepted(self):
         for limits in (
