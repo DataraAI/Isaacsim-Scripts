@@ -5,7 +5,11 @@ import unittest
 
 import numpy as np
 
-from host_array_bridge import to_numpy_cpu
+from host_array_bridge import (
+    HostSafePoseObject,
+    pose_to_numpy_cpu,
+    to_numpy_cpu,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +36,16 @@ class _FakeCudaTensor:
         return self._values
 
 
+class _FakePoseObject:
+    def __init__(self):
+        self.position = _FakeCudaTensor([1.0, 2.0, 3.0])
+        self.orientation = _FakeCudaTensor([1.0, 0.0, 0.0, 0.0])
+        self.marker = "delegated"
+
+    def get_world_pose(self):
+        return self.position, self.orientation
+
+
 class HostArrayBridgeTests(unittest.TestCase):
     def test_device_tensor_is_detached_copied_to_cpu_and_converted(self):
         value = _FakeCudaTensor([1.0, 2.0, 3.0])
@@ -50,10 +64,33 @@ class HostArrayBridgeTests(unittest.TestCase):
                 label="position",
             )
 
-    def test_cable_runtime_wraps_and_restores_lula_base_pose_boundary(self):
+    def test_pose_pair_is_copied_to_host_and_other_methods_delegate(self):
+        value = _FakePoseObject()
+        wrapped = HostSafePoseObject(value, label="IK target")
+
+        position, orientation = wrapped.get_world_pose()
+
+        np.testing.assert_allclose(position, [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(orientation, [1.0, 0.0, 0.0, 0.0])
+        self.assertEqual(value.position.events, ["detach", "cpu", "numpy"])
+        self.assertEqual(value.orientation.events, ["detach", "cpu", "numpy"])
+        self.assertEqual(wrapped.marker, "delegated")
+
+    def test_pose_pair_shape_validation_names_the_failing_component(self):
+        with self.assertRaisesRegex(ValueError, "ToolCenter position"):
+            pose_to_numpy_cpu(
+                [1.0, 2.0],
+                [1.0, 0.0, 0.0, 0.0],
+                label="ToolCenter",
+            )
+
+    def test_cable_runtime_wraps_all_cuda_pose_sources_once(self):
         source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
+        self.assertIn("HostSafePoseObject", source)
+        self.assertIn('label="Franka articulation"', source)
+        self.assertIn('label="IK target"', source)
+        self.assertIn('label="actual ToolCenter"', source)
         self.assertIn("def _create_ik(self, assets_root", source)
-        self.assertIn("to_numpy_cpu", source)
         self.assertIn("original_set_robot_base_pose", source)
         self.assertIn("host_safe_set_robot_base_pose", source)
         self.assertIn("finally:", source)
