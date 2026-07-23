@@ -71,3 +71,56 @@ class HostSafePoseObject:
             orientation,
             label=self._label,
         )
+
+
+class HostSafeJointSubset:
+    """Delegate an articulation subset while returning joint state on the host."""
+
+    def __init__(self, wrapped, *, label: str) -> None:
+        self._wrapped = wrapped
+        self._label = label
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def get_joint_positions(self, *args, **kwargs) -> np.ndarray:
+        positions = self._wrapped.get_joint_positions(*args, **kwargs)
+        raw_shape = getattr(positions, "shape", None)
+        if raw_shape is None:
+            raw_shape = np.asarray(positions).shape
+        shape = tuple(int(value) for value in raw_shape)
+        if len(shape) != 1:
+            raise ValueError(
+                f"{self._label} must be one-dimensional, got {shape}"
+            )
+        return to_numpy_cpu(
+            positions,
+            shape=shape,
+            label=self._label,
+        )
+
+
+def install_host_safe_ik_warm_start(articulation_solver):
+    """Replace the solver's internal joint subset with a host-safe proxy."""
+
+    subset = articulation_solver.get_joints_subset()
+    if isinstance(subset, HostSafeJointSubset):
+        return articulation_solver
+
+    storage_names = [
+        name
+        for name, value in vars(articulation_solver).items()
+        if value is subset
+    ]
+    if len(storage_names) != 1:
+        raise RuntimeError(
+            "Could not uniquely locate the ArticulationKinematicsSolver "
+            f"joint subset storage; matches={storage_names}"
+        )
+
+    setattr(
+        articulation_solver,
+        storage_names[0],
+        HostSafeJointSubset(subset, label="Lula IK warm start"),
+    )
+    return articulation_solver
