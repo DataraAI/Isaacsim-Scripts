@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+import numpy as np
+
+from scale_aware_cable_mount import _matrix_to_gf_quatf_compatible
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -21,6 +25,23 @@ class ScaleAwareCableMountContractTests(unittest.TestCase):
         self.assertIn("replace(", source)
         self.assertNotIn("CableMountProxy", source)
         self.assertNotIn("PhysxAutoDeformableAttachmentAPI", source)
+
+    def test_matrix_to_quatf_uses_supported_openusd_binding(self):
+        rotation = np.array(
+            [
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        quaternion = _matrix_to_gf_quatf_compatible(rotation)
+        imaginary = quaternion.GetImaginary()
+        expected = np.sqrt(0.5)
+        self.assertAlmostEqual(float(quaternion.GetReal()), expected, places=6)
+        self.assertAlmostEqual(float(imaginary[0]), 0.0, places=6)
+        self.assertAlmostEqual(float(imaginary[1]), 0.0, places=6)
+        self.assertAlmostEqual(float(imaginary[2]), expected, places=6)
 
     def test_adapter_patches_and_restores_affine_root_helpers(self):
         source = (ROOT / "scale_aware_cable_mount.py").read_text(
