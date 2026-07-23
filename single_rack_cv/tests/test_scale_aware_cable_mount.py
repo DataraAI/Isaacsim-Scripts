@@ -22,6 +22,27 @@ class ScaleAwareCableMountContractTests(unittest.TestCase):
         self.assertNotIn("CableMountProxy", source)
         self.assertNotIn("PhysxAutoDeformableAttachmentAPI", source)
 
+    def test_adapter_patches_and_restores_affine_root_helpers(self):
+        source = (ROOT / "scale_aware_cable_mount.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "compute_world_from_root_for_tip_preserving_affine",
+            source,
+        )
+        self.assertIn("_numpy_to_gf_matrix_affine", source)
+        self.assertIn(
+            "cable_mount_module.compute_world_from_root_for_tip = (",
+            source,
+        )
+        self.assertIn(
+            "cable_mount_module._numpy_to_gf_matrix = (",
+            source,
+        )
+        self.assertIn("finally:", source)
+        self.assertIn("original_compute", source)
+        self.assertIn("original_converter", source)
+
     def test_runtime_uses_scale_aware_adapter(self):
         source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
         self.assertIn(
