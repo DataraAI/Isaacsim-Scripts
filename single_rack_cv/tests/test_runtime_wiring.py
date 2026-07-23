@@ -32,6 +32,17 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("RGB stereo capture", source)
         self.assertIn("no manual depth offset", source)
 
+    def test_cable_mount_uses_existing_rigid_plug_topology(self):
+        source = (ROOT / "cable_mount.py").read_text(encoding="utf-8")
+        self.assertIn("UsdPhysics.RigidBodyAPI", source)
+        self.assertIn('HasAPI("PhysxAutoDeformableAttachmentAPI")', source)
+        self.assertIn("built_in_attachment_is_preserved", source)
+        self.assertIn("compute_world_from_root_for_tip", source)
+        self.assertNotIn("CableMountProxy", source)
+        self.assertNotIn("create_auto_deformable_attachment", source)
+        self.assertNotIn("maskShapes", source)
+        self.assertNotIn("PhysxPhysicsAttachment", source)
+
 
 if __name__ == "__main__":
     unittest.main()
