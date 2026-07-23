@@ -16,7 +16,11 @@ from isaacsim.storage.native import get_assets_root_path
 
 import sim as sim_module
 from cable_geometry import validate_mount_window
-from host_array_bridge import HostSafePoseObject, to_numpy_cpu
+from host_array_bridge import (
+    HostSafePoseObject,
+    install_host_safe_ik_warm_start,
+    to_numpy_cpu,
+)
 from scale_aware_cable_mount import ScaleAwareCableMount
 from sim import (
     SimulationRuntime,
@@ -35,7 +39,7 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         super().__init__(simulation_app=simulation_app, cfg=cfg)
 
     def _create_ik(self, assets_root: str):
-        """Bridge every CUDA pose source used by the NumPy/Lula controller."""
+        """Bridge every CUDA pose and Lula warm-start source to host NumPy."""
 
         original_set_robot_base_pose = (
             sim_module.LulaKinematicsSolver.set_robot_base_pose
@@ -70,6 +74,9 @@ class CableMountedSimulationRuntime(SimulationRuntime):
                 original_set_robot_base_pose
             )
 
+        runtime.articulation_solver = install_host_safe_ik_warm_start(
+            runtime.articulation_solver
+        )
         runtime.articulation = HostSafePoseObject(
             runtime.articulation,
             label="Franka articulation",
