@@ -8,6 +8,7 @@ from cable_geometry import (
     compute_attachment_bounds,
     compute_world_from_root_for_tip,
     detect_plug_frame,
+    matrix_to_quaternion_wxyz,
     validate_mount_window,
     validate_transform,
 )
@@ -193,6 +194,26 @@ class CableGeometryTests(unittest.TestCase):
         reflected[0, 0] = -1.0
         with self.assertRaisesRegex(ValueError, "right handed"):
             validate_transform(reflected, "reflected")
+
+    def test_matrix_to_quaternion_uses_column_vector_rotation(self):
+        rotation = np.array([
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        quaternion = matrix_to_quaternion_wxyz(rotation)
+        expected = np.array([
+            np.sqrt(0.5),
+            0.0,
+            0.0,
+            np.sqrt(0.5),
+        ])
+        np.testing.assert_allclose(quaternion, expected, atol=1e-9)
+
+    def test_matrix_to_quaternion_rejects_reflection(self):
+        reflection = np.diag([-1.0, 1.0, 1.0])
+        with self.assertRaisesRegex(ValueError, "right handed"):
+            matrix_to_quaternion_wxyz(reflection)
 
 
 if __name__ == "__main__":
