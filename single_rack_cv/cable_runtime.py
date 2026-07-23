@@ -14,7 +14,9 @@ from isaacsim.core.simulation_manager import SimulationManager
 from isaacsim.sensors.experimental.rtx import CameraSensor
 from isaacsim.storage.native import get_assets_root_path
 
+import sim as sim_module
 from cable_geometry import validate_mount_window
+from host_array_bridge import to_numpy_cpu
 from scale_aware_cable_mount import ScaleAwareCableMount
 from sim import (
     SimulationRuntime,
@@ -31,6 +33,40 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         self.cable_mount: ScaleAwareCableMount | None = None
         self.physics_scene = None
         super().__init__(simulation_app=simulation_app, cfg=cfg)
+
+    def _create_ik(self, assets_root: str):
+        """Copy CUDA articulation base poses to host before calling legacy Lula."""
+
+        original_set_robot_base_pose = (
+            sim_module.LulaKinematicsSolver.set_robot_base_pose
+        )
+
+        def host_safe_set_robot_base_pose(
+            solver,
+            robot_position,
+            robot_orientation,
+        ):
+            return original_set_robot_base_pose(
+                solver,
+                to_numpy_cpu(
+                    robot_position,
+                    shape=(3,),
+                    label="Lula robot base position",
+                ),
+                to_numpy_cpu(
+                    robot_orientation,
+                    shape=(4,),
+                    label="Lula robot base orientation",
+                ),
+            )
+
+        sim_module.LulaKinematicsSolver.set_robot_base_pose = (
+            host_safe_set_robot_base_pose
+        )
+        try:
+            return super()._create_ik(assets_root)
+        finally:
+            sim_module.LulaKinematicsSolver.set_robot_base_pose = original_set_robot_base_pose
 
     def _build_scene(self) -> None:
         scene = self.cfg.scene
