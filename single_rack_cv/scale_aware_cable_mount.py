@@ -8,7 +8,14 @@ from dataclasses import replace
 import numpy as np
 from pxr import Gf, Sdf, UsdPhysics
 
-from cable_geometry import rigid_pose_from_affine
+import cable_mount as cable_mount_module
+from affine_root_geometry import (
+    compute_world_from_root_for_tip_preserving_affine,
+)
+from cable_geometry import (
+    rigid_pose_from_affine,
+    validate_affine_transform,
+)
 from cable_mount import (
     CableMount,
     _matrix_to_gf_quatf,
@@ -16,8 +23,48 @@ from cable_mount import (
 )
 
 
+def _numpy_to_gf_matrix_affine(matrix: np.ndarray) -> Gf.Matrix4d:
+    """Convert a column-vector affine transform to OpenUSD row-vector form."""
+
+    affine = validate_affine_transform(matrix, "matrix")
+    row_vector_matrix = affine.T
+    return Gf.Matrix4d(
+        *[float(value) for value in row_vector_matrix.reshape(-1)]
+    )
+
+
 class ScaleAwareCableMount(CableMount):
-    """CableMount variant that removes authored scale from rigid-only values."""
+    """CableMount variant that removes scale only from rigid-only values."""
+
+    def author_before_play(
+        self,
+        stage,
+        hand_path: str,
+        world_from_toolcenter: np.ndarray,
+    ) -> None:
+        """Use affine-safe placement helpers only during pre-play authoring."""
+
+        original_compute = (
+            cable_mount_module.compute_world_from_root_for_tip
+        )
+        original_converter = cable_mount_module._numpy_to_gf_matrix
+        cable_mount_module.compute_world_from_root_for_tip = (
+            compute_world_from_root_for_tip_preserving_affine
+        )
+        cable_mount_module._numpy_to_gf_matrix = (
+            _numpy_to_gf_matrix_affine
+        )
+        try:
+            super().author_before_play(
+                stage=stage,
+                hand_path=hand_path,
+                world_from_toolcenter=world_from_toolcenter,
+            )
+        finally:
+            cable_mount_module.compute_world_from_root_for_tip = (
+                original_compute
+            )
+            cable_mount_module._numpy_to_gf_matrix = original_converter
 
     def _author_fixed_joint(self) -> None:
         if self.stage is None:
