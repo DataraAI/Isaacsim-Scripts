@@ -96,6 +96,53 @@ def validate_transform(matrix: np.ndarray, label: str) -> np.ndarray:
     return transform
 
 
+def matrix_to_quaternion_wxyz(rotation_matrix: np.ndarray) -> np.ndarray:
+    """Convert a proper column-vector rotation matrix to scalar-first quaternion."""
+
+    rotation = _finite(rotation_matrix, (3, 3), "rotation_matrix")
+    candidate = np.eye(4, dtype=np.float64)
+    candidate[:3, :3] = rotation
+    validate_transform(candidate, "rotation_matrix")
+
+    trace = float(np.trace(rotation))
+    if trace > 0.0:
+        scale = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * scale
+        x = (rotation[2, 1] - rotation[1, 2]) / scale
+        y = (rotation[0, 2] - rotation[2, 0]) / scale
+        z = (rotation[1, 0] - rotation[0, 1]) / scale
+    elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
+        scale = math.sqrt(
+            1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]
+        ) * 2.0
+        w = (rotation[2, 1] - rotation[1, 2]) / scale
+        x = 0.25 * scale
+        y = (rotation[0, 1] + rotation[1, 0]) / scale
+        z = (rotation[0, 2] + rotation[2, 0]) / scale
+    elif rotation[1, 1] > rotation[2, 2]:
+        scale = math.sqrt(
+            1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]
+        ) * 2.0
+        w = (rotation[0, 2] - rotation[2, 0]) / scale
+        x = (rotation[0, 1] + rotation[1, 0]) / scale
+        y = 0.25 * scale
+        z = (rotation[1, 2] + rotation[2, 1]) / scale
+    else:
+        scale = math.sqrt(
+            1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]
+        ) * 2.0
+        w = (rotation[1, 0] - rotation[0, 1]) / scale
+        x = (rotation[0, 2] + rotation[2, 0]) / scale
+        y = (rotation[1, 2] + rotation[2, 1]) / scale
+        z = 0.25 * scale
+
+    quaternion = np.array([w, x, y, z], dtype=np.float64)
+    quaternion /= np.linalg.norm(quaternion)
+    if quaternion[0] < 0.0:
+        quaternion *= -1.0
+    return quaternion
+
+
 def detect_plug_frame(
     local_min_m: np.ndarray,
     local_max_m: np.ndarray,
@@ -283,12 +330,8 @@ def validate_mount_window(
     for sample in sample_list:
         if not isinstance(sample, (tuple, list)) or len(sample) != 2:
             raise ValueError("each mount sample must contain tip and axis error")
-        tip_errors.append(
-            _finite_nonnegative(sample[0], "tip errors")
-        )
-        axis_errors.append(
-            _finite_nonnegative(sample[1], "axis errors")
-        )
+        tip_errors.append(_finite_nonnegative(sample[0], "tip errors"))
+        axis_errors.append(_finite_nonnegative(sample[1], "axis errors"))
 
     maximum_tip = max(tip_errors)
     maximum_axis = max(axis_errors)
