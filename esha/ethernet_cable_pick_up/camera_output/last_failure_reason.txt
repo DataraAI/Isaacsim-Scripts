@@ -1,2 +1,2 @@
 capture=45
-reason=no left/right cable pair passed stereo correspondence and geometry checks: stereo reprojection RMS is too high: 12.452px (max 2.500px); top candidates L@[385.7, 384.3] long=120px / R@[262.7, 359.8] long=72px
+reason=no left/right cable pair passed stereo correspondence and geometry checks: stereo reprojection RMS is too high: 12.437px (max 2.500px); top candidates L@[385.7, 384.3] long=120px / R@[262.4, 359.8] long=72px

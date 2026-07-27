@@ -466,17 +466,13 @@ class SimulationRuntime:
         return float(np.linalg.norm(actual_position - target_position))
 
     def _tool_pose_from_hand(self) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Tool-center pose from articulation joints + Lula FK.
-
-        With CUDA PhysX / GPU dynamics, UsdGeom hand xforms often stay at the
-        Franka rest pose while the simulated arm moves. Joint-state FK matches
-        the visual robot.
-        """
+        """Tool-center pose from the live panda_hand USD Xform."""
         if self.ik is None:
             raise RuntimeError("IK runtime is not initialized.")
         cfg = self.cfg.ik
-        hand_position, hand_orientation = self._hand_pose_from_articulation()
+        hand_position, hand_orientation = self._get_world_pose(
+            self.ik.hand_path
+        )
         return hand_pose_to_tool_pose(
             hand_position_m=hand_position,
             hand_orientation_wxyz=hand_orientation,
@@ -489,80 +485,6 @@ class SimulationRuntime:
                 dtype=np.float64,
             ),
         )
-
-    def _hand_pose_from_articulation(self) -> tuple[np.ndarray, np.ndarray]:
-        """panda_hand pose from Lula FK on current articulation joints."""
-        if self.ik is None:
-            raise RuntimeError("IK runtime is not initialized.")
-
-        base_position, base_orientation = self._world_pose_numpy(
-            self.ik.articulation
-        )
-        self.ik.kinematics_solver.set_robot_base_pose(
-            base_position,
-            base_orientation,
-        )
-
-        translation, rotation = (
-            self.ik.articulation_solver.compute_end_effector_pose()
-        )
-        if translation is None or rotation is None:
-            raise RuntimeError(
-                "Lula forward kinematics failed for panda_hand."
-            )
-
-        hand_position = np.asarray(
-            translation,
-            dtype=np.float64,
-        ).reshape(3)
-        hand_orientation = matrix_to_quaternion_wxyz(
-            np.asarray(rotation, dtype=np.float64).reshape(3, 3)
-        )
-        return hand_position, hand_orientation
-
-    def _hand_camera_local_matrix(
-        self,
-        local_position: tuple[float, float, float],
-    ) -> np.ndarray:
-        """Hand←camera transform matching _create_hand_camera (row-vector 4x4)."""
-        camera_cfg = self.cfg.camera
-        y_quat = Gf.Rotation(
-            Gf.Vec3d(0.0, 1.0, 0.0),
-            camera_cfg.local_y_rotation_deg,
-        ).GetQuat()
-        roll_quat = Gf.Rotation(
-            Gf.Vec3d(0.0, 0.0, 1.0),
-            camera_cfg.local_roll_deg,
-        ).GetQuat()
-        local_quat = y_quat * roll_quat
-        imag = local_quat.GetImaginary()
-        orientation = _normalize_quaternion_wxyz(
-            np.array(
-                [
-                    local_quat.GetReal(),
-                    imag[0],
-                    imag[1],
-                    imag[2],
-                ],
-                dtype=np.float64,
-            )
-        )
-        # Column rotation R maps hand←camera offsets; CameraModel / USD Gf
-        # matrices use row vectors, so store R.T in the upper 3x3.
-        rotation = quaternion_wxyz_to_matrix(orientation)
-        matrix = np.eye(4, dtype=np.float64)
-        matrix[:3, :3] = rotation.T
-        matrix[3, :3] = np.asarray(local_position, dtype=np.float64)
-        return matrix
-
-    def _world_from_hand_matrix(self) -> np.ndarray:
-        """Row-vector 4x4 world←hand from articulation FK."""
-        position, orientation = self._hand_pose_from_articulation()
-        rotation = quaternion_wxyz_to_matrix(orientation)
-        matrix = np.eye(4, dtype=np.float64)
-        matrix[:3, :3] = rotation.T
-        matrix[3, :3] = position
-        return matrix
 
     def _update_startup_settle(self) -> None:
         """Wait for a stationary eye-in-hand camera before RGB acquisition."""
@@ -1209,10 +1131,13 @@ class SimulationRuntime:
     def _ensure_cable_point_world_m(self) -> np.ndarray:
         state = self.pre_grasp
         if state.cable_point_world_m is None:
-            plug_min, plug_max = self._world_bounds(
+            pos, _ = self._get_world_pose(
                 self.cfg.scene.tracked_connector_path
             )
-            state.cable_point_world_m = 0.5 * (plug_min + plug_max)
+            state.cable_point_world_m = np.asarray(
+                pos,
+                dtype=np.float64,
+            ).reshape(3)
         return apply_grasp_x_offset(
             state.cable_point_world_m,
             x_offset_m=self.cfg.pre_grasp.grasp_point_x_offset_m,
@@ -1691,7 +1616,6 @@ class SimulationRuntime:
             camera=self._camera_model(
                 self.left_camera_path,
                 left_rgb,
-                self.cfg.camera.left_local_position,
             ),
         )
         right_frame = CameraFrame(
@@ -1699,7 +1623,6 @@ class SimulationRuntime:
             camera=self._camera_model(
                 self.right_camera_path,
                 right_rgb,
-                self.cfg.camera.right_local_position,
             ),
         )
         virtual_camera = build_virtual_camera_model(
@@ -1716,31 +1639,18 @@ class SimulationRuntime:
         self,
         camera_path: str,
         rgb: np.ndarray,
-        local_position: tuple[float, float, float],
     ) -> CameraModel:
         stage = omni.usd.get_context().get_stage()
         camera_prim = stage.GetPrimAtPath(camera_path)
         camera = UsdGeom.Camera(camera_prim)
 
-        # CUDA PhysX does not keep child USD xforms in sync with the moving
-        # hand. Compose world←camera from articulation FK + the known local
-        # eye offset so stereo geometry matches the rendered images.
-        if (
-            self.ik is not None
-            and self.cfg.scene.enable_gpu_dynamics
-        ):
-            world_from_camera = (
-                self._hand_camera_local_matrix(local_position)
-                @ self._world_from_hand_matrix()
-            )
-        else:
-            camera_world = UsdGeom.Xformable(
-                camera_prim
-            ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-            world_from_camera = np.asarray(
-                camera_world,
-                dtype=np.float64,
-            )
+        camera_world = UsdGeom.Xformable(
+            camera_prim
+        ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        world_from_camera = np.asarray(
+            camera_world,
+            dtype=np.float64,
+        )
 
         return CameraModel(
             image_height_px=rgb.shape[0],
@@ -1846,13 +1756,10 @@ class SimulationRuntime:
         )
         self.cfg.camera.output_dir.mkdir(parents=True, exist_ok=True)
 
-        physics_device = scene.device
-        if scene.enable_gpu_dynamics and physics_device == "cpu":
-            physics_device = "cuda"
-            log(
-                "enable_gpu_dynamics=True with device=cpu; "
-                "using cuda for soft-cable PhysX"
-            )
+        # Always run SimulationManager on CPU. Soft-cable GPU dynamics are
+        # enabled separately via PhysxSceneAPI.EnableGPUDynamicsAttr in
+        # _configure_gpu_dynamics(); that must stay on for deformables.
+        physics_device = "cpu"
 
         SimulationManager.setup_simulation(
             dt=scene.physics_dt,
