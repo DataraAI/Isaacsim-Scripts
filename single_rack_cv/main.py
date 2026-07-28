@@ -164,6 +164,7 @@ try:
         try:
             runtime.update_ik()
             runtime.update_visual_servo_completion()
+            runtime.update_partial_insertion()
         except Exception as exc:
             warn(f"Motion/IK update failed: {exc}")
 
