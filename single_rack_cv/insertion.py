@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure frozen-axis state machine for guarded partial cable insertion."""
+"""Pure frozen-axis state machine for guarded cable approach and insertion."""
 
 from __future__ import annotations
 
@@ -107,6 +107,11 @@ class InsertionPhase(str, Enum):
     ABORTED = "aborted"
 
 
+class InsertionStage(str, Enum):
+    COARSE_APPROACH = "coarse_approach"
+    FINE_INSERTION = "fine_insertion"
+
+
 @dataclass(frozen=True)
 class InsertionLimits:
     total_depth_m: float
@@ -118,6 +123,9 @@ class InsertionLimits:
     max_orientation_error_deg: float
     max_mount_tip_error_m: float
     max_mount_axis_error_deg: float
+    coarse_approach_depth_m: float = 0.0
+    coarse_step_size_m: float = 0.0
+    opening_depth_m: float = 0.0
 
     def __post_init__(self) -> None:
         positive_float_fields = (
@@ -133,12 +141,46 @@ class InsertionLimits:
             value = float(getattr(self, name))
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
+
+        coarse_depth = float(self.coarse_approach_depth_m)
+        coarse_step = float(self.coarse_step_size_m)
+        opening_depth = float(self.opening_depth_m)
+        for name, value in (
+            ("coarse_approach_depth_m", coarse_depth),
+            ("coarse_step_size_m", coarse_step),
+            ("opening_depth_m", opening_depth),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+
+        if (coarse_depth <= _EPS) != (coarse_step <= _EPS):
+            raise ValueError(
+                "coarse_approach_depth_m and coarse_step_size_m must both be zero or positive"
+            )
+        if coarse_depth > self.total_depth_m + _EPS:
+            raise ValueError("coarse_approach_depth_m cannot exceed total_depth_m")
+        if coarse_step > coarse_depth + _EPS and coarse_depth > _EPS:
+            raise ValueError("coarse_step_size_m cannot exceed coarse_approach_depth_m")
         if self.step_size_m > self.total_depth_m:
             raise ValueError("step_size_m cannot exceed total_depth_m")
+        if opening_depth > self.total_depth_m + _EPS:
+            raise ValueError("opening_depth_m cannot exceed total_depth_m")
         if self.required_settled_frames <= 0:
             raise ValueError("required_settled_frames must be positive")
         if self.step_timeout_frames <= 0:
             raise ValueError("step_timeout_frames must be positive")
+
+    @property
+    def total_step_count(self) -> int:
+        coarse_depth = float(self.coarse_approach_depth_m)
+        coarse_steps = 0
+        if coarse_depth > _EPS:
+            coarse_steps = int(
+                math.ceil(coarse_depth / self.coarse_step_size_m - _EPS)
+            )
+        fine_distance = max(0.0, float(self.total_depth_m) - coarse_depth)
+        fine_steps = int(math.ceil(fine_distance / self.step_size_m - _EPS))
+        return coarse_steps + fine_steps
 
 
 @dataclass(frozen=True)
@@ -182,7 +224,9 @@ class InsertionSample:
 @dataclass(frozen=True)
 class InsertionCommand:
     step_index: int
+    stage: InsertionStage
     commanded_depth_m: float
+    commanded_port_depth_m: float
     target_position_m: np.ndarray
     target_orientation_wxyz: np.ndarray
 
@@ -204,8 +248,11 @@ class InsertionCommand:
 
 @dataclass(frozen=True)
 class InsertionMetrics:
+    stage: InsertionStage | None
     commanded_depth_m: float
+    commanded_port_depth_m: float
     actual_axial_depth_m: float
+    actual_port_depth_m: float
     lateral_drift_m: float
     target_error_m: float
     orientation_error_deg: float
@@ -263,9 +310,17 @@ class PartialInsertionController:
             actual_position_m=sample.actual_position_m,
             axis_world=self.axis_world,
         )
+        stage = self.last_command.stage if self.last_command is not None else None
         return InsertionMetrics(
+            stage=stage,
             commanded_depth_m=self.commanded_depth_m,
+            commanded_port_depth_m=(
+                self.commanded_depth_m - self.limits.opening_depth_m
+            ),
             actual_axial_depth_m=axial_depth_m,
+            actual_port_depth_m=(
+                axial_depth_m - self.limits.opening_depth_m
+            ),
             lateral_drift_m=lateral_drift_m,
             target_error_m=float(sample.target_error_m),
             orientation_error_deg=quaternion_angular_error_deg(
@@ -281,6 +336,28 @@ class PartialInsertionController:
             ),
         )
 
+    def _next_depth_and_stage(self) -> tuple[float, InsertionStage]:
+        coarse_depth = float(self.limits.coarse_approach_depth_m)
+        if (
+            coarse_depth > _EPS
+            and self.commanded_depth_m < coarse_depth - _EPS
+        ):
+            return (
+                min(
+                    coarse_depth,
+                    self.commanded_depth_m
+                    + float(self.limits.coarse_step_size_m),
+                ),
+                InsertionStage.COARSE_APPROACH,
+            )
+        return (
+            min(
+                float(self.limits.total_depth_m),
+                self.commanded_depth_m + float(self.limits.step_size_m),
+            ),
+            InsertionStage.FINE_INSERTION,
+        )
+
     def _issue_next_command(self, frame_index: int) -> InsertionCommand:
         if (
             self.frozen_start_position_m is None
@@ -289,13 +366,16 @@ class PartialInsertionController:
         ):
             raise RuntimeError("Insertion frame has not been frozen")
         next_step_index = self.commanded_step_index + 1
-        depth_m = min(
-            next_step_index * self.limits.step_size_m,
-            self.limits.total_depth_m,
-        )
+        depth_m, stage = self._next_depth_and_stage()
+        if depth_m <= self.commanded_depth_m + _EPS:
+            raise RuntimeError("Insertion command sequence made no progress")
         command = InsertionCommand(
             step_index=next_step_index,
+            stage=stage,
             commanded_depth_m=float(depth_m),
+            commanded_port_depth_m=float(
+                depth_m - self.limits.opening_depth_m
+            ),
             target_position_m=(
                 self.frozen_start_position_m
                 + self.axis_world * depth_m
