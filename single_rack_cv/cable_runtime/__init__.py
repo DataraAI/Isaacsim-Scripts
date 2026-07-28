@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
 import sys
 from pathlib import Path
@@ -41,6 +42,21 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
     """Use live PhysX/FK poses instead of stale USD child transforms."""
 
     def __init__(self, simulation_app, cfg):
+        # CUDA cable dynamics settles above the CPU-only 0.5 mm tracking floor.
+        # Keep stop-and-look behavior, but allow the next image once the physical
+        # ToolCenter is within 1.0 mm of each 1.0 mm target step.
+        cfg = replace(
+            cfg,
+            visual_servo=replace(
+                cfg.visual_servo,
+                target_settle_tolerance_m=max(
+                    float(cfg.visual_servo.target_settle_tolerance_m),
+                    0.001,
+                ),
+            ),
+        )
+        self._last_capture_wait_log_frame = -1_000_000
+
         super().__init__(simulation_app=simulation_app, cfg=cfg)
         if self.cable_mount is None:
             raise RuntimeError("Cable mount was not created")
@@ -56,7 +72,46 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
         self._base_mount_sample_validation = self.cable_mount.sample_validation
         self.cable_mount.sample_validation = self._sample_mount_validation_live
 
-        log("GPU FK + LIVE PLUG POSE BRIDGE ACTIVE")
+        log(
+            "GPU FK + LIVE PLUG POSE BRIDGE ACTIVE\n"
+            f"  between-capture settle tolerance: "
+            f"{self.cfg.visual_servo.target_settle_tolerance_m * 1000.0:.3f} mm"
+        )
+
+    def capture_due(self) -> bool:
+        """Expose a prolonged stop-and-look wait instead of silently freezing."""
+
+        due = super().capture_due()
+        if due:
+            return True
+
+        state = self.visual_servo
+        cfg = self.cfg.visual_servo
+        waiting_for_target = (
+            state.startup_ready
+            and state.acquired
+            and not state.visual_aligned
+            and not state.complete
+        )
+        log_interval_frames = 120
+
+        if (
+            waiting_for_target
+            and self.frame_index - self._last_capture_wait_log_frame
+            >= log_interval_frames
+        ):
+            self._last_capture_wait_log_frame = self.frame_index
+            error_m = self._tool_target_position_error_m()
+            if error_m > cfg.target_settle_tolerance_m:
+                log(
+                    "RGB SERVO WAITING FOR TARGET SETTLE\n"
+                    f"  physical ToolCenter error: {error_m * 1000.0:.3f} mm\n"
+                    f"  capture gate: "
+                    f"{cfg.target_settle_tolerance_m * 1000.0:.3f} mm\n"
+                    f"  commanded step: {cfg.max_target_step_m * 1000.0:.3f} mm"
+                )
+
+        return False
 
     def _hand_pose_from_articulation(self) -> tuple[np.ndarray, np.ndarray]:
         if self.ik is None:
