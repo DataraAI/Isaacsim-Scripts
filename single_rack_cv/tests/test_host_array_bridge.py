@@ -53,6 +53,29 @@ class _FakePoseObject:
         return self.position, self.orientation
 
 
+class _FakeArticulationController:
+    def __init__(self):
+        self.actions: list[object] = []
+
+    def apply_action(self, action):
+        self.actions.append(action)
+        return "controller-applied"
+
+
+class _FakeArticulation(_FakePoseObject):
+    def __init__(self):
+        super().__init__()
+        self.controller = _FakeArticulationController()
+        self.direct_apply_calls = 0
+
+    def get_articulation_controller(self):
+        return self.controller
+
+    def apply_action(self, action):
+        self.direct_apply_calls += 1
+        return "direct-applied"
+
+
 class _FakeJointSubset:
     def __init__(self):
         self.positions = _FakeCudaTensor(
@@ -101,6 +124,17 @@ class HostArrayBridgeTests(unittest.TestCase):
         self.assertEqual(value.position.events, ["detach", "cpu", "numpy"])
         self.assertEqual(value.orientation.events, ["detach", "cpu", "numpy"])
         self.assertEqual(wrapped.marker, "delegated")
+
+    def test_articulation_actions_route_through_controller(self):
+        value = _FakeArticulation()
+        wrapped = HostSafePoseObject(value, label="Franka articulation")
+        action = object()
+
+        result = wrapped.apply_action(action)
+
+        self.assertEqual(result, "controller-applied")
+        self.assertEqual(value.controller.actions, [action])
+        self.assertEqual(value.direct_apply_calls, 0)
 
     def test_pose_pair_shape_validation_names_the_failing_component(self):
         with self.assertRaisesRegex(ValueError, "ToolCenter position"):
