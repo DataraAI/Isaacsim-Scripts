@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+import numpy as np
+
+from config import CONFIG
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +35,26 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("runtime.note_perception_failure()", source)
         self.assertIn("RGB stereo capture", source)
         self.assertIn("no manual depth offset", source)
+
+    def test_toolcenter_calibration_rolls_and_extends_pregrasped_plug(self):
+        np.testing.assert_allclose(
+            CONFIG.ik.tool_center_local_position_m,
+            (0.0, 0.0, 0.1334),
+            atol=0.0,
+        )
+        np.testing.assert_allclose(
+            CONFIG.ik.tool_center_local_orientation_wxyz,
+            (
+                0.7071067811865476,
+                0.0,
+                0.0,
+                0.7071067811865475,
+            ),
+            atol=1.0e-15,
+        )
+        config_source = (ROOT / "config.py").read_text(encoding="utf-8")
+        self.assertNotIn("presentation_roll_deg", config_source)
+        self.assertNotIn("forward_tip_offset_m", config_source)
 
     def test_cable_mount_uses_existing_rigid_plug_topology(self):
         source = (ROOT / "cable_mount.py").read_text(encoding="utf-8")
