@@ -121,7 +121,11 @@ class RuntimeWiringTests(unittest.TestCase):
 
     def test_partial_insertion_config_is_exact(self):
         self.assertTrue(CONFIG.insertion.enabled)
-        self.assertEqual(CONFIG.insertion.total_depth_m, 0.010)
+        self.assertEqual(CONFIG.visual_servo.preinsert_standoff_m, 0.050)
+        self.assertEqual(CONFIG.insertion.total_depth_m, 0.060)
+        self.assertEqual(CONFIG.insertion.coarse_approach_depth_m, 0.040)
+        self.assertEqual(CONFIG.insertion.coarse_step_size_m, 0.005)
+        self.assertEqual(CONFIG.insertion.opening_depth_m, 0.050)
         self.assertEqual(CONFIG.insertion.step_size_m, 0.0005)
         self.assertEqual(
             CONFIG.insertion.settle_position_tolerance_m,
@@ -142,6 +146,8 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("tool_pose_to_hand_pose", runtime_source)
         self.assertIn("compute_inverse_kinematics", runtime_source)
         self.assertIn("could not publish insertion target", runtime_source)
+        self.assertIn("coarse_approach_depth_m", runtime_source)
+        self.assertIn("opening_depth_m", runtime_source)
         self.assertIn("runtime.update_partial_insertion()", main_source)
         self.assertLess(
             main_source.index("runtime.update_visual_servo_completion()"),
@@ -155,8 +161,9 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("RJ45 insertion tip", source)
         self.assertIn("GPU dynamics", source)
         self.assertIn("30/30", source)
-        self.assertIn("10 mm partial insertion", source)
-        self.assertIn("0.5 mm steps", source)
+        self.assertIn("40 mm coarse approach", source)
+        self.assertIn("20 mm fine motion", source)
+        self.assertIn("10 mm inside the opening", source)
         self.assertIn("frozen ToolCenter +Z", source)
         self.assertIn("holds on abort", source)
         self.assertNotIn("No insertion motion", source)
