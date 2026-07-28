@@ -72,6 +72,25 @@ class HostSafePoseObject:
             label=self._label,
         )
 
+    def apply_action(self, action):
+        """Send robot actions through the articulation controller."""
+
+        get_controller = getattr(
+            self._wrapped,
+            "get_articulation_controller",
+            None,
+        )
+        if not callable(get_controller):
+            return self._wrapped.apply_action(action)
+
+        controller = get_controller()
+        apply_action = getattr(controller, "apply_action", None)
+        if not callable(apply_action):
+            raise RuntimeError(
+                f"{self._label} articulation controller cannot apply actions"
+            )
+        return apply_action(action)
+
 
 class HostSafeJointSubset:
     """Delegate an articulation subset while returning joint state on the host."""
