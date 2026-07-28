@@ -28,15 +28,15 @@
 
 ## File Structure
 
-- Create `single_rack_cv/hand_plug_geometry.py`: pure NumPy validation, pitched local-transform construction, and geometry measurements.
+- Create `single_rack_cv/hand_plug_geometry.py`: pure NumPy validation, local-transform construction, and geometry measurements.
 - Modify `single_rack_cv/config.py`: expose one shared `hand_downward_pitch_deg` value.
-- Modify `single_rack_cv/cable_runtime/__init__.py`: apply the pitched local transform before scene construction, read live plug pose/axis once, enforce startup geometry, and feed the plug axis to insertion.
+- Modify `single_rack_cv/cable_runtime/__init__.py`: apply the pitched local transform before scene construction, read live plug pose/axis, enforce startup geometry, and feed the plug axis to insertion.
 - Modify `single_rack_cv/insertion.py`: accept and freeze an explicit insertion axis from the runtime sample.
-- Modify `single_rack_cv/tests/test_partial_insertion.py`: update sample construction and prove explicit-axis behavior.
+- Modify `single_rack_cv/tests/test_partial_insertion.py`: update the sample factory and prove explicit-axis behavior.
 - Modify `single_rack_cv/tests/test_two_stage_insertion.py`: update two-stage samples to provide the explicit axis.
 - Create `single_rack_cv/tests/test_hand_plug_geometry.py`: pure transform, sign, range, and horizontal-axis tests.
 - Create `single_rack_cv/tests/test_angled_hand_runtime_wiring.py`: structural wiring and unchanged-safety-contract tests.
-- Modify `single_rack_cv/README.md`: document the side-view convention, separate hand/plug frames, and qualification command.
+- Modify `single_rack_cv/README.md`: document the side-view convention, frame separation, and qualification procedure.
 
 ---
 
@@ -55,7 +55,7 @@
   - `measure_hand_plug_geometry(*, hand_position_m: np.ndarray, hand_rotation_world: np.ndarray, plug_tip_position_m: np.ndarray, plug_axis_world: np.ndarray) -> HandPlugGeometryMetrics`
   - `HandPlugGeometryMetrics(relative_pitch_deg: float, wrist_above_tip_m: float, plug_horizontal_error_deg: float, wrist_higher_fingertips_lower: bool)`
 
-- [ ] **Step 1: Write failing tests for accepted and rejected pitch values**
+- [ ] **Step 1: Write failing validation tests**
 
 ```python
 class PitchValidationTests(unittest.TestCase):
@@ -71,41 +71,36 @@ class PitchValidationTests(unittest.TestCase):
                     validate_downward_hand_pitch_deg(value)
 ```
 
-- [ ] **Step 2: Write failing transform tests**
+- [ ] **Step 2: Write failing transform and direction tests**
 
 ```python
 class PitchedTransformTests(unittest.TestCase):
-    def test_zero_pitch_is_exact_identity_change(self):
-        base = np.array(
+    def setUp(self):
+        self.base = np.array(
             [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
             dtype=np.float64,
         )
-        actual = compute_pitched_hand_from_tool_rotation(base, 0.0)
-        np.testing.assert_allclose(actual, base, atol=1.0e-12)
 
-    def test_thirty_degree_pitch_is_base_times_negative_local_x_rotation(self):
-        base = np.array(
-            [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-            dtype=np.float64,
-        )
-        radians = math.radians(-30.0)
-        expected_delta = np.array(
+    def test_zero_pitch_is_exactly_backward_compatible(self):
+        actual = compute_pitched_hand_from_tool_rotation(self.base, 0.0)
+        np.testing.assert_allclose(actual, self.base, atol=1.0e-12)
+
+    def test_thirty_degree_pitch_is_negative_local_x_rotation(self):
+        angle = math.radians(-30.0)
+        delta = np.array(
             [
                 [1.0, 0.0, 0.0],
-                [0.0, math.cos(radians), -math.sin(radians)],
-                [0.0, math.sin(radians), math.cos(radians)],
+                [0.0, math.cos(angle), -math.sin(angle)],
+                [0.0, math.sin(angle), math.cos(angle)],
             ],
             dtype=np.float64,
         )
-        actual = compute_pitched_hand_from_tool_rotation(base, 30.0)
-        np.testing.assert_allclose(actual, base @ expected_delta, atol=1.0e-12)
-```
+        actual = compute_pitched_hand_from_tool_rotation(self.base, 30.0)
+        np.testing.assert_allclose(actual, self.base @ delta, atol=1.0e-12)
 
-- [ ] **Step 3: Write failing directional and horizontal tests**
 
-```python
 class GeometryMeasurementTests(unittest.TestCase):
-    def test_requested_sign_is_wrist_higher_and_fingertips_lower(self):
+    def test_requested_sign_and_horizontal_plug_pass(self):
         pitch = math.radians(30.0)
         hand_rotation = np.array(
             [
@@ -126,20 +121,17 @@ class GeometryMeasurementTests(unittest.TestCase):
         self.assertTrue(metrics.wrist_higher_fingertips_lower)
         self.assertAlmostEqual(metrics.plug_horizontal_error_deg, 0.0, places=12)
 
-    def test_opposite_sign_fails_direction_contract(self):
-        hand_rotation = np.eye(3, dtype=np.float64)
+    def test_opposite_vertical_order_fails_direction_contract(self):
         metrics = measure_hand_plug_geometry(
             hand_position_m=np.array([0.8, 0.0, 1.2]),
-            hand_rotation_world=hand_rotation,
+            hand_rotation_world=np.eye(3, dtype=np.float64),
             plug_tip_position_m=np.array([0.7, 0.0, 1.3]),
             plug_axis_world=np.array([0.0, 0.0, 1.0]),
         )
         self.assertFalse(metrics.wrist_higher_fingertips_lower)
 ```
 
-- [ ] **Step 4: Run the new tests to verify they fail**
-
-Run:
+- [ ] **Step 3: Run the tests and verify they fail**
 
 ```bash
 cd ~/Isaacsim-Scripts/single_rack_cv
@@ -148,7 +140,7 @@ cd ~/Isaacsim-Scripts/single_rack_cv
 
 Expected: `ModuleNotFoundError: No module named 'hand_plug_geometry'`.
 
-- [ ] **Step 5: Implement the pure geometry module**
+- [ ] **Step 4: Implement the pure geometry module**
 
 ```python
 #!/usr/bin/env python3
@@ -202,8 +194,9 @@ def compute_pitched_hand_from_tool_rotation(
     downward_pitch_deg: float,
 ) -> np.ndarray:
     base = _rotation3(base_hand_from_tool, label="base_hand_from_tool")
-    pitch = math.radians(validate_downward_hand_pitch_deg(downward_pitch_deg))
-    angle = -pitch
+    angle = -math.radians(
+        validate_downward_hand_pitch_deg(downward_pitch_deg)
+    )
     delta = np.array(
         [
             [1.0, 0.0, 0.0],
@@ -217,7 +210,9 @@ def compute_pitched_hand_from_tool_rotation(
 
 def horizontal_axis_error_deg(axis_world: np.ndarray) -> float:
     axis = _axis3(axis_world, label="axis_world")
-    return math.degrees(math.asin(float(np.clip(abs(axis[2]), 0.0, 1.0))))
+    return math.degrees(
+        math.asin(float(np.clip(abs(axis[2]), 0.0, 1.0)))
+    )
 
 
 @dataclass(frozen=True)
@@ -237,6 +232,10 @@ def measure_hand_plug_geometry(
 ) -> HandPlugGeometryMetrics:
     hand_position = np.asarray(hand_position_m, dtype=np.float64).reshape(3)
     tip_position = np.asarray(plug_tip_position_m, dtype=np.float64).reshape(3)
+    if not np.all(np.isfinite(hand_position)):
+        raise ValueError("hand_position_m must be finite")
+    if not np.all(np.isfinite(tip_position)):
+        raise ValueError("plug_tip_position_m must be finite")
     hand_rotation = _rotation3(hand_rotation_world, label="hand_rotation_world")
     plug_axis = _axis3(plug_axis_world, label="plug_axis_world")
     hand_forward = _axis3(hand_rotation[:, 2], label="hand_forward_axis")
@@ -252,9 +251,7 @@ def measure_hand_plug_geometry(
     )
 ```
 
-- [ ] **Step 6: Run the geometry tests and verify they pass**
-
-Run:
+- [ ] **Step 5: Run the geometry tests**
 
 ```bash
 ~/isaacsim/python.sh -m unittest -v tests.test_hand_plug_geometry
@@ -262,7 +259,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit the pure geometry contract**
+- [ ] **Step 6: Commit the pure geometry contract**
 
 ```bash
 git add single_rack_cv/hand_plug_geometry.py \
@@ -281,38 +278,45 @@ git commit -m "feat: define angled hand plug geometry"
 
 **Interfaces:**
 - Consumes: `compute_pitched_hand_from_tool_rotation(...)` and `CableMountConfig.hand_downward_pitch_deg`.
-- Produces: a runtime `cfg.ik.tool_center_local_orientation_wxyz` whose `hand_T_tool` rotation counter-pitches the plug frame by the configured angle before `SimulationRuntime` builds the scene.
+- Produces: a runtime `cfg.ik.tool_center_local_orientation_wxyz` whose `hand_T_tool` rotation counter-pitches the plug frame before `SimulationRuntime` builds the scene.
 
-- [ ] **Step 1: Write the failing configuration test**
+- [ ] **Step 1: Write the failing configuration and structural tests**
 
 ```python
+from pathlib import Path
+import unittest
+
+from config import Config
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_PATH = ROOT / "cable_runtime" / "__init__.py"
+SIM_PATH = ROOT / "sim.py"
+
+
 class AngledHandConfigurationTests(unittest.TestCase):
     def test_single_shared_pitch_defaults_to_thirty_degrees(self):
-        cfg = Config()
-        self.assertEqual(cfg.cable_mount.hand_downward_pitch_deg, 30.0)
-```
+        self.assertEqual(Config().cable_mount.hand_downward_pitch_deg, 30.0)
 
-- [ ] **Step 2: Write failing structural wiring tests**
 
-```python
 class AngledHandRuntimeWiringTests(unittest.TestCase):
-    def test_runtime_derives_pitched_local_tool_rotation_before_super_init(self):
+    def test_pitch_is_applied_before_base_scene_construction(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         pitch_use = source.index("hand_downward_pitch_deg")
-        super_init = source.index("super().__init__(simulation_app=simulation_app, cfg=cfg)")
+        super_init = source.index(
+            "super().__init__(simulation_app=simulation_app, cfg=cfg)"
+        )
         self.assertLess(pitch_use, super_init)
         self.assertIn("compute_pitched_hand_from_tool_rotation", source)
         self.assertIn("matrix_to_quaternion_wxyz", source)
 
-    def test_cameras_are_not_independently_overridden(self):
+    def test_no_independent_camera_pose_override_is_added(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("set_world_pose", source[source.find("def _camera_model"):])
-        self.assertIn("self._world_from_hand_matrix()", source)
+        camera_section = source[source.index("def _camera_model"):]
+        self.assertIn("self._world_from_hand_matrix()", camera_section)
+        self.assertNotIn("camera_prim.Set", camera_section)
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
-
-Run:
+- [ ] **Step 2: Run the tests and verify they fail**
 
 ```bash
 ~/isaacsim/python.sh -m unittest -v \
@@ -322,7 +326,7 @@ Run:
 
 Expected: missing configuration field and missing runtime transform wiring.
 
-- [ ] **Step 4: Add the shared configuration value**
+- [ ] **Step 3: Add the one shared pitch value**
 
 Add to `CableMountConfig` immediately after `fixed_joint_path`:
 
@@ -331,11 +335,11 @@ Add to `CableMountConfig` immediately after `fixed_joint_path`:
     hand_downward_pitch_deg: float = 30.0
 ```
 
-Do not add a second pitch value to `IKConfig`, `CameraConfig`, or `InsertionConfig`.
+Do not add another pitch value to `IKConfig`, `CameraConfig`, or `InsertionConfig`.
 
-- [ ] **Step 5: Apply the pitched local transform before the base runtime builds the scene**
+- [ ] **Step 4: Derive the pitched local transform before `super().__init__`**
 
-In `cable_runtime/__init__.py`, import:
+Import:
 
 ```python
 from hand_plug_geometry import (
@@ -344,7 +348,7 @@ from hand_plug_geometry import (
 )
 ```
 
-Before the existing `replace(...)` call, derive the new local rotation:
+At the start of `CableMountedSimulationRuntime.__init__`:
 
 ```python
 pitch_deg = validate_downward_hand_pitch_deg(
@@ -366,14 +370,16 @@ pitched_tool_local_orientation = tuple(
 )
 ```
 
-Merge this into the existing immutable config replacement:
+Merge it into the existing immutable replacement:
 
 ```python
 cfg = replace(
     cfg,
     ik=replace(
         cfg.ik,
-        tool_center_local_orientation_wxyz=pitched_tool_local_orientation,
+        tool_center_local_orientation_wxyz=(
+            pitched_tool_local_orientation
+        ),
     ),
     visual_servo=replace(
         cfg.visual_servo,
@@ -390,22 +396,9 @@ cfg = replace(
 self._configured_hand_pitch_deg = pitch_deg
 ```
 
-This preserves the world-space plug-tip target orientation while causing `tool_pose_to_hand_pose(...)` to request the pitched `panda_hand` pose.
+The target remains the horizontal plug-tip frame. `tool_pose_to_hand_pose(...)` converts it to the pitched `panda_hand` target.
 
-- [ ] **Step 6: Add an exact zero-pitch compatibility test**
-
-```python
-    def test_zero_pitch_preserves_existing_local_orientation(self):
-        base = quaternion_wxyz_to_matrix(
-            np.asarray(Config().ik.tool_center_local_orientation_wxyz)
-        )
-        actual = compute_pitched_hand_from_tool_rotation(base, 0.0)
-        np.testing.assert_allclose(actual, base, atol=1.0e-12)
-```
-
-- [ ] **Step 7: Run the configuration and wiring tests**
-
-Run:
+- [ ] **Step 5: Run the geometry and wiring tests**
 
 ```bash
 ~/isaacsim/python.sh -m unittest -v \
@@ -415,7 +408,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 8: Commit the shared configuration and IK transform**
+- [ ] **Step 6: Commit the shared configuration and transform**
 
 ```bash
 git add single_rack_cv/config.py \
@@ -429,8 +422,7 @@ git commit -m "feat: pitch hand around horizontal plug frame"
 ### Task 3: Live Plug Geometry Validation and Startup Gate
 
 **Files:**
-- Modify: `single_rack_cv/cable_runtime/__init__.py:184-232`
-- Modify: `single_rack_cv/cable_runtime.py:253-311`
+- Modify: `single_rack_cv/cable_runtime/__init__.py`
 - Modify: `single_rack_cv/tests/test_angled_hand_runtime_wiring.py`
 
 **Interfaces:**
@@ -438,41 +430,39 @@ git commit -m "feat: pitch hand around horizontal plug frame"
 - Produces:
   - `_live_plug_tip_and_axis() -> tuple[np.ndarray, np.ndarray]`
   - `_live_hand_plug_geometry() -> HandPlugGeometryMetrics`
-  - startup rejection when pitch sign, relative angle, horizontal plug axis, fixed joint, or deformable attachment is invalid.
+  - subclass override `_log_startup_diagnostics(...) -> float`
+  - startup rejection when pitch sign, relative angle, or horizontal plug axis is invalid.
 
-- [ ] **Step 1: Write failing structural tests for one shared live plug-pose helper**
+- [ ] **Step 1: Write failing wiring tests**
 
 ```python
-    def test_runtime_has_one_live_plug_tip_and_axis_helper(self):
+    def test_runtime_owns_live_geometry_helpers(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         self.assertIn("def _live_plug_tip_and_axis", source)
         self.assertIn("def _live_hand_plug_geometry", source)
+        self.assertIn("def _log_startup_diagnostics", source)
         self.assertIn("measure_hand_plug_geometry", source)
 
-    def test_startup_geometry_keeps_existing_limits(self):
-        source = RUNTIME_PATH.read_text(encoding="utf-8")
-        self.assertIn("max_tip_error_m", source)
-        self.assertIn("max_axis_error_deg", source)
-        self.assertIn("0.5", DESIGN_PATH.read_text(encoding="utf-8"))
-        self.assertIn("1 degree", DESIGN_PATH.read_text(encoding="utf-8"))
+    def test_base_cable_runtime_is_not_coupled_to_angled_geometry(self):
+        base_source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
+        self.assertNotIn("_live_hand_plug_geometry", base_source)
+        self.assertNotIn("hand_downward_pitch_deg", base_source)
 ```
 
 - [ ] **Step 2: Run the wiring test and verify it fails**
-
-Run:
 
 ```bash
 ~/isaacsim/python.sh -m unittest -v tests.test_angled_hand_runtime_wiring
 ```
 
-Expected: missing helper and geometry validation strings.
+Expected: missing helpers and diagnostics override.
 
-- [ ] **Step 3: Extract the live PhysX plug-tip and nose-axis calculation**
-
-Refactor the current pose block from `_sample_mount_validation_live` into:
+- [ ] **Step 3: Extract one live plug-tip and nose-axis helper**
 
 ```python
     def _live_plug_tip_and_axis(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.cable_mount is None:
+            raise RuntimeError("Cable mount is unavailable")
         plug_frame = self.cable_mount.plug_frame
         if plug_frame is None:
             raise RuntimeError("Tracked plug frame is unavailable")
@@ -503,14 +493,14 @@ Refactor the current pose block from `_sample_mount_validation_live` into:
         tip_world = (
             world_from_plug @ np.r_[plug_frame.tip_local_m, 1.0]
         )[:3]
-        nose_world = (
-            world_from_plug[:3, :3] @ plug_frame.nose_axis_local
-        )
-        nose_world = nose_world / np.linalg.norm(nose_world)
-        return tip_world, nose_world
+        nose_world = world_from_plug[:3, :3] @ plug_frame.nose_axis_local
+        norm = float(np.linalg.norm(nose_world))
+        if norm <= 1.0e-12:
+            raise RuntimeError("Live plug nose axis has zero length")
+        return tip_world, nose_world / norm
 ```
 
-- [ ] **Step 4: Add live hand-to-plug metrics and hard gates**
+- [ ] **Step 4: Add live geometry metrics and hard gates**
 
 Import:
 
@@ -527,8 +517,6 @@ Add:
 
 ```python
     def _live_hand_plug_geometry(self) -> HandPlugGeometryMetrics:
-        if self.cable_mount is None:
-            raise RuntimeError("Cable mount is unavailable")
         tip_world, plug_axis_world = self._live_plug_tip_and_axis()
         hand_position, hand_orientation = self._hand_pose_from_articulation()
         metrics = measure_hand_plug_geometry(
@@ -547,9 +535,12 @@ Add:
             )
         if not metrics.wrist_higher_fingertips_lower:
             raise RuntimeError(
-                "wrong hand pitch sign: wrist is not higher than the plug tip"
+                "wrong pitch sign: wrist is not above the plug tip"
             )
-        if metrics.plug_horizontal_error_deg > self.cfg.cable_mount.max_axis_error_deg:
+        if (
+            metrics.plug_horizontal_error_deg
+            > self.cfg.cable_mount.max_axis_error_deg
+        ):
             raise RuntimeError(
                 "plug is not horizontal: "
                 f"{metrics.plug_horizontal_error_deg:.6f} deg"
@@ -557,9 +548,9 @@ Add:
         return metrics
 ```
 
-- [ ] **Step 5: Reuse the helper in mount validation**
+- [ ] **Step 5: Reuse the helper in live mount validation**
 
-Replace duplicated live plug extraction inside `_sample_mount_validation_live` with:
+Keep `self._base_mount_sample_validation(runtime)` as the first line of `_sample_mount_validation_live`, then replace the duplicated PhysX pose block with:
 
 ```python
 tip_world, nose_world = self._live_plug_tip_and_axis()
@@ -572,31 +563,45 @@ return (
 )
 ```
 
-The existing base validator call remains first so fixed-joint, deformable attachment, GPU dynamics, and topology checks are not bypassed.
+This preserves the existing fixed-joint, deformable-attachment, GPU-dynamics, topology, mount-tip, and plug-axis checks.
 
-- [ ] **Step 6: Extend startup diagnostics without changing the gate timing**
+- [ ] **Step 6: Override startup diagnostics in the facade**
 
-In `cable_runtime.py::_log_startup_diagnostics`, after mount validation succeeds, call `self._live_hand_plug_geometry()` and add:
+Do not modify `single_rack_cv/cable_runtime.py`. Add this override to the facade:
 
 ```python
-geometry_status = (
-    f"  configured hand pitch: {self._configured_hand_pitch_deg:.3f} deg\n"
-    f"  measured hand-to-plug pitch: "
-    f"{geometry.relative_pitch_deg:.6f} deg\n"
-    f"  wrist above plug tip: "
-    f"{geometry.wrist_above_tip_m * 1000.0:.3f} mm\n"
-    f"  requested pitch sign valid: "
-    f"{geometry.wrist_higher_fingertips_lower}\n"
-    f"  plug horizontal error: "
-    f"{geometry.plug_horizontal_error_deg:.6f} deg"
-)
+    def _log_startup_diagnostics(
+        self,
+        *,
+        frame_count: int,
+        minimum_tool_error_m: float,
+        maximum_tool_error_m: float,
+        validation_sample_count: int,
+    ) -> float:
+        current_error_m = super()._log_startup_diagnostics(
+            frame_count=frame_count,
+            minimum_tool_error_m=minimum_tool_error_m,
+            maximum_tool_error_m=maximum_tool_error_m,
+            validation_sample_count=validation_sample_count,
+        )
+        geometry = self._live_hand_plug_geometry()
+        log(
+            "ANGLED HAND GEOMETRY\n"
+            f"  configured hand pitch: "
+            f"{self._configured_hand_pitch_deg:.3f} deg\n"
+            f"  measured hand-to-plug pitch: "
+            f"{geometry.relative_pitch_deg:.6f} deg\n"
+            f"  wrist above plug tip: "
+            f"{geometry.wrist_above_tip_m * 1000.0:.3f} mm\n"
+            f"  requested pitch sign valid: "
+            f"{geometry.wrist_higher_fingertips_lower}\n"
+            f"  plug horizontal error: "
+            f"{geometry.plug_horizontal_error_deg:.6f} deg"
+        )
+        return current_error_m
 ```
 
-Print `geometry_status` immediately after the existing plug-tip and plug-axis measurements.
-
 - [ ] **Step 7: Run pure and structural tests**
-
-Run:
 
 ```bash
 ~/isaacsim/python.sh -m unittest -v \
@@ -611,7 +616,6 @@ Expected: all tests pass.
 
 ```bash
 git add single_rack_cv/cable_runtime/__init__.py \
-        single_rack_cv/cable_runtime.py \
         single_rack_cv/tests/test_angled_hand_runtime_wiring.py
 git commit -m "feat: validate pitched hand and horizontal plug"
 ```
@@ -621,18 +625,24 @@ git commit -m "feat: validate pitched hand and horizontal plug"
 ### Task 4: Freeze the Explicit Live Plug Insertion Axis
 
 **Files:**
-- Modify: `single_rack_cv/insertion.py:188-224,277-301`
-- Modify: `single_rack_cv/cable_runtime/__init__.py:327-355`
+- Modify: `single_rack_cv/insertion.py`
+- Modify: `single_rack_cv/cable_runtime/__init__.py`
 - Modify: `single_rack_cv/tests/test_partial_insertion.py`
 - Modify: `single_rack_cv/tests/test_two_stage_insertion.py`
 
 **Interfaces:**
 - Consumes: `InsertionSample.insertion_axis_world`, sourced from `_live_plug_tip_and_axis()`.
-- Produces: `PartialInsertionController.axis_world` frozen from the live plug axis while `frozen_orientation_wxyz` continues to hold the pitched hand-control orientation.
+- Produces: `PartialInsertionController.axis_world` frozen from the live plug axis while `frozen_orientation_wxyz` continues to hold the commanded horizontal ToolCenter orientation.
 
-- [ ] **Step 1: Update the test sample factory with an explicit axis**
+- [ ] **Step 1: Update both test sample factories**
 
-In `tests/test_partial_insertion.py`:
+In `tests/test_partial_insertion.py` and `tests/test_two_stage_insertion.py`, add `insertion_axis=(0.0, 0.0, 1.0)` and pass:
+
+```python
+insertion_axis_world=np.asarray(insertion_axis, dtype=np.float64),
+```
+
+Use this complete `test_partial_insertion.py` factory signature:
 
 ```python
 def sample(
@@ -662,12 +672,10 @@ def sample(
     )
 ```
 
-Apply the same default field to the sample helper in `tests/test_two_stage_insertion.py`.
-
-- [ ] **Step 2: Replace the old local-+Z assumption test with an explicit-axis test**
+- [ ] **Step 2: Replace the old local-+Z assumption test**
 
 ```python
-    def test_first_command_uses_explicit_plug_axis_not_hand_local_plus_z(self):
+    def test_first_command_uses_explicit_plug_axis(self):
         controller = PartialInsertionController(make_limits())
         start = np.array([0.7, -0.2, 1.3])
         angle = math.radians(30.0)
@@ -699,40 +707,33 @@ Apply the same default field to the sample helper in `tests/test_two_stage_inser
 
 - [ ] **Step 3: Run insertion tests and verify they fail**
 
-Run:
-
 ```bash
 ~/isaacsim/python.sh -m unittest -v \
   tests.test_partial_insertion \
   tests.test_two_stage_insertion
 ```
 
-Expected: `InsertionSample` does not accept `insertion_axis_world` and the controller still derives axis from orientation.
+Expected: `InsertionSample` does not accept `insertion_axis_world` and the controller still derives its axis from orientation.
 
-- [ ] **Step 4: Add the explicit axis to `InsertionSample`**
+- [ ] **Step 4: Add and normalize `InsertionSample.insertion_axis_world`**
+
+Add the field immediately after `actual_orientation_wxyz`:
 
 ```python
-@dataclass(frozen=True)
-class InsertionSample:
-    frame_index: int
-    alignment_complete: bool
-    actual_position_m: np.ndarray
-    actual_orientation_wxyz: np.ndarray
     insertion_axis_world: np.ndarray
-    target_error_m: float
-    mount_tip_error_m: float
-    mount_axis_error_deg: float
-    fixed_joint_valid: bool
-    attachment_preserved: bool
+```
 
-    def __post_init__(self) -> None:
-        ...
+Insert this exact block in `InsertionSample.__post_init__` immediately after the existing orientation normalization:
+
+```python
         object.__setattr__(
             self,
             "insertion_axis_world",
             _normalized_axis(self.insertion_axis_world),
         )
 ```
+
+Keep the existing frame-index validation, position normalization, orientation normalization, and finite nonnegative scalar checks unchanged.
 
 - [ ] **Step 5: Freeze the sample axis instead of orientation local +Z**
 
@@ -746,7 +747,7 @@ Replace `_freeze_from` with:
         self.phase = InsertionPhase.READY
 ```
 
-Keep orientation-error measurement against `frozen_orientation_wxyz`; only translation/depth uses `axis_world`.
+Keep orientation-error measurement against `frozen_orientation_wxyz`; only translation and depth use `axis_world`.
 
 - [ ] **Step 6: Feed the live plug axis from the runtime**
 
@@ -770,10 +771,10 @@ return InsertionSample(
 )
 ```
 
-- [ ] **Step 7: Add a zero-pitch compatibility test**
+- [ ] **Step 7: Add zero-pitch compatibility coverage**
 
 ```python
-    def test_explicit_axis_matches_legacy_local_plus_z_at_zero_pitch(self):
+    def test_explicit_axis_matches_legacy_zero_pitch_direction(self):
         controller = PartialInsertionController(make_limits())
         event = controller.update(
             sample(
@@ -789,9 +790,7 @@ return InsertionSample(
         )
 ```
 
-- [ ] **Step 8: Run all insertion tests**
-
-Run:
+- [ ] **Step 8: Run insertion regression tests**
 
 ```bash
 ~/isaacsim/python.sh -m unittest -v \
@@ -800,7 +799,7 @@ Run:
   tests.test_two_stage_runtime_wiring
 ```
 
-Expected: all tests pass; the two-stage command count remains 48 and final commanded port depth remains +10 mm.
+Expected: all tests pass; total command count remains 48 and final commanded port depth remains +10 mm.
 
 - [ ] **Step 9: Commit explicit plug-axis insertion**
 
@@ -814,32 +813,24 @@ git commit -m "feat: drive insertion along live plug axis"
 
 ---
 
-### Task 5: Visual-Servo Geometry and Regression Wiring
+### Task 5: Visual-Servo Regression, Documentation, and Qualification
 
 **Files:**
 - Modify: `single_rack_cv/tests/test_angled_hand_runtime_wiring.py`
-- Modify: `single_rack_cv/tests/test_runtime_wiring.py`
-- Test: existing `single_rack_cv/tests/test_live_control.py`
-- Test: existing `single_rack_cv/tests/test_front_plane.py`
+- Modify: `single_rack_cv/README.md`
+- Test output: `single_rack_cv/camera_output/angled_hand_horizontal_plug.txt` locally; do not commit generated output.
 
 **Interfaces:**
-- Consumes: the pitched `cfg.ik.tool_center_local_orientation_wxyz` before `SimulationRuntime.__init__` computes `desired_port_virtual_camera_usd`.
-- Produces: recomputed desired port observation from the pitched hand/camera extrinsics while preserving translation-only control and live camera models.
+- Consumes: the completed geometry, runtime, and insertion changes.
+- Produces: preserved translation-only visual control, exact operator instructions, and workstation evidence required before merge.
 
-- [ ] **Step 1: Write structural tests proving the pitch reaches visual geometry**
+- [ ] **Step 1: Add unchanged visual and safety contract tests**
 
 ```python
-    def test_pitched_config_is_passed_to_base_runtime_before_desired_port_geometry(self):
-        source = RUNTIME_PATH.read_text(encoding="utf-8")
-        self.assertLess(
-            source.index("tool_center_local_orientation_wxyz=pitched_tool_local_orientation"),
-            source.index("super().__init__(simulation_app=simulation_app, cfg=cfg)"),
-        )
-
     def test_visual_servo_remains_translation_only(self):
-        sim_source = SIM_PATH.read_text(encoding="utf-8")
-        self.assertIn("position=target_position + step_world_m", sim_source)
-        self.assertIn("orientation=target_orientation", sim_source)
+        source = SIM_PATH.read_text(encoding="utf-8")
+        self.assertIn("position=target_position + step_world_m", source)
+        self.assertIn("orientation=target_orientation", source)
 
     def test_live_camera_model_still_uses_hand_fk(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
@@ -847,11 +838,7 @@ git commit -m "feat: drive insertion along live plug axis"
         self.assertIn("self._world_from_hand_matrix()", camera_section)
         self.assertNotIn("ground_truth", camera_section)
         self.assertNotIn("raycast", camera_section)
-```
 
-- [ ] **Step 2: Add an unchanged-safety-contract test**
-
-```python
     def test_insertion_distances_and_limits_are_unchanged(self):
         cfg = Config()
         self.assertEqual(cfg.insertion.total_depth_m, 0.060)
@@ -865,57 +852,9 @@ git commit -m "feat: drive insertion along live plug axis"
         self.assertEqual(cfg.cable_mount.max_axis_error_deg, 1.0)
 ```
 
-- [ ] **Step 3: Run structural, perception, and insertion regression tests**
+- [ ] **Step 2: Update the README**
 
-Run:
-
-```bash
-~/isaacsim/python.sh -m unittest -v \
-  tests.test_hand_plug_geometry \
-  tests.test_angled_hand_runtime_wiring \
-  tests.test_runtime_wiring \
-  tests.test_live_control \
-  tests.test_front_plane \
-  tests.test_partial_insertion \
-  tests.test_two_stage_insertion \
-  tests.test_two_stage_runtime_wiring
-```
-
-Expected: all tests pass.
-
-- [ ] **Step 4: Compile the complete package**
-
-Run:
-
-```bash
-~/isaacsim/python.sh -m compileall -q .
-```
-
-Expected: exit code 0 and no syntax errors.
-
-- [ ] **Step 5: Commit regression wiring**
-
-```bash
-git add single_rack_cv/tests/test_angled_hand_runtime_wiring.py \
-        single_rack_cv/tests/test_runtime_wiring.py
-git commit -m "test: protect angled hand runtime wiring"
-```
-
----
-
-### Task 6: Operator Documentation and Workstation Qualification
-
-**Files:**
-- Modify: `single_rack_cv/README.md`
-- Test output: `single_rack_cv/camera_output/angled_hand_horizontal_plug.txt` (local runtime artifact; do not commit generated output)
-
-**Interfaces:**
-- Consumes: completed implementation and all test commands.
-- Produces: exact operator pull/run instructions and one qualified workstation log before merge.
-
-- [ ] **Step 1: Update the README geometry description**
-
-Add a section containing exactly these operational facts:
+Add:
 
 ```markdown
 ## Angled hand with horizontal plug
@@ -931,17 +870,11 @@ The robot-right-side view is the sign convention:
 - insertion freezes the live PhysX plug nose axis, not the pitched hand axis
 
 Both wrist cameras remain rigidly attached to `panda_hand`, so the full RGB-stereo alignment must be requalified after this geometry change.
-```
 
-- [ ] **Step 2: Document the geometry kill switch**
-
-```markdown
 Stop the run without loosening thresholds when the plug tilts with the hand, the wrist falls below the plug tip, the measured hand-to-plug pitch differs from 30 degrees by more than 0.5 degrees, plug horizontal error exceeds 1 degree, stereo correspondence persistently degrades, or insertion drift approaches 0.5 mm.
 ```
 
-- [ ] **Step 3: Run the full pure/structural test set**
-
-Run:
+- [ ] **Step 3: Run the full pure and structural suite**
 
 ```bash
 cd ~/Isaacsim-Scripts/single_rack_cv
@@ -957,24 +890,20 @@ cd ~/Isaacsim-Scripts/single_rack_cv
   tests.test_cable_geometry \
   tests.test_scale_aware_cable_mount \
   tests.test_cable_mount_contract
+~/isaacsim/python.sh -m compileall -q .
 ```
 
-Expected: all tests pass.
+Expected: every test passes and compileall exits 0.
 
-- [ ] **Step 4: Commit operator documentation**
+- [ ] **Step 4: Commit documentation and regression coverage**
 
 ```bash
-git add single_rack_cv/README.md
-git commit -m "docs: explain angled hand horizontal plug geometry"
+git add single_rack_cv/README.md \
+        single_rack_cv/tests/test_angled_hand_runtime_wiring.py
+git commit -m "test: qualify angled hand geometry contracts"
 ```
 
-- [ ] **Step 5: Push the branch for workstation testing**
-
-```bash
-git push -u origin feature/angled-hand-horizontal-plug
-```
-
-- [ ] **Step 6: Pull and verify the exact branch on the Isaac workstation**
+- [ ] **Step 5: Push and verify the branch on the workstation**
 
 ```bash
 set -e
@@ -988,7 +917,7 @@ git rev-parse --short HEAD
 
 Expected branch: `feature/angled-hand-horizontal-plug`.
 
-- [ ] **Step 7: Run the geometry-qualified simulation**
+- [ ] **Step 6: Run the Isaac Sim qualification**
 
 ```bash
 cd ~/Isaacsim-Scripts/single_rack_cv
@@ -996,13 +925,11 @@ cd ~/Isaacsim-Scripts/single_rack_cv
   2>&1 | tee camera_output/angled_hand_horizontal_plug.txt
 ```
 
-- [ ] **Step 8: Check geometry before accepting vision or insertion**
-
-The startup log must show all of these:
+Startup acceptance evidence:
 
 ```text
 configured hand pitch: 30.000 deg
-measured hand-to-plug pitch: 30.000... deg
+measured hand-to-plug pitch: within 30 +/- 0.5 deg
 wrist above plug tip: positive value
 requested pitch sign valid: True
 plug horizontal error: <= 1.000000 deg
@@ -1011,11 +938,7 @@ built-in attachment preserved: True
 validation frames: 30/30
 ```
 
-The viewport must show, from the robot-right-side view, the wrist higher than the fingertips while the rigid RJ45 plug remains level.
-
-- [ ] **Step 9: Check full-task qualification**
-
-The same run must also show:
+Full-task acceptance evidence:
 
 ```text
 RGB STEREO TRACK ACQUIRED
@@ -1026,22 +949,22 @@ PARTIAL INSERTION COMPLETE
 commanded depth relative to opening: +10.000 mm
 ```
 
-Acceptance limits:
+Numeric limits:
 
 - final physical ToolCenter tracking error at or below 0.3 mm
 - final measured depth within 0.3 mm of +10.0 mm
 - lateral drift at or below 0.5 mm
-- hand-orientation error at or below 1 degree
+- ToolCenter orientation error at or below 1 degree
 - plug horizontal error at or below 1 degree
-- no invalid fixed joint or deformable attachment
+- fixed joint and built-in deformable attachment remain valid
 - terminal action remains hold; no seating, release, or retreat
 
-- [ ] **Step 10: Use the kill switch on any geometry or perception regression**
+- [ ] **Step 7: Enforce the kill switch**
 
 Do not merge and do not increase tolerances when any of these occurs:
 
 - plug pitches with the hand
-- wrist is below the fingertips/plug tip
+- wrist is below the plug tip
 - relative pitch is outside 30 +/- 0.5 degrees
 - persistent stereo pairing or reprojection failures appear
 - visual servo does not converge cleanly
@@ -1049,6 +972,6 @@ Do not merge and do not increase tolerances when any of these occurs:
 - lateral drift grows toward or above 0.5 mm
 - port-rim contact occurs before the expected opening crossing
 
-- [ ] **Step 11: Merge only after workstation evidence passes**
+- [ ] **Step 8: Merge only after workstation evidence passes**
 
 Open a PR from `feature/angled-hand-horizontal-plug` to `main` and squash merge only after the accepted log proves the complete geometry, visual-servo, and insertion gates. Preserve `main` as the rollback point until then.
