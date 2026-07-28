@@ -248,6 +248,67 @@ class CableMountedSimulationRuntime(SimulationRuntime):
             f"{np.round(self.desired_port_virtual_camera_usd, 5).tolist()}"
         )
 
+    def _log_startup_diagnostics(
+        self,
+        *,
+        frame_count: int,
+        minimum_tool_error_m: float,
+        maximum_tool_error_m: float,
+        validation_sample_count: int,
+    ) -> float:
+        """Log every measurement that can block the startup gate."""
+
+        if self.ik is None or self.cable_mount is None:
+            raise RuntimeError("Startup diagnostics require IK and cable mount")
+
+        self._update_actual_tool_frame(self.ik)
+        target_position, _ = self.ik.target.get_world_pose()
+        actual_position, _ = self.ik.actual_tool.get_world_pose()
+        hand_position, _ = self._get_world_pose(self.ik.hand_path)
+        target = np.asarray(target_position, dtype=np.float64)
+        actual = np.asarray(actual_position, dtype=np.float64)
+        hand = np.asarray(hand_position, dtype=np.float64)
+        current_tool_error_m = float(np.linalg.norm(actual - target))
+
+        try:
+            mount_tip_error_m, mount_axis_error_deg = (
+                self.cable_mount.sample_validation(self)
+            )
+            mount_status = (
+                f"  plug-tip to ToolCenter error: "
+                f"{mount_tip_error_m * 1000.0:.6f} mm\n"
+                f"  plug-axis error: {mount_axis_error_deg:.6f} deg"
+            )
+        except Exception as error:
+            mount_status = (
+                "  mount sample failed: "
+                f"{type(error).__name__}: {error}"
+            )
+
+        log(
+            "CABLE STARTUP DIAGNOSTICS\n"
+            f"  prepare frame: {frame_count}\n"
+            f"  startup ready: {self.visual_servo.startup_ready}\n"
+            f"  settled frames: "
+            f"{self.visual_servo.startup_settled_frame_count}/"
+            f"{self.cfg.visual_servo.required_startup_settled_frames}\n"
+            f"  ToolCenter error current/min/max: "
+            f"{current_tool_error_m * 1000.0:.6f} / "
+            f"{minimum_tool_error_m * 1000.0:.6f} / "
+            f"{maximum_tool_error_m * 1000.0:.6f} mm\n"
+            f"  target ToolCenter: {np.round(target, 7).tolist()}\n"
+            f"  actual ToolCenter: {np.round(actual, 7).tolist()}\n"
+            f"  panda_hand: {np.round(hand, 7).tolist()}\n"
+            f"{mount_status}\n"
+            f"  fixed joint valid: "
+            f"{self.cable_mount.fixed_joint_is_valid()}\n"
+            f"  built-in attachment preserved: "
+            f"{self.cable_mount.built_in_attachment_is_preserved()}\n"
+            f"  validation samples collected: {validation_sample_count}/"
+            f"{self.cfg.cable_mount.validation_frames}"
+        )
+        return current_tool_error_m
+
     def prepare_for_perception(self) -> None:
         """Settle and validate the mount before any detector is initialized."""
 
@@ -260,10 +321,32 @@ class CableMountedSimulationRuntime(SimulationRuntime):
             + cfg.validation_frames
             + 600
         )
+        minimum_tool_error_m = float("inf")
+        maximum_tool_error_m = 0.0
+        current_tool_error_m = float("inf")
+
         for frame_count in range(max_prepare_frames):
             self.step()
             self.update_ik()
             self._update_startup_settle()
+            current_tool_error_m = self._tool_target_position_error_m()
+            minimum_tool_error_m = min(
+                minimum_tool_error_m,
+                current_tool_error_m,
+            )
+            maximum_tool_error_m = max(
+                maximum_tool_error_m,
+                current_tool_error_m,
+            )
+
+            if frame_count == 0 or (frame_count + 1) % 120 == 0:
+                self._log_startup_diagnostics(
+                    frame_count=frame_count + 1,
+                    minimum_tool_error_m=minimum_tool_error_m,
+                    maximum_tool_error_m=maximum_tool_error_m,
+                    validation_sample_count=len(samples),
+                )
+
             if frame_count < cfg.initial_settle_frames:
                 continue
             if not self.visual_servo.startup_ready:
@@ -272,9 +355,24 @@ class CableMountedSimulationRuntime(SimulationRuntime):
             if len(samples) == cfg.validation_frames:
                 break
         else:
+            self._log_startup_diagnostics(
+                frame_count=max_prepare_frames,
+                minimum_tool_error_m=minimum_tool_error_m,
+                maximum_tool_error_m=maximum_tool_error_m,
+                validation_sample_count=len(samples),
+            )
             raise RuntimeError(
-                "Cable mount did not settle and validate within the startup "
-                "frame cap"
+                "Cable mount startup gate timed out.\n"
+                f"  startup ready: {self.visual_servo.startup_ready}\n"
+                f"  settled frames: "
+                f"{self.visual_servo.startup_settled_frame_count}/"
+                f"{self.cfg.visual_servo.required_startup_settled_frames}\n"
+                f"  ToolCenter error current/min/max mm: "
+                f"{current_tool_error_m * 1000.0:.6f} / "
+                f"{minimum_tool_error_m * 1000.0:.6f} / "
+                f"{maximum_tool_error_m * 1000.0:.6f}\n"
+                f"  validation samples: {len(samples)}/"
+                f"{cfg.validation_frames}"
             )
 
         validation = validate_mount_window(
