@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import importlib.util
+import math
 import sys
 from pathlib import Path
 
@@ -16,12 +17,22 @@ from isaacsim.core.prims import SingleRigidPrim
 
 from cable_geometry import angular_error_deg
 from host_array_bridge import to_numpy_cpu
+from insertion import (
+    InsertionEvent,
+    InsertionLimits,
+    InsertionPhase,
+    InsertionSample,
+    PartialInsertionController,
+)
 from perception import CameraModel
 from sim import (
     hand_pose_to_tool_pose,
     log,
     matrix_to_quaternion_wxyz,
     quaternion_wxyz_to_matrix,
+    tool_pose_to_hand_pose,
+    update_convergence_counter,
+    warn,
 )
 
 
@@ -39,7 +50,7 @@ _BaseCableMountedSimulationRuntime = _BASE_MODULE.CableMountedSimulationRuntime
 
 
 class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
-    """Use live PhysX/FK poses instead of stale USD child transforms."""
+    """Use live PhysX/FK poses and guarded frozen-axis partial insertion."""
 
     def __init__(self, simulation_app, cfg):
         # CUDA cable dynamics settles above the CPU-only 0.5 mm tracking floor.
@@ -76,12 +87,58 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
         self._base_mount_sample_validation = self.cable_mount.sample_validation
         self.cable_mount.sample_validation = self._sample_mount_validation_live
 
+        insertion_cfg = self.cfg.insertion
+        step_timeout_frames = max(
+            1,
+            int(
+                round(
+                    float(insertion_cfg.step_timeout_s)
+                    / float(self.cfg.scene.physics_dt)
+                )
+            ),
+        )
+        self.partial_insertion = PartialInsertionController(
+            InsertionLimits(
+                total_depth_m=float(insertion_cfg.total_depth_m),
+                step_size_m=float(insertion_cfg.step_size_m),
+                settle_tolerance_m=float(
+                    insertion_cfg.settle_position_tolerance_m
+                ),
+                required_settled_frames=int(
+                    insertion_cfg.required_settled_frames
+                ),
+                step_timeout_frames=step_timeout_frames,
+                max_lateral_drift_m=float(
+                    insertion_cfg.max_lateral_drift_m
+                ),
+                max_orientation_error_deg=float(
+                    insertion_cfg.max_orientation_error_deg
+                ),
+                max_mount_tip_error_m=float(
+                    self.cfg.cable_mount.max_tip_error_m
+                ),
+                max_mount_axis_error_deg=float(
+                    self.cfg.cable_mount.max_axis_error_deg
+                ),
+            )
+        )
+        self._insertion_total_steps = int(
+            math.ceil(
+                float(insertion_cfg.total_depth_m)
+                / float(insertion_cfg.step_size_m)
+                - 1.0e-12
+            )
+        )
+
         log(
             "GPU FK + LIVE PLUG POSE BRIDGE ACTIVE\n"
             f"  visual-servo max step: "
             f"{self.cfg.visual_servo.max_target_step_m * 1000.0:.3f} mm\n"
             f"  between-capture settle tolerance: "
-            f"{self.cfg.visual_servo.target_settle_tolerance_m * 1000.0:.3f} mm"
+            f"{self.cfg.visual_servo.target_settle_tolerance_m * 1000.0:.3f} mm\n"
+            f"  guarded partial insertion: "
+            f"{insertion_cfg.total_depth_m * 1000.0:.1f} mm total, "
+            f"{insertion_cfg.step_size_m * 1000.0:.1f} mm steps"
         )
 
     def capture_due(self) -> bool:
@@ -118,6 +175,264 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
                 )
 
         return False
+
+    def update_visual_servo_completion(self) -> None:
+        """Complete visual alignment and hand target ownership to insertion."""
+
+        state = self.visual_servo
+        cfg = self.cfg.visual_servo
+
+        if not state.visual_aligned or state.complete:
+            return
+        if self.ik is None:
+            return
+
+        self._update_actual_tool_frame(self.ik)
+        target_position, _ = self.ik.target.get_world_pose()
+        actual_position, _ = self.ik.actual_tool.get_world_pose()
+
+        target_position = np.asarray(target_position, dtype=np.float64)
+        actual_position = np.asarray(actual_position, dtype=np.float64)
+        position_error_m = self._tool_target_position_error_m()
+
+        state.settled_frame_count = update_convergence_counter(
+            position_error_m=position_error_m,
+            tolerance_m=cfg.settle_position_tolerance_m,
+            current_count=state.settled_frame_count,
+        )
+
+        if state.settled_frame_count >= cfg.required_settled_frames:
+            state.complete = True
+            log(
+                "RGB STEREO VISUAL SERVO COMPLETE\n"
+                f"  final ToolCenter target: "
+                f"{np.round(target_position, 6).tolist()}\n"
+                f"  actual ToolCenter: "
+                f"{np.round(actual_position, 6).tolist()}\n"
+                f"  physical tracking error: "
+                f"{position_error_m * 1000.0:.3f} mm\n"
+                f"  settled frames: "
+                f"{state.settled_frame_count}/"
+                f"{cfg.required_settled_frames}\n"
+                "  next action: begin guarded 10 mm partial insertion."
+            )
+            return
+
+        timeout_frames = max(
+            1,
+            int(
+                round(
+                    cfg.settle_warning_timeout_s
+                    / self.cfg.scene.physics_dt
+                )
+            ),
+        )
+        if (
+            self.frame_index - state.settle_start_frame
+            >= timeout_frames
+            and not state.settle_timeout_reported
+        ):
+            state.settle_timeout_reported = True
+            warn(
+                "RGB stereo alignment is stable, but ToolCenter has not settled "
+                "within the warning timeout.\n"
+                f"  current physical error: "
+                f"{position_error_m * 1000.0:.3f} mm\n"
+                f"  required: "
+                f"{cfg.settle_position_tolerance_m * 1000.0:.3f} mm"
+            )
+
+    def update_partial_insertion(self) -> None:
+        """Advance one guarded state-machine frame after visual completion."""
+
+        if not self.cfg.insertion.enabled:
+            return
+        if self.ik is None or self.cable_mount is None:
+            return
+        if (
+            not self.visual_servo.complete
+            and self.partial_insertion.phase
+            is InsertionPhase.WAITING_FOR_ALIGNMENT
+        ):
+            return
+        if self.partial_insertion.phase in (
+            InsertionPhase.COMPLETE,
+            InsertionPhase.ABORTED,
+        ):
+            return
+
+        sample: InsertionSample | None = None
+        try:
+            sample = self._partial_insertion_sample()
+            event = self.partial_insertion.update(sample)
+        except Exception as exc:
+            event = self.partial_insertion.abort(
+                f"live insertion validation failed: {exc}",
+                sample,
+            )
+
+        if event.command is not None:
+            try:
+                reachable = self._insertion_target_is_ik_reachable(
+                    event.command.target_position_m,
+                    event.command.target_orientation_wxyz,
+                )
+            except Exception as exc:
+                reachable = False
+                ik_reason = f"Lula IK preflight raised: {exc}"
+            else:
+                ik_reason = "Lula IK rejected insertion target"
+
+            if not reachable:
+                event = self.partial_insertion.abort(ik_reason, sample)
+            else:
+                self.ik.target.set_world_pose(
+                    position=event.command.target_position_m,
+                    orientation=event.command.target_orientation_wxyz,
+                )
+
+        if event.kind in (
+            "started",
+            "step_settled",
+            "complete",
+            "aborted",
+        ):
+            self._log_partial_insertion_event(event)
+
+    def _partial_insertion_sample(self) -> InsertionSample:
+        if self.ik is None or self.cable_mount is None:
+            raise RuntimeError("Insertion runtime is not initialized")
+
+        actual_position, actual_orientation = (
+            self._tool_pose_from_articulation()
+        )
+        target_position, _ = self.ik.target.get_world_pose()
+        target = np.asarray(target_position, dtype=np.float64).reshape(3)
+        target_error_m = float(
+            np.linalg.norm(actual_position - target)
+        )
+        mount_tip_error_m, mount_axis_error_deg = (
+            self._sample_mount_validation_live(self)
+        )
+
+        return InsertionSample(
+            frame_index=int(self.frame_index),
+            alignment_complete=bool(self.visual_servo.complete),
+            actual_position_m=actual_position,
+            actual_orientation_wxyz=actual_orientation,
+            target_error_m=target_error_m,
+            mount_tip_error_m=mount_tip_error_m,
+            mount_axis_error_deg=mount_axis_error_deg,
+            fixed_joint_valid=self.cable_mount.fixed_joint_is_valid(),
+            attachment_preserved=(
+                self.cable_mount.built_in_attachment_is_preserved()
+            ),
+        )
+
+    def _insertion_target_is_ik_reachable(
+        self,
+        tool_position_m: np.ndarray,
+        tool_orientation_wxyz: np.ndarray,
+    ) -> bool:
+        if self.ik is None:
+            return False
+
+        hand_target_position, hand_target_orientation = (
+            tool_pose_to_hand_pose(
+                tool_position_m=np.asarray(
+                    tool_position_m,
+                    dtype=np.float64,
+                ),
+                tool_orientation_wxyz=np.asarray(
+                    tool_orientation_wxyz,
+                    dtype=np.float64,
+                ),
+                tool_local_position_m=np.asarray(
+                    self.cfg.ik.tool_center_local_position_m,
+                    dtype=np.float64,
+                ),
+                tool_local_orientation_wxyz=np.asarray(
+                    self.cfg.ik.tool_center_local_orientation_wxyz,
+                    dtype=np.float64,
+                ),
+            )
+        )
+        base_position, base_orientation = (
+            self.ik.articulation.get_world_pose()
+        )
+        self.ik.kinematics_solver.set_robot_base_pose(
+            base_position,
+            base_orientation,
+        )
+        _, success = (
+            self.ik.articulation_solver.compute_inverse_kinematics(
+                target_position=hand_target_position,
+                target_orientation=hand_target_orientation,
+                position_tolerance=self.cfg.ik.position_tolerance_m,
+                orientation_tolerance=self.cfg.ik.orientation_tolerance_rad,
+            )
+        )
+        return bool(success)
+
+    def _log_partial_insertion_event(
+        self,
+        event: InsertionEvent,
+    ) -> None:
+        labels = {
+            "started": "PARTIAL INSERTION STARTED",
+            "step_settled": "PARTIAL INSERTION STEP SETTLED",
+            "complete": "PARTIAL INSERTION COMPLETE",
+            "aborted": "PARTIAL INSERTION ABORTED",
+        }
+        label = labels[event.kind]
+        lines = [label]
+
+        if event.settled_step_index is not None:
+            lines.append(
+                f"  settled step: {event.settled_step_index}/"
+                f"{self._insertion_total_steps}"
+            )
+        if event.command is not None:
+            lines.append(
+                f"  next command step: {event.command.step_index}/"
+                f"{self._insertion_total_steps}"
+            )
+            lines.append(
+                f"  next commanded depth: "
+                f"{event.command.commanded_depth_m * 1000.0:.3f} mm"
+            )
+        if event.metrics is not None:
+            metrics = event.metrics
+            lines.extend(
+                [
+                    f"  commanded depth: "
+                    f"{metrics.commanded_depth_m * 1000.0:.3f} mm",
+                    f"  actual axial depth: "
+                    f"{metrics.actual_axial_depth_m * 1000.0:.3f} mm",
+                    f"  lateral drift: "
+                    f"{metrics.lateral_drift_m * 1000.0:.3f} mm",
+                    f"  ToolCenter tracking error: "
+                    f"{metrics.target_error_m * 1000.0:.3f} mm",
+                    f"  orientation error: "
+                    f"{metrics.orientation_error_deg:.6f} deg",
+                    f"  plug-tip mount error: "
+                    f"{metrics.mount_tip_error_m * 1000.0:.6f} mm",
+                    f"  plug-axis error: "
+                    f"{metrics.mount_axis_error_deg:.6f} deg",
+                    f"  settled frames: "
+                    f"{metrics.settled_frame_count}/"
+                    f"{self.partial_insertion.limits.required_settled_frames}",
+                    f"  elapsed step frames: "
+                    f"{metrics.elapsed_step_frames}/"
+                    f"{self.partial_insertion.limits.step_timeout_frames}",
+                ]
+            )
+        if event.reason is not None:
+            lines.append(f"  reason: {event.reason}")
+        if event.kind in ("complete", "aborted"):
+            lines.append("  next action: hold current ToolCenter target")
+
+        log("\n".join(lines))
 
     def _hand_pose_from_articulation(self) -> tuple[np.ndarray, np.ndarray]:
         if self.ik is None:
