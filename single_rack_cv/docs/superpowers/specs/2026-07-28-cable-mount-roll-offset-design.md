@@ -1,70 +1,74 @@
 # Cable Mount Roll and Forward Offset Design
 
 **Date:** 2026-07-28  
-**Branch:** `feature/pregrasped-cable-mount`
+**Branch:** `feature/pregrasped-cable-mount`  
+**Status:** Approved corrected ToolCenter calibration
 
 ## Goal
 
-Change the pregrasped RJ45 presentation so the connector:
+Change the pregrasped RJ45 mounting pose so the connector:
 
-- keeps its insertion nose pointed along the existing ToolCenter insertion axis,
-- rolls exactly 90 degrees around that axis,
-- protrudes 30 mm farther forward from `panda_hand`,
-- remains fixed to the existing rigid tracked plug,
-- preserves the deformable cable tail and built-in plug-to-tail attachment.
+- keeps the same insertion direction,
+- rolls exactly 90 degrees around its insertion axis,
+- protrudes 30 mm farther from `panda_hand`,
+- remains the physical meaning of `/World/ToolCenter`,
+- preserves the real tracked plug, direct fixed joint, deformable tail, and built-in plug-to-tail attachment.
 
-## Geometry
+## Correct geometry contract
 
-The current mount maps the detected RJ45 tip directly onto the existing ToolCenter frame. The new mount will instead construct a presentation frame from the current ToolCenter frame:
+The earlier presentation-only proposal was rejected because it would put the physical RJ45 tip 30 mm ahead of `/World/ToolCenter`. That would silently reduce the physical 50 mm pre-insert standoff to 20 mm and corrupt future insertion depth.
 
-1. Apply a +90 degree local roll around ToolCenter local `+Z`.
-2. Translate the desired RJ45 tip 30 mm farther along ToolCenter local `+Z`.
-3. Use this adjusted desired tip frame for the existing one-time cable-root placement.
-4. Author the fixed joint from the resulting real hand-to-plug transform.
-
-The RJ45 nose axis remains aligned with ToolCenter local `+Z`; only connector roll and forward placement change.
-
-## Configuration
-
-Add explicit cable-mount presentation settings to `CableMountConfig`:
+The calibrated hand-to-ToolCenter transform must instead be updated directly:
 
 ```python
-presentation_roll_deg: float = 90.0
-forward_tip_offset_m: float = 0.030
+tool_center_local_position_m = (
+    0.0,
+    0.0,
+    0.1334,
+)
+tool_center_local_orientation_wxyz = (
+    0.7071067811865476,
+    0.0,
+    0.0,
+    0.7071067811865475,
+)
 ```
 
-These values belong to cable presentation, not the global IK ToolCenter calibration. The existing `tool_center_local_position_m` and camera geometry remain unchanged.
+The previous local translation was `0.1034` m, so the new transform extends ToolCenter exactly `0.0300` m along `panda_hand` local `+Z`. The quaternion is a positive 90 degree rotation around the same local `+Z` axis.
+
+This keeps the RJ45 nose axis unchanged while rotating its transverse orientation by 90 degrees.
 
 ## Runtime behavior
 
-The adjustment occurs once before physics starts. There will be:
+`cable_runtime.py` already computes the world ToolCenter pose from the calibrated hand-to-tool transform before loading and mounting the cable. `cable_mount.py` already maps the detected RJ45 tip directly onto that ToolCenter frame and authors the fixed joint from the resulting real hand-to-plug transform.
 
-- no per-frame transform updates,
-- no proxy connector,
-- no additional deformable attachment,
-- no change to the fixed-joint topology,
-- no change to insertion direction,
-- no relaxation of mount validation limits.
+Therefore:
+
+- `config.py` is the only production file that changes,
+- `cable_mount.py` remains unchanged,
+- no presentation-offset helper is added,
+- no second connector offset exists,
+- no post-play transform is authored,
+- no proxy or additional deformable attachment is created,
+- the visual-servo 50 mm standoff remains physically correct,
+- future insertion depth remains measured from the real RJ45 tip.
+
+Camera transforms remain unchanged because the stereo cameras are mounted to `panda_hand`, not `/World/ToolCenter`.
 
 ## Validation
 
-Pure geometry tests will verify:
-
-- a 90 degree roll preserves the nose axis,
-- the tip moves exactly 30 mm along ToolCenter local `+Z`,
-- the resulting transform is rigid and right-handed,
-- zero roll and zero offset reproduce the previous placement.
-
-Runtime structural tests will verify that the new configuration is wired into pre-play placement only.
+Repository tests verify the exact ToolCenter position and quaternion and reject presentation-only cable-mount fields.
 
 The Isaac workstation smoke test passes only if:
 
-- the connector visibly protrudes beyond the fingertips,
-- the connector is rolled 90 degrees relative to the current presentation,
+- the connector is visibly rolled 90 degrees around its nose axis,
+- the connector tip protrudes 30 mm farther beyond the fingers,
+- the nose still points in the same insertion direction,
 - the fixed joint remains valid,
 - the built-in deformable attachment remains unchanged,
-- startup validation still satisfies tip error <= 0.5 mm and axis error <= 1.0 degree.
+- startup validation still satisfies tip error `<= 0.5 mm` and axis error `<= 1.0 degree`,
+- the physical pre-insert distance remains 50 mm from the RJ45 tip.
 
 ## Kill switch
 
-Do not keep the change if the 30 mm offset causes arm instability, excessive deformable-tail loading, camera obstruction, fixed-joint failure, or mount validation failure. Do not compensate by widening validation tolerances or teleporting the cable after physics starts.
+Revert the calibration if the new lever arm causes camera obstruction, arm instability, deformable-tail overload, fixed-joint failure, attachment failure, or mount-validation failure. Do not compensate by widening tolerances, adding a hidden offset, or teleporting the cable after physics starts.
