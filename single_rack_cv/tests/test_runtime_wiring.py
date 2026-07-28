@@ -141,6 +141,7 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("def update_partial_insertion", runtime_source)
         self.assertIn("tool_pose_to_hand_pose", runtime_source)
         self.assertIn("compute_inverse_kinematics", runtime_source)
+        self.assertIn("could not publish insertion target", runtime_source)
         self.assertIn("runtime.update_partial_insertion()", main_source)
         self.assertLess(
             main_source.index("runtime.update_visual_servo_completion()"),
