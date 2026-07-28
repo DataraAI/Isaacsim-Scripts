@@ -304,6 +304,20 @@ class VisualServoConfig:
 
 
 @dataclass(frozen=True)
+class InsertionConfig:
+    """Guarded 10 mm partial insertion after visual alignment."""
+
+    enabled: bool = True
+    total_depth_m: float = 0.010
+    step_size_m: float = 0.0005
+    settle_position_tolerance_m: float = 0.0003
+    required_settled_frames: int = 6
+    step_timeout_s: float = 2.0
+    max_lateral_drift_m: float = 0.0005
+    max_orientation_error_deg: float = 1.0
+
+
+@dataclass(frozen=True)
 class DebugConfig:
     estimated_port_marker_path: str = "/World/EstimatedPortPoint"
     estimated_port_marker_radius_m: float = 0.006
@@ -337,6 +351,7 @@ class Config:
     visual_servo: VisualServoConfig = field(
         default_factory=VisualServoConfig
     )
+    insertion: InsertionConfig = field(default_factory=InsertionConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 
