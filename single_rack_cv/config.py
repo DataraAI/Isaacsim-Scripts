@@ -220,7 +220,7 @@ class IKConfig:
     tool_center_local_position_m: tuple[float, float, float] = (
         0.0,
         0.0,
-        0.1334,
+        0.1484,
     )
     tool_center_local_orientation_wxyz: tuple[
         float,
@@ -231,7 +231,7 @@ class IKConfig:
         0.7071067811865476,
         0.0,
         0.0,
-        0.7071067811865475,
+        -0.7071067811865475,
     )
 
     use_fixed_start_pose: bool = True
