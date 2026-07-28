@@ -8,8 +8,25 @@ This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port
 2. `front_plane.py` computes local left-right-consistent SGBM disparity around the cavity, selects the nearest coherent four-sided bezel cluster, fits a stabilized front plane, and intersects a fused cavity-center ray with that plane.
 3. `live_control.py` replaces the recessed cavity observation with the automatically calculated opening-plane observation.
 4. `main.py` sends only that refined observation to the translation-only stop-and-look controller and debug marker.
+5. `cable_runtime.py` loads the connected cable before play, enables GPU PhysX, mounts the existing rigid RJ45 plug directly to `panda_hand`, and validates the mount before YOLOE starts.
 
 Runtime control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark.
+
+## Cable mount
+
+The cable asset already contains one Omni Physics deformable tail and rigid connector bodies. The tracked plug uses a direct fixed joint to `panda_hand`; the asset-authored built-in deformable attachment between the plug and tail is preserved.
+
+The controlled ToolCenter represents the RJ45 insertion tip. Startup placement aligns that tip with the existing calibrated ToolCenter frame without changing the visual-servo orientation contract.
+
+The cable hierarchy contains authored affine scale on both the root and plug transforms. Startup placement therefore applies a rigid world correction on top of the existing affine root transform. It must not require the root or plug matrices to be orthonormal, and it must not strip, invert, or bake away the authored cable scale.
+
+The mount must validate for 30/30 consecutive frames before perception starts:
+
+- RJ45 tip error ≤ 0.5 mm
+- RJ45 axis error ≤ 1.0°
+- fixed joint remains valid
+- built-in deformable attachment remains unchanged
+- GPU dynamics remains active
 
 ## Runtime
 
@@ -31,7 +48,11 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
   tests.test_benchmark \
   tests.test_ground_truth \
   tests.test_repo_cleanliness \
-  tests.test_automatic_port_ground_truth
+  tests.test_automatic_port_ground_truth \
+  tests.test_cable_geometry \
+  tests.test_affine_root_geometry \
+  tests.test_scale_aware_cable_mount \
+  tests.test_cable_mount_contract
 ```
 
 ## Qualification benchmark
@@ -71,24 +92,9 @@ Qualification gates:
 - No orientation commands from vision.
 - No insertion motion.
 - Failed observations hold the current target and trigger reacquisition.
+- No proxy connector or duplicate deformable attachment.
+- No per-frame cable transform overwrite.
 
 ## Generated files
 
 `camera_output/`, model weights, Python caches, generated ground truth, and local worktrees are ignored by Git.
-
-## Recovery point
-
-The exact working repository before this hard prune is preserved on:
-
-```text
-recovery/pre-single-rack-cleanup-2026-07-22
-```
-
-Local annotated tag command:
-
-```bash
-git tag -a single-rack-working-pre-cleanup-2026-07-22 \
-  recovery/pre-single-rack-cleanup-2026-07-22 \
-  -m "Working 1280x960 automatic front-plane controller before hard prune"
-git push origin single-rack-working-pre-cleanup-2026-07-22
-```

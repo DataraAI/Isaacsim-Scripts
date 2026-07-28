@@ -31,7 +31,7 @@ class SceneConfig:
     franka_yaw_deg: float = 180.0
 
     physics_dt: float = 1.0 / 60.0
-    device: str = "cpu"
+    device: str = "cuda:0"
     light_intensity: float = 1000.0
 
     viewport_eye: tuple[float, float, float] = (3.4, 3.2, 2.7)
@@ -173,6 +173,36 @@ class FrontPlaneRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class CableMountConfig:
+    """Permanent direct mount for the cable's existing rigid RJ45 plug."""
+
+    enabled: bool = True
+    usd_path: str = (
+        "/home/aayush/isaacsim_assets/Network cable 001/"
+        "model_Networkcable1_69323.usd"
+    )
+    root_path: str = "/World/NetworkCable"
+    tracked_plug_path: str = "/World/NetworkCable/E_crystal_head1_45"
+    fixed_joint_path: str = "/World/CableMountFixedJoint"
+    hand_link_name: str = "panda_hand"
+    finger_link_names: tuple[str, str] = (
+        "panda_leftfinger",
+        "panda_rightfinger",
+    )
+    finger_joint_names: tuple[str, str] = (
+        "panda_finger_joint1",
+        "panda_finger_joint2",
+    )
+    axis_ratio_min: float = 1.5
+    cable_projection_min_m: float = 0.002
+    finger_total_clearance_m: float = 0.001
+    initial_settle_frames: int = 60
+    validation_frames: int = 30
+    max_tip_error_m: float = 0.0005
+    max_axis_error_deg: float = 1.0
+
+
+@dataclass(frozen=True)
 class IKConfig:
     end_effector_frame: str = "panda_hand"
 
@@ -190,14 +220,19 @@ class IKConfig:
     tool_center_local_position_m: tuple[float, float, float] = (
         0.0,
         0.0,
-        0.1034,
+        0.1334,
     )
     tool_center_local_orientation_wxyz: tuple[
         float,
         float,
         float,
         float,
-    ] = (1.0, 0.0, 0.0, 0.0)
+    ] = (
+        0.7071067811865476,
+        0.0,
+        0.0,
+        -0.7071067811865475,
+    )
 
     use_fixed_start_pose: bool = True
     initial_position: tuple[float, float, float] = (
@@ -291,6 +326,9 @@ class Config:
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     front_plane: FrontPlaneRuntimeConfig = field(
         default_factory=FrontPlaneRuntimeConfig
+    )
+    cable_mount: CableMountConfig = field(
+        default_factory=CableMountConfig
     )
     ik: IKConfig = field(default_factory=IKConfig)
     drive_tuning: DriveTuningConfig = field(

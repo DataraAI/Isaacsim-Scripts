@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Explicit host conversion for CUDA/Warp/NumPy values passed to CPU-only APIs."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def to_numpy_cpu(value, *, shape: tuple[int, ...], label: str) -> np.ndarray:
+    """Return one finite float64 NumPy array, copying device tensors to host first."""
+
+    current = value
+    detach = getattr(current, "detach", None)
+    if callable(detach):
+        current = detach()
+
+    cpu = getattr(current, "cpu", None)
+    if callable(cpu):
+        current = cpu()
+
+    numpy_method = getattr(current, "numpy", None)
+    if callable(numpy_method):
+        current = numpy_method()
+
+    array = np.asarray(current, dtype=np.float64)
+    if array.shape != shape:
+        raise ValueError(
+            f"{label} must have shape {shape}, got {array.shape}"
+        )
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{label} must contain only finite values")
+    return array.copy()
+
+
+def pose_to_numpy_cpu(
+    position,
+    orientation,
+    *,
+    label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return one host position/quaternion pair from a device-backed pose."""
+
+    return (
+        to_numpy_cpu(
+            position,
+            shape=(3,),
+            label=f"{label} position",
+        ),
+        to_numpy_cpu(
+            orientation,
+            shape=(4,),
+            label=f"{label} orientation",
+        ),
+    )
+
+
+class HostSafePoseObject:
+    """Delegate an Isaac object while returning world poses as host NumPy arrays."""
+
+    def __init__(self, wrapped, *, label: str) -> None:
+        self._wrapped = wrapped
+        self._label = label
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def get_world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        position, orientation = self._wrapped.get_world_pose()
+        return pose_to_numpy_cpu(
+            position,
+            orientation,
+            label=self._label,
+        )
+
+    def apply_action(self, action):
+        """Send robot actions through the articulation controller."""
+
+        get_controller = getattr(
+            self._wrapped,
+            "get_articulation_controller",
+            None,
+        )
+        if not callable(get_controller):
+            return self._wrapped.apply_action(action)
+
+        controller = get_controller()
+        apply_action = getattr(controller, "apply_action", None)
+        if not callable(apply_action):
+            raise RuntimeError(
+                f"{self._label} articulation controller cannot apply actions"
+            )
+        return apply_action(action)
+
+
+class HostSafeJointSubset:
+    """Delegate an articulation subset while returning joint state on the host."""
+
+    def __init__(self, wrapped, *, label: str) -> None:
+        self._wrapped = wrapped
+        self._label = label
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def get_joint_positions(self, *args, **kwargs) -> np.ndarray:
+        positions = self._wrapped.get_joint_positions(*args, **kwargs)
+        raw_shape = getattr(positions, "shape", None)
+        if raw_shape is None:
+            raw_shape = np.asarray(positions).shape
+        shape = tuple(int(value) for value in raw_shape)
+        if len(shape) != 1:
+            raise ValueError(
+                f"{self._label} must be one-dimensional, got {shape}"
+            )
+        return to_numpy_cpu(
+            positions,
+            shape=shape,
+            label=self._label,
+        )
+
+
+def install_host_safe_ik_warm_start(articulation_solver):
+    """Replace the solver's internal joint subset with a host-safe proxy."""
+
+    subset = articulation_solver.get_joints_subset()
+    if isinstance(subset, HostSafeJointSubset):
+        return articulation_solver
+
+    storage_names = [
+        name
+        for name, value in vars(articulation_solver).items()
+        if value is subset
+    ]
+    if len(storage_names) != 1:
+        raise RuntimeError(
+            "Could not uniquely locate the ArticulationKinematicsSolver "
+            f"joint subset storage; matches={storage_names}"
+        )
+
+    setattr(
+        articulation_solver,
+        storage_names[0],
+        HostSafeJointSubset(subset, label="Lula IK warm start"),
+    )
+    return articulation_solver
