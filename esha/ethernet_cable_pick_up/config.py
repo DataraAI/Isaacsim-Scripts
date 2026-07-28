@@ -277,7 +277,7 @@ class VisualServoConfig:
 
 @dataclass(frozen=True)
 class PreGraspConfig:
-    """After visual servo: angle standoff, open, grasp, close, lift, carry."""
+    """After visual servo: standoff, open, grasp, close, lift, pullback, reorient, carry."""
 
     enabled: bool = True
     # Approach elevation above the horizontal plane (0=sideways, 90=top-down).
@@ -295,10 +295,29 @@ class PreGraspConfig:
     # Commanded close half-gap. 0 = drive fully closed; contact stops the fingers.
     close_target_half_gap_m: float = 0.0
     # Post-grasp lift along +world Z.
-    lift_z_m: float = 0.050
-    # After lift settles: world translation added to the current IK_Target
+    lift_z_m: float = 0.10
+    # Stepped lift so the gripped cable does not slip on the way up.
+    lift_step_m: float = 0.005
+    # Mirrors datahall_combined.py's tail_clear -> reorient step.
+    # None means skip rotation entirely (old behavior).
+    # 180° world-Z yaw of the 30° elevation grasp orientation.
+    carry_orientation_wxyz: tuple[float, float, float, float] | None = (
+        0.0,
+        -0.8660254037844387,
+        0.0,
+        0.5,
+    )
+    # Absolute world-X for the pre-reorient pull-in. Lift is near full reach
+    # (~0.74 m); rotate closer to the base so the wrist has workspace left.
+    reorient_pullback_x_m: float = 0.50
+    # Stepped pull-in so the gripped cable does not slip.
+    pullback_step_m: float = 0.02
+    # Safety timeout if target orientation is unreachable after pullback
+    # (update_ik() has no fallback for a stuck IK solve).
+    reorient_timeout_frames: int = 300
+    # After reorient settles: world translation added to the current IK_Target
     # (not a hardcoded absolute pose). Gripper stays closed.
-    carry_offset_m: tuple[float, float, float] = (-0.30, -0.10, 0.30) #change target location
+    carry_offset_m: tuple[float, float, float] = (-0.40, -0.20, 0.30) #change target location
     # Slow stepped carry so the gripped cable does not slip.
     carry_step_m: float = 0.02 #increase carry step to 0.02 to move the cable faster
     # Extra open gap per side beyond measured cable half-thickness.

@@ -297,9 +297,9 @@ def target_is_settled(
 
 @dataclass
 class PreGraspState:
-    """30° standoff → open → grasp → close → lift → carry."""
+    """30° standoff → open → grasp → close → lift → pullback → reorient → carry."""
 
-    # idle | angle | open | grasp_descend | close | lift | carry | done
+    # idle | angle | open | grasp_descend | close | lift | pullback | reorient | carry | done
     phase: str = "idle"
     # Half of connector short-axis thickness (from stereo height_m).
     cable_half_width_m: float | None = None
@@ -308,6 +308,7 @@ class PreGraspState:
     move_settled_frames: int = 0
     open_frames: int = 0
     close_frames: int = 0
+    reorient_frames: int = 0
     finger_settle_frames: int = 0
     finger_half_gap_m: float = 0.0
     finger_close_half_gap_m: float = 0.0
@@ -836,7 +837,7 @@ class SimulationRuntime:
             return
 
         open_phases = ("open", "grasp_descend")
-        close_phases = ("close", "lift", "carry")
+        close_phases = ("close", "lift", "pullback", "reorient", "carry")
         if state.phase in open_phases:
             self._apply_finger_gap(state.finger_half_gap_m)
         elif state.phase in close_phases:
@@ -957,6 +958,11 @@ class SimulationRuntime:
             return
 
         if state.phase == "lift":
+            if not self._advance_linear_ik_target(
+                state.grasp_target_world_m,
+                max_step_m=cfg.lift_step_m,
+            ):
+                return
             if not self._pre_grasp_pose_settled(required_settled):
                 return
             target_position, target_orientation = self._get_world_pose(
@@ -976,6 +982,56 @@ class SimulationRuntime:
                 f"{np.round(commanded_orientation, 4).tolist()}\n"
                 f"  fingers held closed at "
                 f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
+            )
+            if cfg.carry_orientation_wxyz is not None:
+                self._begin_grasp_pullback()
+            else:
+                self._begin_grasp_carry()
+            return
+
+        if state.phase == "pullback":
+            if not self._advance_linear_ik_target(
+                state.grasp_target_world_m,
+                max_step_m=cfg.pullback_step_m,
+            ):
+                return
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
+            target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+            log(
+                "GRASP PULLBACK DONE\n"
+                f"  reorient_pullback_x_m={cfg.reorient_pullback_x_m:.4f}\n"
+                f"  IK_Target={np.round(target_position, 4).tolist()}"
+            )
+            self._begin_grasp_reorient()
+            return
+
+        if state.phase == "reorient":
+            state.reorient_frames += 1
+            if not self._pre_grasp_pose_settled(required_settled):
+                if state.reorient_frames > cfg.reorient_timeout_frames:
+                    warn(
+                        "GRASP REORIENT timed out; target orientation may be "
+                        "unreachable after pullback.\n"
+                        f"  reorient_frames={state.reorient_frames}\n"
+                        f"  timeout_frames={cfg.reorient_timeout_frames}"
+                    )
+                    self._begin_grasp_carry()
+                return
+            target_position, target_orientation = self._get_world_pose(
+                self.cfg.ik.target_path
+            )
+            commanded_orientation = resolve_tool_orientation(
+                target_orientation,
+                state.grasp_orientation_wxyz,
+                grasp_active=True,
+            )
+            log(
+                "GRASP REORIENT DONE\n"
+                f"  reorient_frames={state.reorient_frames}\n"
+                f"  IK_Target={np.round(target_position, 4).tolist()}\n"
+                f"  commanded_grasp_ori_wxyz="
+                f"{np.round(commanded_orientation, 4).tolist()}"
             )
             self._begin_grasp_carry()
             return
@@ -1330,7 +1386,7 @@ class SimulationRuntime:
         return False
 
     def _begin_grasp_lift(self) -> None:
-        """Lift +world Z while holding the angled grasp orientation."""
+        """Lift +world Z in small steps while holding the angled grasp orientation."""
         cfg = self.cfg.pre_grasp
         state = self.pre_grasp
         if self.ik is None:
@@ -1343,11 +1399,14 @@ class SimulationRuntime:
             target_orientation = _normalize_quaternion_wxyz(
                 state.grasp_orientation_wxyz
             )
-        desired_tool = np.asarray(target_position, dtype=np.float64).copy()
-        desired_tool[2] += float(cfg.lift_z_m)
-
+        lift_position = np.asarray(
+            target_position,
+            dtype=np.float64,
+        ).reshape(3).copy()
+        lift_position[2] += float(cfg.lift_z_m)
+        state.grasp_target_world_m = lift_position
         self.ik.target.set_world_pose(
-            position=desired_tool,
+            position=target_position,
             orientation=target_orientation,
         )
         state.phase = "lift"
@@ -1355,8 +1414,77 @@ class SimulationRuntime:
         log(
             "GRASP LIFT\n"
             f"  lift_z_m={cfg.lift_z_m:.4f}\n"
+            f"  max_step_m={cfg.lift_step_m:.4f}\n"
             "  keeping angled orientation (no rotate after grasp)\n"
-            f"  new IK_Target={np.round(desired_tool, 4).tolist()}"
+            f"  start IK_Target={np.round(target_position, 4).tolist()}\n"
+            f"  final IK_Target={np.round(lift_position, 4).tolist()}"
+        )
+        self._apply_finger_gap(state.finger_close_half_gap_m)
+
+    def _begin_grasp_pullback(self) -> None:
+        """Pull the tool closer to the base before rotating.
+
+        The lift position is too near full reach to also rotate there
+        (Franka max reach ~0.85 m).
+        """
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
+
+        target_position, target_orientation = self._get_world_pose(
+            self.cfg.ik.target_path
+        )
+        if state.grasp_orientation_wxyz is not None:
+            target_orientation = _normalize_quaternion_wxyz(
+                state.grasp_orientation_wxyz
+            )
+        pullback_position = np.asarray(
+            target_position,
+            dtype=np.float64,
+        ).reshape(3).copy()
+        pullback_position[0] = float(cfg.reorient_pullback_x_m)
+        state.grasp_target_world_m = pullback_position
+        # Seed the current pose so _advance_linear_ik_target can step in.
+        self.ik.target.set_world_pose(
+            position=target_position,
+            orientation=target_orientation,
+        )
+        state.phase = "pullback"
+        state.move_settled_frames = 0
+        self._apply_finger_gap(state.finger_close_half_gap_m)
+        log(
+            "GRASP PULLBACK\n"
+            f"  reorient_pullback_x_m={cfg.reorient_pullback_x_m:.4f}\n"
+            f"  start IK_Target={np.round(target_position, 4).tolist()}\n"
+            f"  final IK_Target={np.round(pullback_position, 4).tolist()}\n"
+            f"  max_step_m={cfg.pullback_step_m:.4f}\n"
+            "  keeping angled orientation until reorient"
+        )
+
+    def _begin_grasp_reorient(self) -> None:
+        """Rotate in place to carry_orientation_wxyz at the pulled-in position."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
+
+        target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+        orientation = _normalize_quaternion_wxyz(
+            np.asarray(cfg.carry_orientation_wxyz, dtype=np.float64)
+        )
+        state.grasp_orientation_wxyz = orientation
+        self.ik.target.set_world_pose(
+            position=target_position,
+            orientation=orientation,
+        )
+        state.phase = "reorient"
+        state.move_settled_frames = 0
+        state.reorient_frames = 0
+        log(
+            "GRASP REORIENT\n"
+            f"  held IK_Target={np.round(target_position, 4).tolist()}\n"
+            f"  new orientation_wxyz={np.round(orientation, 4).tolist()}"
         )
         self._apply_finger_gap(state.finger_close_half_gap_m)
 
