@@ -119,14 +119,54 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertLess(prepare, yolo)
         self.assertLess(yolo, loop)
 
-    def test_readme_documents_direct_mount_and_kill_switch(self):
+    def test_partial_insertion_config_is_exact(self):
+        self.assertTrue(CONFIG.insertion.enabled)
+        self.assertEqual(CONFIG.visual_servo.preinsert_standoff_m, 0.050)
+        self.assertEqual(CONFIG.insertion.total_depth_m, 0.060)
+        self.assertEqual(CONFIG.insertion.coarse_approach_depth_m, 0.040)
+        self.assertEqual(CONFIG.insertion.coarse_step_size_m, 0.005)
+        self.assertEqual(CONFIG.insertion.opening_depth_m, 0.050)
+        self.assertEqual(CONFIG.insertion.step_size_m, 0.0005)
+        self.assertEqual(
+            CONFIG.insertion.settle_position_tolerance_m,
+            0.0003,
+        )
+        self.assertEqual(CONFIG.insertion.required_settled_frames, 6)
+        self.assertEqual(CONFIG.insertion.step_timeout_s, 2.0)
+        self.assertEqual(CONFIG.insertion.max_lateral_drift_m, 0.0005)
+        self.assertEqual(CONFIG.insertion.max_orientation_error_deg, 1.0)
+
+    def test_partial_insertion_runtime_is_wired_after_visual_completion(self):
+        runtime_source = (
+            ROOT / "cable_runtime" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("PartialInsertionController", runtime_source)
+        self.assertIn("def update_partial_insertion", runtime_source)
+        self.assertIn("tool_pose_to_hand_pose", runtime_source)
+        self.assertIn("compute_inverse_kinematics", runtime_source)
+        self.assertIn("could not publish insertion target", runtime_source)
+        self.assertIn("coarse_approach_depth_m", runtime_source)
+        self.assertIn("opening_depth_m", runtime_source)
+        self.assertIn("runtime.update_partial_insertion()", main_source)
+        self.assertLess(
+            main_source.index("runtime.update_visual_servo_completion()"),
+            main_source.index("runtime.update_partial_insertion()"),
+        )
+
+    def test_readme_documents_mount_and_partial_insertion_kill_switch(self):
         source = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("direct fixed joint", source)
         self.assertIn("built-in deformable attachment", source)
         self.assertIn("RJ45 insertion tip", source)
         self.assertIn("GPU dynamics", source)
         self.assertIn("30/30", source)
-        self.assertIn("No insertion motion", source)
+        self.assertIn("40 mm coarse approach", source)
+        self.assertIn("20 mm fine motion", source)
+        self.assertIn("10 mm inside the opening", source)
+        self.assertIn("frozen ToolCenter +Z", source)
+        self.assertIn("holds on abort", source)
+        self.assertNotIn("No insertion motion", source)
         self.assertNotIn("recovery/pre-single-rack-cleanup", source)
 
 
