@@ -1,6 +1,6 @@
-# Single-Rack Automatic Front-Opening Alignment
+# Single-Rack Automatic Alignment and Partial Insertion
 
-This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port and move a Franka ToolCenter to a 50 mm pre-insert standoff from the **physical front opening**, not the recessed dark cavity.
+This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port, move a Franka ToolCenter to a 50 mm pre-insert standoff from the **physical front opening**, and execute a guarded 10 mm partial insertion.
 
 ## Supported architecture
 
@@ -9,8 +9,9 @@ This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port
 3. `live_control.py` replaces the recessed cavity observation with the automatically calculated opening-plane observation.
 4. `main.py` sends only that refined observation to the translation-only stop-and-look controller and debug marker.
 5. `cable_runtime.py` loads the connected cable before play, enables GPU PhysX, mounts the existing rigid RJ45 plug directly to `panda_hand`, and validates the mount before YOLOE starts.
+6. `insertion.py` freezes the physically settled ToolCenter pose, advances along frozen ToolCenter +Z in 0.5 mm steps, and holds on abort or after 10 mm.
 
-Runtime control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark.
+Runtime visual control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark. Perception is frozen once visual alignment completes; insertion uses the frozen physical ToolCenter frame.
 
 ## Cable mount
 
@@ -35,7 +36,19 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 "$HOME/isaacsim/python.sh" main.py
 ```
 
-Canonical camera resolution is 1280×960. The controller keeps a fixed wrist orientation, limits each target update to 1 mm, holds position on detector/SGBM/plane-fit failure, and does not command insertion.
+Canonical camera resolution is 1280×960. The visual servo keeps a fixed wrist orientation, uses bounded 5 mm coarse target updates, and holds position on detector/SGBM/plane-fit failure.
+
+After visual alignment and 30/30 final ToolCenter settle frames, the runtime begins a 10 mm partial insertion:
+
+- freeze the current ToolCenter position and orientation
+- define the insertion direction as frozen ToolCenter +Z in world coordinates
+- command twenty 0.5 mm steps from the frozen start pose
+- require ≤0.3 mm physical target error for 6 consecutive frames per step
+- allow at most 2.0 seconds per step
+- keep orientation fixed and stop perception updates
+- hold after the twentieth step; do not seat, release, or retreat
+
+The insertion controller holds on abort when lateral drift exceeds 0.5 mm, orientation error exceeds 1.0°, plug mount error exceeds its existing limit, Lula rejects a target, a step times out, or cable topology becomes invalid.
 
 ## Pure and structural tests
 
@@ -52,7 +65,8 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
   tests.test_cable_geometry \
   tests.test_affine_root_geometry \
   tests.test_scale_aware_cable_mount \
-  tests.test_cable_mount_contract
+  tests.test_cable_mount_contract \
+  tests.test_partial_insertion
 ```
 
 ## Qualification benchmark
@@ -90,8 +104,10 @@ Qualification gates:
 - No fallback to the recessed cavity depth.
 - No RTX, USD mesh query, or ground-truth JSON in runtime control.
 - No orientation commands from vision.
-- No insertion motion.
-- Failed observations hold the current target and trigger reacquisition.
+- No visual updates during insertion.
+- No full seating, connector release, or automatic retreat in this milestone.
+- Failed observations hold the current target and trigger reacquisition before alignment.
+- Insertion failures hold the latest safe target and print the measured reason.
 - No proxy connector or duplicate deformable attachment.
 - No per-frame cable transform overwrite.
 
