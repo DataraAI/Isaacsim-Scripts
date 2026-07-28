@@ -43,12 +43,16 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
 
     def __init__(self, simulation_app, cfg):
         # CUDA cable dynamics settles above the CPU-only 0.5 mm tracking floor.
-        # Keep stop-and-look behavior, but allow the next image once the physical
-        # ToolCenter is within 1.0 mm of each 1.0 mm target step.
+        # Use 5 mm coarse visual-servo steps while retaining the 1 mm capture
+        # settle gate and the original final alignment limits.
         cfg = replace(
             cfg,
             visual_servo=replace(
                 cfg.visual_servo,
+                max_target_step_m=max(
+                    float(cfg.visual_servo.max_target_step_m),
+                    0.005,
+                ),
                 target_settle_tolerance_m=max(
                     float(cfg.visual_servo.target_settle_tolerance_m),
                     0.001,
@@ -74,6 +78,8 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
 
         log(
             "GPU FK + LIVE PLUG POSE BRIDGE ACTIVE\n"
+            f"  visual-servo max step: "
+            f"{self.cfg.visual_servo.max_target_step_m * 1000.0:.3f} mm\n"
             f"  between-capture settle tolerance: "
             f"{self.cfg.visual_servo.target_settle_tolerance_m * 1000.0:.3f} mm"
         )
