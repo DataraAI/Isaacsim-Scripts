@@ -39,7 +39,7 @@ class RuntimeWiringTests(unittest.TestCase):
     def test_toolcenter_calibration_rolls_and_extends_pregrasped_plug(self):
         np.testing.assert_allclose(
             CONFIG.ik.tool_center_local_position_m,
-            (0.0, 0.0, 0.1484),
+            (0.0, 0.0, 0.1334),
             atol=0.0,
         )
         np.testing.assert_allclose(
