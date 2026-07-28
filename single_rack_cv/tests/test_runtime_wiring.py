@@ -77,6 +77,17 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("finger_link_names", source)
         self.assertNotIn("create_auto_deformable_attachment", source)
 
+    def test_tracked_plug_is_forced_dynamic_before_fixed_joint(self):
+        source = (ROOT / "scale_aware_cable_mount.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("def _ensure_tracked_plug_dynamic", source)
+        self.assertIn("CreateKinematicEnabledAttr().Set(False)", source)
+        self.assertIn("Tracked RJ45 plug remained kinematic", source)
+        dynamic = source.index("self._ensure_tracked_plug_dynamic()")
+        joint = source.index("UsdPhysics.FixedJoint.Define")
+        self.assertLess(dynamic, joint)
+
     def test_cable_runtime_owns_gpu_startup_and_bounded_mount_gate(self):
         source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
         self.assertIn(
