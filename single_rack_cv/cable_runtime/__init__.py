@@ -286,10 +286,16 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
             if not reachable:
                 event = self.partial_insertion.abort(ik_reason, sample)
             else:
-                self.ik.target.set_world_pose(
-                    position=event.command.target_position_m,
-                    orientation=event.command.target_orientation_wxyz,
-                )
+                try:
+                    self.ik.target.set_world_pose(
+                        position=event.command.target_position_m,
+                        orientation=event.command.target_orientation_wxyz,
+                    )
+                except Exception as exc:
+                    event = self.partial_insertion.abort(
+                        f"could not publish insertion target: {exc}",
+                        sample,
+                    )
 
         if event.kind in (
             "started",
