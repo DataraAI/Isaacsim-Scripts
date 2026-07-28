@@ -254,9 +254,30 @@ class ScaleAwareCableMount(CableMount):
             flush=True,
         )
 
+    def _ensure_tracked_plug_dynamic(self) -> None:
+        """Prevent a kinematic plug from anchoring the Franka hand."""
+
+        if self.stage is None:
+            raise RuntimeError("Cable mount stage is not initialized")
+        plug = self.stage.GetPrimAtPath(
+            self.mount_cfg.tracked_plug_path
+        )
+        if not plug.IsValid() or not plug.HasAPI(UsdPhysics.RigidBodyAPI):
+            raise RuntimeError("Tracked RJ45 plug is not a rigid body")
+        rigid_body = UsdPhysics.RigidBodyAPI(plug)
+        if not rigid_body.CreateKinematicEnabledAttr().Set(False):
+            raise RuntimeError(
+                "Could not make the tracked RJ45 plug dynamic"
+            )
+        value = rigid_body.GetKinematicEnabledAttr().Get()
+        if bool(value):
+            raise RuntimeError("Tracked RJ45 plug remained kinematic")
+
     def _author_fixed_joint(self) -> None:
         if self.stage is None:
             raise RuntimeError("Cable mount stage is not initialized")
+
+        self._ensure_tracked_plug_dynamic()
 
         world_from_hand_pose = rigid_pose_from_affine(
             _world_transform(self.stage, self.hand_path),
