@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 import importlib.util
-import math
 import sys
 from pathlib import Path
 
@@ -50,7 +49,7 @@ _BaseCableMountedSimulationRuntime = _BASE_MODULE.CableMountedSimulationRuntime
 
 
 class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
-    """Use live PhysX/FK poses and guarded frozen-axis partial insertion."""
+    """Use live PhysX/FK poses and guarded frozen-axis port entry."""
 
     def __init__(self, simulation_app, cfg):
         # CUDA cable dynamics settles above the CPU-only 0.5 mm tracking floor.
@@ -101,6 +100,13 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
             InsertionLimits(
                 total_depth_m=float(insertion_cfg.total_depth_m),
                 step_size_m=float(insertion_cfg.step_size_m),
+                coarse_approach_depth_m=float(
+                    insertion_cfg.coarse_approach_depth_m
+                ),
+                coarse_step_size_m=float(
+                    insertion_cfg.coarse_step_size_m
+                ),
+                opening_depth_m=float(insertion_cfg.opening_depth_m),
                 settle_tolerance_m=float(
                     insertion_cfg.settle_position_tolerance_m
                 ),
@@ -122,12 +128,16 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
                 ),
             )
         )
-        self._insertion_total_steps = int(
-            math.ceil(
-                float(insertion_cfg.total_depth_m)
-                / float(insertion_cfg.step_size_m)
-                - 1.0e-12
-            )
+        self._insertion_total_steps = (
+            self.partial_insertion.limits.total_step_count
+        )
+        fine_travel_m = (
+            float(insertion_cfg.total_depth_m)
+            - float(insertion_cfg.coarse_approach_depth_m)
+        )
+        final_port_depth_m = (
+            float(insertion_cfg.total_depth_m)
+            - float(insertion_cfg.opening_depth_m)
         )
 
         log(
@@ -136,9 +146,15 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
             f"{self.cfg.visual_servo.max_target_step_m * 1000.0:.3f} mm\n"
             f"  between-capture settle tolerance: "
             f"{self.cfg.visual_servo.target_settle_tolerance_m * 1000.0:.3f} mm\n"
-            f"  guarded partial insertion: "
-            f"{insertion_cfg.total_depth_m * 1000.0:.1f} mm total, "
-            f"{insertion_cfg.step_size_m * 1000.0:.1f} mm steps"
+            "  guarded two-stage port entry:\n"
+            f"    coarse approach: "
+            f"{insertion_cfg.coarse_approach_depth_m * 1000.0:.1f} mm "
+            f"at {insertion_cfg.coarse_step_size_m * 1000.0:.1f} mm/step\n"
+            f"    fine motion: {fine_travel_m * 1000.0:.1f} mm "
+            f"at {insertion_cfg.step_size_m * 1000.0:.1f} mm/step\n"
+            f"    final depth inside opening: "
+            f"{final_port_depth_m * 1000.0:.1f} mm\n"
+            f"    total commands: {self._insertion_total_steps}"
         )
 
     def capture_due(self) -> bool:
@@ -214,7 +230,8 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
                 f"  settled frames: "
                 f"{state.settled_frame_count}/"
                 f"{cfg.required_settled_frames}\n"
-                "  next action: begin guarded 10 mm partial insertion."
+                "  next action: begin 40 mm coarse approach, "
+                "then 20 mm fine entry."
             )
             return
 
@@ -385,8 +402,8 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
         event: InsertionEvent,
     ) -> None:
         labels = {
-            "started": "PARTIAL INSERTION STARTED",
-            "step_settled": "PARTIAL INSERTION STEP SETTLED",
+            "started": "TWO-STAGE PORT ENTRY STARTED",
+            "step_settled": "TWO-STAGE PORT ENTRY STEP SETTLED",
             "complete": "PARTIAL INSERTION COMPLETE",
             "aborted": "PARTIAL INSERTION ABORTED",
         }
@@ -395,26 +412,39 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
 
         if event.settled_step_index is not None:
             lines.append(
-                f"  settled step: {event.settled_step_index}/"
+                f"  settled command: {event.settled_step_index}/"
                 f"{self._insertion_total_steps}"
             )
         if event.command is not None:
             lines.append(
-                f"  next command step: {event.command.step_index}/"
+                f"  next command: {event.command.step_index}/"
                 f"{self._insertion_total_steps}"
             )
             lines.append(
-                f"  next commanded depth: "
+                f"  next stage: {event.command.stage.value}"
+            )
+            lines.append(
+                f"  next total travel: "
                 f"{event.command.commanded_depth_m * 1000.0:.3f} mm"
+            )
+            lines.append(
+                f"  next depth relative to opening: "
+                f"{event.command.commanded_port_depth_m * 1000.0:+.3f} mm"
             )
         if event.metrics is not None:
             metrics = event.metrics
             lines.extend(
                 [
-                    f"  commanded depth: "
+                    f"  active stage: "
+                    f"{metrics.stage.value if metrics.stage is not None else 'none'}",
+                    f"  commanded total travel: "
                     f"{metrics.commanded_depth_m * 1000.0:.3f} mm",
-                    f"  actual axial depth: "
+                    f"  commanded depth relative to opening: "
+                    f"{metrics.commanded_port_depth_m * 1000.0:+.3f} mm",
+                    f"  actual axial travel: "
                     f"{metrics.actual_axial_depth_m * 1000.0:.3f} mm",
+                    f"  actual depth relative to opening: "
+                    f"{metrics.actual_port_depth_m * 1000.0:+.3f} mm",
                     f"  lateral drift: "
                     f"{metrics.lateral_drift_m * 1000.0:.3f} mm",
                     f"  ToolCenter tracking error: "
