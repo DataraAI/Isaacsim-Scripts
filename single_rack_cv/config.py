@@ -305,10 +305,13 @@ class VisualServoConfig:
 
 @dataclass(frozen=True)
 class InsertionConfig:
-    """Guarded 10 mm partial insertion after visual alignment."""
+    """Two-stage approach ending 10 mm inside the physical port opening."""
 
     enabled: bool = True
-    total_depth_m: float = 0.010
+    total_depth_m: float = 0.060
+    coarse_approach_depth_m: float = 0.040
+    coarse_step_size_m: float = 0.005
+    opening_depth_m: float = 0.050
     step_size_m: float = 0.0005
     settle_position_tolerance_m: float = 0.0003
     required_settled_frames: int = 6
