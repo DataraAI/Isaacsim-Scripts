@@ -296,8 +296,8 @@ class PreGraspConfig:
     close_target_half_gap_m: float = 0.0
     # Post-grasp lift along +world Z.
     lift_z_m: float = 0.10
-    # Stepped lift so the gripped cable does not slip on the way up.
-    lift_step_m: float = 0.005
+    # Post-weld lift can move faster; the plug is fixed-jointed to the hand.
+    lift_step_m: float = 0.015
     # Mirrors datahall_combined.py's tail_clear -> reorient step.
     # None means skip rotation entirely (old behavior).
     # 180° world-Z yaw of the 30° elevation grasp orientation.
@@ -310,16 +310,16 @@ class PreGraspConfig:
     # Absolute world-X for the pre-reorient pull-in. Lift is near full reach
     # (~0.74 m); rotate closer to the base so the wrist has workspace left.
     reorient_pullback_x_m: float = 0.50
-    # Stepped pull-in so the gripped cable does not slip.
-    pullback_step_m: float = 0.02
+    # Post-weld pull-in; fixed joint allows a slightly larger step.
+    pullback_step_m: float = 0.035
     # Safety timeout if target orientation is unreachable after pullback
     # (update_ik() has no fallback for a stuck IK solve).
     reorient_timeout_frames: int = 300
     # After reorient settles: world translation added to the current IK_Target
     # (not a hardcoded absolute pose). Gripper stays closed.
-    carry_offset_m: tuple[float, float, float] = (-0.40, -0.20, 0.30) #change target location
-    # Slow stepped carry so the gripped cable does not slip.
-    carry_step_m: float = 0.02 #increase carry step to 0.02 to move the cable faster
+    carry_offset_m: tuple[float, float, float] = (-0.40, -0.20, 0.40) #change target location
+    # Post-weld carry; fixed joint allows a slightly larger step.
+    carry_step_m: float = 0.035
     # Extra open gap per side beyond measured cable half-thickness.
     side_allowance_m: float = 0.002
     # Never approach with less than this opening per finger.

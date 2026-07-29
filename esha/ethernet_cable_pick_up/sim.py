@@ -178,6 +178,46 @@ def matrix_to_quaternion_wxyz(
     return quaternion
 
 
+def _find_unique_descendant(root: Usd.Prim, name: str) -> str:
+    matches = [
+        str(prim.GetPath())
+        for prim in Usd.PrimRange(root)
+        if prim.GetName() == name
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected one '{name}' below {root.GetPath()}, found {matches}"
+        )
+    return matches[0]
+
+
+def _matrix_to_gf_quatf(rotation: np.ndarray) -> Gf.Quatf:
+    matrix = np.asarray(rotation, dtype=np.float64)
+    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+        raise ValueError("Rotation matrix must be finite with shape (3, 3).")
+    quaternion = matrix_to_quaternion_wxyz(matrix)
+    return Gf.Quatf(
+        float(quaternion[0]),
+        Gf.Vec3f(
+            float(quaternion[1]),
+            float(quaternion[2]),
+            float(quaternion[3]),
+        ),
+    )
+
+
+def _world_transform(stage: Usd.Stage, path: str) -> np.ndarray:
+    prim = stage.GetPrimAtPath(path)
+    if not prim.IsValid():
+        raise RuntimeError(
+            f"Cannot read transform for invalid prim: {path}"
+        )
+    gf_matrix = UsdGeom.XformCache(
+        Usd.TimeCode.Default()
+    ).GetLocalToWorldTransform(prim)
+    return np.asarray(gf_matrix, dtype=np.float64).T
+
+
 def hand_pose_to_tool_pose(
     hand_position_m: np.ndarray,
     hand_orientation_wxyz: np.ndarray,
@@ -384,6 +424,7 @@ class SimulationRuntime:
         self.cfg = cfg
 
         self.frame_index = 0
+        self._post_grasp_fixed_joint_path = "/World/CableGraspFixedJoint"
         self.left_camera_path = ""
         self.right_camera_path = ""
         self.left_camera_sensor: CameraSensor | None = None
@@ -954,6 +995,7 @@ class SimulationRuntime:
                 f"  finger_positions_m="
                 f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
             )
+            self._weld_grasped_cable_to_hand()
             self._begin_grasp_lift()
             return
 
@@ -1420,6 +1462,120 @@ class SimulationRuntime:
             f"  final IK_Target={np.round(lift_position, 4).tolist()}"
         )
         self._apply_finger_gap(state.finger_close_half_gap_m)
+
+    def fixed_joint_is_valid(self) -> bool:
+        """Return whether the post-grasp panda_hand-to-plug weld is intact."""
+        if self.ik is None:
+            return False
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return False
+        joint_prim = stage.GetPrimAtPath(self._post_grasp_fixed_joint_path)
+        if (
+            not joint_prim.IsValid()
+            or not joint_prim.IsA(UsdPhysics.FixedJoint)
+        ):
+            return False
+        joint = UsdPhysics.FixedJoint(joint_prim)
+        body0 = [str(path) for path in joint.GetBody0Rel().GetTargets()]
+        body1 = [str(path) for path in joint.GetBody1Rel().GetTargets()]
+        return (
+            body0 == [self.ik.hand_path]
+            and body1 == [self.cfg.scene.tracked_connector_path]
+        )
+
+    def _author_fixed_joint(self) -> None:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            raise RuntimeError("A valid USD stage is required to weld the cable.")
+        if self.ik is None:
+            raise RuntimeError("IK runtime is not initialized.")
+
+        world_from_hand = _world_transform(stage, self.ik.hand_path)
+        world_from_plug = _world_transform(
+            stage,
+            self.cfg.scene.tracked_connector_path,
+        )
+        hand_from_plug = np.linalg.inv(world_from_hand) @ world_from_plug
+        if hand_from_plug.shape != (4, 4) or not np.all(
+            np.isfinite(hand_from_plug)
+        ):
+            raise RuntimeError("Computed hand-to-plug transform is invalid.")
+
+        joint = UsdPhysics.FixedJoint.Define(
+            stage,
+            Sdf.Path(self._post_grasp_fixed_joint_path),
+        )
+        joint.CreateBody0Rel().SetTargets([Sdf.Path(self.ik.hand_path)])
+        joint.CreateBody1Rel().SetTargets(
+            [Sdf.Path(self.cfg.scene.tracked_connector_path)]
+        )
+        joint.CreateLocalPos0Attr().Set(
+            Gf.Vec3f(*[float(value) for value in hand_from_plug[:3, 3]])
+        )
+        joint.CreateLocalRot0Attr().Set(
+            _matrix_to_gf_quatf(hand_from_plug[:3, :3])
+        )
+        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        joint.CreateLocalRot1Attr().Set(
+            Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0))
+        )
+
+    def _filter_hand_and_finger_collisions(self) -> None:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            raise RuntimeError(
+                "A valid USD stage is required to set collision filters."
+            )
+        root = stage.GetPrimAtPath(self.cfg.scene.franka_asset_path)
+        if not root.IsValid():
+            raise RuntimeError(
+                "Franka asset root is invalid: "
+                f"{self.cfg.scene.franka_asset_path}"
+            )
+
+        names = (
+            self.cfg.camera.hand_link_name,
+            *self.cfg.pre_grasp.finger_link_names,
+        )
+        filtered_paths: list[str] = []
+        for name in names:
+            path = _find_unique_descendant(root, name)
+            prim = stage.GetPrimAtPath(path)
+            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                raise RuntimeError(
+                    f"Collision-filter target is not a rigid body: {path}"
+                )
+            filtered_paths.append(path)
+
+        plug = stage.GetPrimAtPath(self.cfg.scene.tracked_connector_path)
+        if not plug.IsValid():
+            raise RuntimeError(
+                "Tracked plug is invalid: "
+                f"{self.cfg.scene.tracked_connector_path}"
+            )
+        api = UsdPhysics.FilteredPairsAPI.Apply(plug)
+        relationship = api.CreateFilteredPairsRel()
+        existing = {str(path) for path in relationship.GetTargets()}
+        combined = sorted(existing.union(filtered_paths))
+        relationship.SetTargets([Sdf.Path(path) for path in combined])
+
+    def _weld_grasped_cable_to_hand(self) -> None:
+        """Create the fixed joint once, immediately after the grasp settles."""
+        if self.fixed_joint_is_valid():
+            return
+        self._author_fixed_joint()
+        self._filter_hand_and_finger_collisions()
+        if not self.fixed_joint_is_valid():
+            raise RuntimeError(
+                "Direct panda_hand-to-plug fixed joint is invalid."
+            )
+        log(
+            "GRASP WELD AUTHORED\n"
+            f"  fixed_joint={self._post_grasp_fixed_joint_path}\n"
+            f"  body0={self.ik.hand_path if self.ik is not None else 'N/A'}\n"
+            f"  body1={self.cfg.scene.tracked_connector_path}"
+        )
 
     def _begin_grasp_pullback(self) -> None:
         """Pull the tool closer to the base before rotating.
