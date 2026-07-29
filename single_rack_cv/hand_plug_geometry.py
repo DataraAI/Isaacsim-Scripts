@@ -22,10 +22,15 @@ def _rotation3(value, *, label: str) -> np.ndarray:
     return matrix.copy()
 
 
-def _axis3(value, *, label: str) -> np.ndarray:
-    axis = np.asarray(value, dtype=np.float64).reshape(-1)
-    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+def _vector3(value, *, label: str) -> np.ndarray:
+    vector = np.asarray(value, dtype=np.float64).reshape(-1)
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
         raise ValueError(f"{label} must be a finite length-3 vector")
+    return vector.copy()
+
+
+def _axis3(value, *, label: str) -> np.ndarray:
+    axis = _vector3(value, label=label)
     norm = float(np.linalg.norm(axis))
     if norm <= _EPS:
         raise ValueError(f"{label} cannot be zero")
@@ -47,64 +52,6 @@ def validate_downward_hand_pitch_deg(
     return pitch
 
 
-def validate_palm_roll_deg(value: float) -> float:
-    roll = float(value)
-    if not math.isfinite(roll):
-        raise ValueError("palm roll must be finite")
-    return roll
-
-
-def _rotation_y(angle_rad: float) -> np.ndarray:
-    cosine = math.cos(angle_rad)
-    sine = math.sin(angle_rad)
-    return np.array(
-        [
-            [cosine, 0.0, sine],
-            [0.0, 1.0, 0.0],
-            [-sine, 0.0, cosine],
-        ],
-        dtype=np.float64,
-    )
-
-
-def _rotation_z(angle_rad: float) -> np.ndarray:
-    cosine = math.cos(angle_rad)
-    sine = math.sin(angle_rad)
-    return np.array(
-        [
-            [cosine, -sine, 0.0],
-            [sine, cosine, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-
-
-def compute_pitched_hand_from_tool_rotation(
-    base_hand_from_tool: np.ndarray,
-    downward_pitch_deg: float,
-    palm_roll_deg: float = 0.0,
-) -> np.ndarray:
-    """
-    Build hand_T_tool for a downward-pitched hand and a level plug frame.
-
-    The pitch is applied about tool-local +Y. The palm roll is applied about
-    panda_hand local +Z. A 180-degree palm roll reproduces the previously
-    working Franka presentation while leaving the hand forward axis and the
-    horizontal plug insertion axis unchanged.
-    """
-
-    base = _rotation3(base_hand_from_tool, label="base_hand_from_tool")
-    pitch_rad = math.radians(
-        validate_downward_hand_pitch_deg(downward_pitch_deg)
-    )
-    roll_rad = math.radians(validate_palm_roll_deg(palm_roll_deg))
-    return _rotation3(
-        _rotation_z(roll_rad) @ base @ _rotation_y(pitch_rad),
-        label="pitched_hand_from_tool",
-    )
-
-
 def horizontal_axis_error_deg(axis_world: np.ndarray) -> float:
     axis = _axis3(axis_world, label="axis_world")
     return math.degrees(
@@ -123,18 +70,158 @@ def _directional_axis_error_deg(
 
 
 def expected_palm_side_axis_world(plug_axis_world: np.ndarray) -> np.ndarray:
-    """Return the old working palm-side direction for a horizontal plug."""
+    """Return the previous working palm-side direction for a horizontal plug."""
 
     plug_axis = _axis3(plug_axis_world, label="plug_axis_world")
     world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    horizontal_plug = plug_axis - float(np.dot(plug_axis, world_up)) * world_up
+    horizontal_plug = (
+        plug_axis - float(np.dot(plug_axis, world_up)) * world_up
+    )
     horizontal_norm = float(np.linalg.norm(horizontal_plug))
     if horizontal_norm <= _EPS:
-        raise ValueError("plug axis cannot be vertical when checking palm roll")
+        raise ValueError("plug axis cannot be vertical when checking palm side")
     horizontal_plug /= horizontal_norm
     return _axis3(
         np.cross(world_up, horizontal_plug),
         label="expected_palm_side_axis_world",
+    )
+
+
+def _rotate_axis_about_axis(
+    vector: np.ndarray,
+    rotation_axis: np.ndarray,
+    angle_rad: float,
+) -> np.ndarray:
+    """Rotate one unit vector with Rodrigues' formula."""
+
+    vector = _axis3(vector, label="vector")
+    rotation_axis = _axis3(rotation_axis, label="rotation_axis")
+    cosine = math.cos(float(angle_rad))
+    sine = math.sin(float(angle_rad))
+    rotated = (
+        cosine * vector
+        + sine * np.cross(rotation_axis, vector)
+        + (1.0 - cosine)
+        * float(np.dot(rotation_axis, vector))
+        * rotation_axis
+    )
+    return _axis3(rotated, label="rotated_vector")
+
+
+@dataclass(frozen=True)
+class AngledHandPose:
+    """One hand pose and hand-to-tool transform preserving a world tool pose."""
+
+    hand_position_world_m: np.ndarray
+    hand_rotation_world: np.ndarray
+    hand_from_tool_rotation: np.ndarray
+    tool_position_world_m: np.ndarray
+    tool_rotation_world: np.ndarray
+
+
+def compute_angled_hand_pose_preserving_tool(
+    *,
+    base_hand_position_m: np.ndarray,
+    base_hand_rotation_world: np.ndarray,
+    base_hand_from_tool_rotation: np.ndarray,
+    tool_position_hand_m: np.ndarray,
+    downward_pitch_deg: float,
+) -> AngledHandPose:
+    """
+    Solve a downward hand pose around the exact existing world tool pose.
+
+    The existing validated plug-tip position and orientation are treated as
+    immutable. The new hand forward axis is obtained by rotating the plug axis
+    downward about the previous working palm-side axis. The hand position and
+    hand_T_tool rotation are then solved so composing them reconstructs the
+    original tool pose exactly.
+    """
+
+    base_hand_position = _vector3(
+        base_hand_position_m,
+        label="base_hand_position_m",
+    )
+    base_hand_rotation = _rotation3(
+        base_hand_rotation_world,
+        label="base_hand_rotation_world",
+    )
+    base_hand_from_tool = _rotation3(
+        base_hand_from_tool_rotation,
+        label="base_hand_from_tool_rotation",
+    )
+    tool_position_hand = _vector3(
+        tool_position_hand_m,
+        label="tool_position_hand_m",
+    )
+    pitch_rad = math.radians(
+        validate_downward_hand_pitch_deg(downward_pitch_deg)
+    )
+
+    tool_position_world = (
+        base_hand_position + base_hand_rotation @ tool_position_hand
+    )
+    tool_rotation_world = _rotation3(
+        base_hand_rotation @ base_hand_from_tool,
+        label="tool_rotation_world",
+    )
+    plug_axis_world = _axis3(
+        tool_rotation_world[:, 2],
+        label="plug_axis_world",
+    )
+    hand_side_world = expected_palm_side_axis_world(plug_axis_world)
+    hand_forward_world = _rotate_axis_about_axis(
+        plug_axis_world,
+        hand_side_world,
+        pitch_rad,
+    )
+    hand_up_world = _axis3(
+        np.cross(hand_forward_world, hand_side_world),
+        label="hand_up_world",
+    )
+    hand_side_world = _axis3(
+        np.cross(hand_up_world, hand_forward_world),
+        label="hand_side_world",
+    )
+    hand_rotation_world = _rotation3(
+        np.column_stack(
+            (hand_side_world, hand_up_world, hand_forward_world)
+        ),
+        label="hand_rotation_world",
+    )
+
+    hand_from_tool_rotation = _rotation3(
+        hand_rotation_world.T @ tool_rotation_world,
+        label="hand_from_tool_rotation",
+    )
+    hand_position_world = (
+        tool_position_world - hand_rotation_world @ tool_position_hand
+    )
+
+    reconstructed_tool_position = (
+        hand_position_world + hand_rotation_world @ tool_position_hand
+    )
+    reconstructed_tool_rotation = (
+        hand_rotation_world @ hand_from_tool_rotation
+    )
+    if not np.allclose(
+        reconstructed_tool_position,
+        tool_position_world,
+        atol=1.0e-12,
+    ):
+        raise RuntimeError("angled hand position did not preserve tool position")
+    if not np.allclose(
+        reconstructed_tool_rotation,
+        tool_rotation_world,
+        atol=1.0e-12,
+    ):
+        raise RuntimeError("angled hand rotation did not preserve tool rotation")
+
+    return AngledHandPose(
+        hand_position_world_m=hand_position_world,
+        hand_rotation_world=hand_rotation_world,
+        hand_from_tool_rotation=hand_from_tool_rotation,
+        tool_position_world_m=tool_position_world,
+        tool_rotation_world=tool_rotation_world,
     )
 
 
@@ -154,13 +241,8 @@ def measure_hand_plug_geometry(
     plug_tip_position_m: np.ndarray,
     plug_axis_world: np.ndarray,
 ) -> HandPlugGeometryMetrics:
-    hand_position = np.asarray(hand_position_m, dtype=np.float64).reshape(-1)
-    tip_position = np.asarray(plug_tip_position_m, dtype=np.float64).reshape(-1)
-    if hand_position.shape != (3,) or not np.all(np.isfinite(hand_position)):
-        raise ValueError("hand_position_m must be a finite length-3 vector")
-    if tip_position.shape != (3,) or not np.all(np.isfinite(tip_position)):
-        raise ValueError("plug_tip_position_m must be a finite length-3 vector")
-
+    hand_position = _vector3(hand_position_m, label="hand_position_m")
+    tip_position = _vector3(plug_tip_position_m, label="plug_tip_position_m")
     hand_rotation = _rotation3(
         hand_rotation_world,
         label="hand_rotation_world",
