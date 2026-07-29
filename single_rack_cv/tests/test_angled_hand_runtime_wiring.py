@@ -68,6 +68,11 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
             source,
         )
 
+    def test_runtime_logs_post_settle_geometry_once(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        self.assertIn("ANGLED HAND GEOMETRY VALIDATED", source)
+        self.assertIn("self._geometry_success_logged", source)
+
     def test_runtime_separates_live_plug_axis_from_tool_orientation(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         self.assertIn("def _live_plug_tip_and_axis", source)
