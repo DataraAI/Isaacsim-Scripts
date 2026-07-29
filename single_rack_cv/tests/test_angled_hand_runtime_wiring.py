@@ -16,8 +16,10 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
             ANGLED_HAND_CONFIG.hand_downward_pitch_deg,
             30.0,
         )
-        self.assertEqual(ANGLED_HAND_CONFIG.palm_roll_deg, 180.0)
-        self.assertEqual(ANGLED_HAND_CONFIG.palm_roll_tolerance_deg, 1.0)
+        self.assertEqual(
+            ANGLED_HAND_CONFIG.palm_side_tolerance_deg,
+            1.0,
+        )
 
     def test_main_selects_the_angled_runtime(self):
         source = MAIN_PATH.read_text(encoding="utf-8")
@@ -27,25 +29,42 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
         )
         self.assertIn("runtime = CableMountedSimulationRuntime(", source)
 
-    def test_runtime_applies_pitch_and_palm_roll_before_scene_construction(self):
+    def test_runtime_solves_hand_pose_and_tool_transform_together(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
-        pitch_index = source.index("hand_downward_pitch_deg")
-        roll_index = source.index("palm_roll_deg")
-        super_index = source.index(
-            "super().__init__(simulation_app=simulation_app, cfg=pitched_cfg)"
+        solve_index = source.index(
+            "compute_angled_hand_pose_preserving_tool("
         )
-        self.assertLess(pitch_index, super_index)
-        self.assertLess(roll_index, super_index)
-        self.assertIn("compute_pitched_hand_from_tool_rotation", source)
-        self.assertIn("palm_roll_deg=palm_roll_deg", source)
+        super_index = source.index(
+            "super().__init__(\n            simulation_app=simulation_app,"
+        )
+        self.assertLess(solve_index, super_index)
+        self.assertIn(
+            "initial_position=tuple(",
+            source,
+        )
+        self.assertIn(
+            "initial_orientation_wxyz=angled_hand_orientation",
+            source,
+        )
+        self.assertIn(
+            "tool_center_local_orientation_wxyz=(",
+            source,
+        )
         self.assertIn("ExplicitInsertionAxisAdapter", source)
 
-    def test_runtime_rejects_the_flipped_palm_bug(self):
+    def test_runtime_preserves_plug_target_instead_of_local_roll_guess(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        self.assertIn("preserved plug-tip target", source)
+        self.assertIn("solved hand target", source)
+        self.assertNotIn("palm_roll_deg", source)
+        self.assertNotIn("compute_pitched_hand_from_tool_rotation", source)
+
+    def test_runtime_rejects_wrong_palm_side(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         self.assertIn("palm_roll_error_deg", source)
-        self.assertIn("palm_roll_tolerance_deg", source)
+        self.assertIn("palm_side_tolerance_deg", source)
         self.assertIn(
-            "palm roll does not match the previous working pose",
+            "palm side does not match the previous working pose",
             source,
         )
 
