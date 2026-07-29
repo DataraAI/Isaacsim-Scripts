@@ -14,6 +14,7 @@ from hand_plug_geometry import (
     compute_pitched_hand_from_tool_rotation,
     measure_hand_plug_geometry,
     validate_downward_hand_pitch_deg,
+    validate_palm_roll_deg,
 )
 from host_array_bridge import to_numpy_cpu
 from plug_axis_insertion import ExplicitInsertionAxisAdapter
@@ -30,8 +31,8 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
 
     `/World/IK_Target` and `/World/ToolCenter` remain the plug-tip control
     frame. The changed hand_T_tool rotation makes Lula command the hand at the
-    requested pitch. Insertion freezes the live PhysX plug nose axis rather
-    than assuming ToolCenter local +Z is the insertion direction.
+    requested pitch and palm roll. Insertion freezes the live PhysX plug nose
+    axis rather than assuming ToolCenter local +Z is the insertion direction.
     """
 
     def __init__(
@@ -44,6 +45,7 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
             angled_cfg.hand_downward_pitch_deg,
             maximum_deg=angled_cfg.maximum_supported_pitch_deg,
         )
+        palm_roll_deg = validate_palm_roll_deg(angled_cfg.palm_roll_deg)
         base_hand_from_tool = quaternion_wxyz_to_matrix(
             np.asarray(
                 cfg.ik.tool_center_local_orientation_wxyz,
@@ -53,6 +55,7 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
         pitched_hand_from_tool = compute_pitched_hand_from_tool_rotation(
             base_hand_from_tool,
             pitch_deg,
+            palm_roll_deg=palm_roll_deg,
         )
         pitched_orientation = tuple(
             float(value)
@@ -70,6 +73,7 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
 
         self._angled_cfg = angled_cfg
         self._configured_hand_pitch_deg = pitch_deg
+        self._configured_palm_roll_deg = palm_roll_deg
         super().__init__(simulation_app=simulation_app, cfg=pitched_cfg)
 
         self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(
@@ -78,8 +82,10 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
         log(
             "ANGLED HAND RUNTIME ACTIVE\n"
             f"  configured hand-to-plug pitch: {pitch_deg:.3f} deg\n"
+            f"  configured palm roll: {palm_roll_deg:.3f} deg\n"
             "  view convention: robot right side\n"
             "  requested geometry: wrist higher, fingertips lower\n"
+            "  palm presentation: matches previous working pose\n"
             "  control frame: horizontal RJ45 plug tip\n"
             "  insertion frame: live PhysX plug nose axis"
         )
@@ -164,6 +170,14 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
                 "with fingertips directed downward toward the port"
             )
         if (
+            metrics.palm_roll_error_deg
+            > self._angled_cfg.palm_roll_tolerance_deg
+        ):
+            raise RuntimeError(
+                "palm roll does not match the previous working pose: "
+                f"error={metrics.palm_roll_error_deg:.6f} deg"
+            )
+        if (
             metrics.plug_horizontal_error_deg
             > self.cfg.cable_mount.max_axis_error_deg
         ):
@@ -203,21 +217,27 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
             metrics = self._live_hand_plug_geometry()
             _, plug_axis = self._live_plug_tip_and_axis()
             _, hand_orientation = self._hand_pose_from_articulation()
-            hand_axis = quaternion_wxyz_to_matrix(
-                hand_orientation
-            )[:, 2]
+            hand_rotation = quaternion_wxyz_to_matrix(hand_orientation)
+            hand_axis = hand_rotation[:, 2]
+            palm_side_axis = hand_rotation[:, 0]
             geometry_status = (
                 "ANGLED HAND GEOMETRY\n"
                 f"  configured hand pitch: "
                 f"{self._configured_hand_pitch_deg:.3f} deg\n"
+                f"  configured palm roll: "
+                f"{self._configured_palm_roll_deg:.3f} deg\n"
                 f"  measured hand-to-plug pitch: "
                 f"{metrics.relative_pitch_deg:.6f} deg\n"
                 f"  wrist above plug tip: "
                 f"{metrics.wrist_above_tip_m * 1000.0:.3f} mm\n"
                 f"  requested pitch sign valid: "
                 f"{metrics.wrist_higher_fingertips_lower}\n"
+                f"  palm roll error: "
+                f"{metrics.palm_roll_error_deg:.6f} deg\n"
                 f"  hand forward axis: "
                 f"{np.round(hand_axis, 6).tolist()}\n"
+                f"  palm side axis: "
+                f"{np.round(palm_side_axis, 6).tolist()}\n"
                 f"  plug insertion axis: "
                 f"{np.round(plug_axis, 6).tolist()}\n"
                 f"  plug horizontal error: "
