@@ -105,6 +105,7 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
         self._angled_cfg = angled_cfg
         self._configured_hand_pitch_deg = pitch_deg
         self._angled_pose: AngledHandPose = angled_pose
+        self._geometry_success_logged = False
         super().__init__(
             simulation_app=simulation_app,
             cfg=angled_cfg_runtime,
@@ -228,7 +229,35 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
         tip_error_m, axis_error_deg = (
             super()._sample_mount_validation_live(runtime)
         )
-        self._validate_live_hand_plug_geometry()
+        metrics = self._validate_live_hand_plug_geometry()
+        if not self._geometry_success_logged:
+            _, plug_axis = self._live_plug_tip_and_axis()
+            hand_position, hand_orientation = (
+                self._hand_pose_from_articulation()
+            )
+            hand_rotation = quaternion_wxyz_to_matrix(hand_orientation)
+            log(
+                "ANGLED HAND GEOMETRY VALIDATED\n"
+                f"  measured hand-to-plug pitch: "
+                f"{metrics.relative_pitch_deg:.6f} deg\n"
+                f"  wrist above plug tip: "
+                f"{metrics.wrist_above_tip_m * 1000.0:.3f} mm\n"
+                f"  requested pitch sign valid: "
+                f"{metrics.wrist_higher_fingertips_lower}\n"
+                f"  palm side error: "
+                f"{metrics.palm_roll_error_deg:.6f} deg\n"
+                f"  hand forward axis: "
+                f"{np.round(hand_rotation[:, 2], 6).tolist()}\n"
+                f"  palm side axis: "
+                f"{np.round(hand_rotation[:, 0], 6).tolist()}\n"
+                f"  plug insertion axis: "
+                f"{np.round(plug_axis, 6).tolist()}\n"
+                f"  plug horizontal error: "
+                f"{metrics.plug_horizontal_error_deg:.6f} deg\n"
+                f"  plug-tip error: {tip_error_m * 1000.0:.6f} mm\n"
+                f"  plug-axis error: {axis_error_deg:.6f} deg"
+            )
+            self._geometry_success_logged = True
         return tip_error_m, axis_error_deg
 
     def _partial_insertion_sample(self):
