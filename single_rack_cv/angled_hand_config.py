@@ -8,10 +8,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AngledHandConfig:
-    """Robot-right-side convention: wrist high, fingertips down toward port."""
+    """Robot-right-side convention matching the previous working hand pose."""
 
     hand_downward_pitch_deg: float = 30.0
+    palm_roll_deg: float = 180.0
     pitch_tolerance_deg: float = 0.5
+    palm_roll_tolerance_deg: float = 1.0
     maximum_supported_pitch_deg: float = 45.0
 
 
