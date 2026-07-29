@@ -2,37 +2,48 @@
 
 The approved visual contract is unchanged: from the robot-right-side view, the wrist is higher, the fingertips slope downward toward the port by 30 degrees, and the rigid RJ45 plug remains horizontal.
 
-## Corrections made during implementation
+## Root cause proven by the workstation log
 
-1. **Pitch axis correction**
+The first two implementations changed only `hand_T_tool`. That was the wrong control point because `IKConfig.use_fixed_start_pose=True` defines `initial_position` and `initial_orientation_wxyz` as a fixed **panda_hand pose**. `_create_ik()` then derives the ToolCenter target from that fixed hand pose.
 
-   The executable transform uses a positive rotation about **tool-local Y**. For the validated horizontal plug pose, tool-local Y is the side-view pitch axis.
+Changing `hand_T_tool` while leaving the fixed hand pose untouched therefore rotates the plug/ToolCenter frame around the old hand pose. It does not create the requested angled hand around the existing plug. The workstation evidence exposed the mismatch:
 
-2. **Palm-roll correction from workstation evidence**
+- configured pitch: 30 degrees
+- palm-side error: 48.794 degrees
+- plug horizontal error during startup: 14.393 degrees
+- final startup abort: wrong hand pitch sign
 
-   The first workstation screenshot proved that pitch magnitude and direction were correct but the palm/finger presentation was flipped by 180 degrees around `panda_hand` local +Z. The earlier tests checked only the forward axis, wrist height, and plug horizontality, so they could not detect that roll error.
+The passing synthetic tests were incomplete because they assumed a fixed world ToolCenter orientation that the runtime did not actually preserve.
 
-   The corrected transform composes a 180-degree hand-local-Z roll before the existing 30-degree pitch transform. This leaves the hand forward axis, horizontal plug axis, and insertion direction unchanged while matching the previous working palm orientation shown by the user.
+## Corrected architecture
 
-3. **Configuration isolation**
+`compute_angled_hand_pose_preserving_tool()` now treats the validated world plug-tip pose as immutable and solves three linked values together:
 
-   The pitch and palm-roll settings live in `angled_hand_config.py` instead of modifying the validated global `config.py`. This keeps the existing alignment and insertion configuration unchanged and makes rollback a one-line runtime import change.
+1. the new fixed `panda_hand` world position
+2. the new fixed `panda_hand` world orientation
+3. the new `hand_T_tool` rotation
 
-4. **Insertion-axis separation**
+For the canonical startup pose, the solver keeps the ToolCenter at `[0.7666, -0.1375, 1.3000]`, moves the wrist to approximately `[0.882128, -0.1375, 1.3667]`, sets the hand forward axis to `[-0.866025, 0, -0.5]`, and sets the palm-side axis to `[0, -1, 0]`. Recomposition of `world_T_hand @ hand_T_tool` reproduces the original plug position and orientation to numerical precision.
 
-   `plug_axis_insertion.py` replaces the legacy ToolCenter-local-Z axis only at the controller's existing freeze boundary. The qualified `PartialInsertionController` still owns all target generation, step counts, settle gates, drift checks, timeouts, aborts, and terminal holds.
+There is no guessed 180-degree local palm roll in the corrected implementation.
 
-5. **Camera behavior**
+## Preserved behavior
 
-   No camera pose is overwritten. Both cameras remain rigid children of `panda_hand`; desired image geometry is recomputed because the corrected hand-to-tool transform is supplied before the base runtime constructs the scene.
+- Both cameras remain rigid children of `panda_hand`.
+- Desired stereo geometry is recomputed from the solved hand-to-tool transform.
+- `plug_axis_insertion.py` still replaces the legacy ToolCenter-local-Z direction only at the insertion freeze boundary.
+- The existing 48-command insertion controller still owns all target generation, settle gates, drift checks, timeouts, aborts, and terminal hold.
+- No seating, release, retreat, or threshold relaxation is included.
 
 ## Verification status
 
-The corrected pure geometry suite explicitly proves:
+The local pure and structural suite passes 20/20 tests and Python compilation. The regression suite proves:
 
-- 30-degree downward hand axis is unchanged
-- horizontal plug axis is unchanged
-- palm side axis matches the previous working pose
-- the original flipped result is detected as a 180-degree palm-roll error
+- exact preservation of the validated plug world position
+- exact preservation of the validated plug world orientation
+- 30-degree downward hand forward axis
+- wrist above the plug tip
+- palm-side axis matching the older working pose
+- the previous local-roll composition rotates the plug by 30 degrees in world XY and is rejected
 
-Isaac Sim workstation qualification remains mandatory before merge. The branch must demonstrate 30/30 mount validation, pitch within 30 +/- 0.5 degrees, palm-roll error at or below 1 degree, plug horizontal error at or below 1 degree, stereo acquisition and lock, all 48 commands settled, and the existing insertion completion limits.
+Isaac Sim workstation qualification remains mandatory before merge. The branch must demonstrate 30/30 mount validation, pitch within 30 +/- 0.5 degrees, palm-side error at or below 1 degree, plug horizontal error at or below 1 degree, stereo acquisition and lock, all 48 commands settled, and the existing insertion completion limits.
