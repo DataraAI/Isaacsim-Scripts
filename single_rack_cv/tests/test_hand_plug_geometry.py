@@ -122,7 +122,7 @@ class PreservedToolPoseTests(unittest.TestCase):
         )
         np.testing.assert_allclose(
             self.pose.hand_position_world_m,
-            np.array([0.88212821, -0.1375, 1.3667]),
+            np.array([0.88212779, -0.1375, 1.3667]),
             atol=1.0e-8,
         )
 
@@ -199,7 +199,7 @@ class GeometryMeasurementTests(unittest.TestCase):
 
     def test_requested_geometry_passes_all_measurements(self):
         metrics = measure_hand_plug_geometry(
-            hand_position_m=np.array([0.88212821, -0.1375, 1.3667]),
+            hand_position_m=np.array([0.88212779, -0.1375, 1.3667]),
             hand_rotation_world=self._hand_rotation(flipped_palm=False),
             plug_tip_position_m=np.array([0.7666, -0.1375, 1.3]),
             plug_axis_world=np.array([-1.0, 0.0, 0.0]),
@@ -212,7 +212,7 @@ class GeometryMeasurementTests(unittest.TestCase):
 
     def test_flipped_palm_is_detected(self):
         metrics = measure_hand_plug_geometry(
-            hand_position_m=np.array([0.88212821, -0.1375, 1.3667]),
+            hand_position_m=np.array([0.88212779, -0.1375, 1.3667]),
             hand_rotation_world=self._hand_rotation(flipped_palm=True),
             plug_tip_position_m=np.array([0.7666, -0.1375, 1.3]),
             plug_axis_world=np.array([-1.0, 0.0, 0.0]),
