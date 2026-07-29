@@ -9,7 +9,7 @@ This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port
 3. `live_control.py` replaces the recessed cavity observation with the automatically calculated opening-plane observation.
 4. `main.py` sends only that refined observation to the translation-only stop-and-look controller and debug marker.
 5. `cable_runtime.py` loads the connected cable before play, enables GPU PhysX, mounts the existing rigid RJ45 plug directly to `panda_hand`, and validates the mount before YOLOE starts.
-6. `angled_hand_runtime.py` keeps the plug-tip target horizontal, commands `panda_hand` at a 30° downward pitch, and supplies the live PhysX plug nose axis to the existing insertion state machine.
+6. `angled_hand_runtime.py` keeps the plug-tip target horizontal, commands `panda_hand` at a 30° downward pitch with the previous working 180° palm presentation, and supplies the live PhysX plug nose axis to the existing insertion state machine.
 7. `insertion.py` retains the qualified 40 mm coarse approach, 20 mm fine motion, settle gates, abort checks, and terminal hold.
 
 Runtime visual control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark. Perception is frozen once visual alignment completes; approach and insertion use the frozen physical plug-tip frame.
@@ -32,15 +32,16 @@ The mount must validate for 30/30 consecutive frames before perception starts:
 
 ## Angled hand with horizontal plug
 
-The robot-right-side view defines the sign convention:
+The robot-right-side view defines the geometry:
 
 - the wrist is higher than the plug tip
 - the fingertips slope downward toward the port by 30°
 - the rigid RJ45 plug remains horizontal
+- the palm/finger presentation matches the older working pose instead of appearing flipped
 - the deformable cable tail hangs naturally
 - both wrist cameras remain rigid children of `panda_hand`
 
-`/World/IK_Target` and `/World/ToolCenter` remain the horizontal plug-tip control frame. `angled_hand_config.py` owns the single 30° pitch setting. `hand_plug_geometry.py` composes a positive tool-local Y rotation into `hand_T_tool`, causing Lula to command the diagonal hand while leaving the target plug frame horizontal.
+`/World/IK_Target` and `/World/ToolCenter` remain the horizontal plug-tip control frame. `angled_hand_config.py` owns the 30° pitch and 180° palm-roll settings. `hand_plug_geometry.py` composes the pitch about tool-local Y and the palm correction about `panda_hand` local Z, causing Lula to command the diagonal hand with the same visible palm orientation as the older working pose while leaving the plug frame horizontal.
 
 The qualified insertion state machine still contains its legacy frozen ToolCenter +Z initialization. `plug_axis_insertion.py` replaces that direction at the same freeze boundary with the live normalized PhysX plug nose axis. Every target still comes from the frozen start pose, and all existing drift, orientation, mount, IK, timeout, publication, and topology aborts remain active.
 
@@ -48,10 +49,11 @@ Startup rejects the run when:
 
 - measured hand-to-plug pitch differs from the configured value by more than 0.5°
 - the wrist is not above the plug tip for a nonzero pitch
+- palm-roll error relative to the older working pose exceeds 1.0°
 - plug horizontal error exceeds 1.0°
 - the existing fixed-joint, attachment, tip, axis, or GPU validation fails
 
-Do not loosen thresholds to compensate for a wrong pitch sign, a tilted plug, degraded stereo correspondence, diagonal insertion travel, or early port-rim contact.
+Do not loosen thresholds to compensate for a wrong pitch sign, flipped palm presentation, tilted plug, degraded stereo correspondence, diagonal insertion travel, or early port-rim contact.
 
 ## Runtime
 
