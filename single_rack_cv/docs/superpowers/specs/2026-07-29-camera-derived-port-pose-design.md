@@ -92,7 +92,8 @@ Maintain a short window of complete port-pose estimates. A handoff candidate is 
 - stereo ray gap <= existing configured gate and never above 0.5 mm;
 - reprojection error <= existing configured gate;
 - all four corners are valid in both eyes;
-- measured opening width and height remain physically plausible and temporally consistent;
+- opening width and height fall inside one configured, view-independent physical range;
+- width spread <= 0.5 mm and height spread <= 0.5 mm across the stability window;
 - the frame remains right-handed.
 
 If any gate fails, hold the current ToolCenter target and reacquire. There is no fallback correction offset.
@@ -226,7 +227,7 @@ Required for each view:
 The implementation is accepted only when:
 
 1. The camera-derived port pose meets the numerical qualification gates from both horizontal and angled views.
-2. The angled-view result is not materially worse than the horizontal-view result.
+2. The angled-view center error is no more than 0.25 mm worse than the horizontal-view center error, and each angled-view axis error is no more than 0.25 degrees worse than its horizontal-view counterpart.
 3. The same code path handles both views without per-view offsets or mode switches.
 4. The complete 48-command insertion succeeds from both views.
 5. Existing mount, topology, safety, and timeout tests remain green.
@@ -236,7 +237,7 @@ The implementation is accepted only when:
 Do not merge or enable the new runtime path when any of the following occurs:
 
 - center or orientation improves only after adding an empirical correction;
-- the angled view fails the same numerical benchmark passed by the horizontal view;
+- the angled view exceeds the explicit horizontal-versus-angled degradation limits above;
 - the estimator is stable but exceeds 0.5 mm center or 0.5 degree axis error;
 - insertion requires relaxed safety limits;
 - runtime control reads USD/RTX ground truth;
