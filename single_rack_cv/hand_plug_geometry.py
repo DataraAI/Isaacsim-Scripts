@@ -47,6 +47,13 @@ def validate_downward_hand_pitch_deg(
     return pitch
 
 
+def validate_palm_roll_deg(value: float) -> float:
+    roll = float(value)
+    if not math.isfinite(roll):
+        raise ValueError("palm roll must be finite")
+    return roll
+
+
 def _rotation_y(angle_rad: float) -> np.ndarray:
     cosine = math.cos(angle_rad)
     sine = math.sin(angle_rad)
@@ -60,24 +67,40 @@ def _rotation_y(angle_rad: float) -> np.ndarray:
     )
 
 
+def _rotation_z(angle_rad: float) -> np.ndarray:
+    cosine = math.cos(angle_rad)
+    sine = math.sin(angle_rad)
+    return np.array(
+        [
+            [cosine, -sine, 0.0],
+            [sine, cosine, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
 def compute_pitched_hand_from_tool_rotation(
     base_hand_from_tool: np.ndarray,
     downward_pitch_deg: float,
+    palm_roll_deg: float = 0.0,
 ) -> np.ndarray:
     """
-    Rotate the hand about tool-local +Y while leaving the tool frame unchanged.
+    Build hand_T_tool for a downward-pitched hand and a level plug frame.
 
-    For the validated port pose, positive pitch makes panda_hand local +Z point
-    downward in world Z while the tool/plug +Z axis remains horizontal toward
-    the port.
+    The pitch is applied about tool-local +Y. The palm roll is applied about
+    panda_hand local +Z. A 180-degree palm roll reproduces the previously
+    working Franka presentation while leaving the hand forward axis and the
+    horizontal plug insertion axis unchanged.
     """
 
     base = _rotation3(base_hand_from_tool, label="base_hand_from_tool")
     pitch_rad = math.radians(
         validate_downward_hand_pitch_deg(downward_pitch_deg)
     )
+    roll_rad = math.radians(validate_palm_roll_deg(palm_roll_deg))
     return _rotation3(
-        base @ _rotation_y(pitch_rad),
+        _rotation_z(roll_rad) @ base @ _rotation_y(pitch_rad),
         label="pitched_hand_from_tool",
     )
 
@@ -89,11 +112,38 @@ def horizontal_axis_error_deg(axis_world: np.ndarray) -> float:
     )
 
 
+def _directional_axis_error_deg(
+    actual_axis_world: np.ndarray,
+    expected_axis_world: np.ndarray,
+) -> float:
+    actual = _axis3(actual_axis_world, label="actual_axis_world")
+    expected = _axis3(expected_axis_world, label="expected_axis_world")
+    dot = float(np.clip(np.dot(actual, expected), -1.0, 1.0))
+    return math.degrees(math.acos(dot))
+
+
+def expected_palm_side_axis_world(plug_axis_world: np.ndarray) -> np.ndarray:
+    """Return the old working palm-side direction for a horizontal plug."""
+
+    plug_axis = _axis3(plug_axis_world, label="plug_axis_world")
+    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    horizontal_plug = plug_axis - float(np.dot(plug_axis, world_up)) * world_up
+    horizontal_norm = float(np.linalg.norm(horizontal_plug))
+    if horizontal_norm <= _EPS:
+        raise ValueError("plug axis cannot be vertical when checking palm roll")
+    horizontal_plug /= horizontal_norm
+    return _axis3(
+        np.cross(world_up, horizontal_plug),
+        label="expected_palm_side_axis_world",
+    )
+
+
 @dataclass(frozen=True)
 class HandPlugGeometryMetrics:
     relative_pitch_deg: float
     wrist_above_tip_m: float
     plug_horizontal_error_deg: float
+    palm_roll_error_deg: float
     wrist_higher_fingertips_lower: bool
 
 
@@ -120,6 +170,10 @@ def measure_hand_plug_geometry(
         hand_rotation[:, 2],
         label="hand_forward_axis",
     )
+    hand_side = _axis3(
+        hand_rotation[:, 0],
+        label="hand_side_axis",
+    )
 
     dot = float(np.clip(np.dot(hand_forward, plug_axis), -1.0, 1.0))
     relative_pitch_deg = math.degrees(math.acos(dot))
@@ -128,10 +182,15 @@ def measure_hand_plug_geometry(
         wrist_above_tip_m > 0.0
         and hand_forward[2] < plug_axis[2]
     )
+    palm_roll_error_deg = _directional_axis_error_deg(
+        hand_side,
+        expected_palm_side_axis_world(plug_axis),
+    )
 
     return HandPlugGeometryMetrics(
         relative_pitch_deg=relative_pitch_deg,
         wrist_above_tip_m=wrist_above_tip_m,
         plug_horizontal_error_deg=horizontal_axis_error_deg(plug_axis),
+        palm_roll_error_deg=palm_roll_error_deg,
         wrist_higher_fingertips_lower=direction_ok,
     )
