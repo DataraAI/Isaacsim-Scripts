@@ -18,6 +18,8 @@ class SyntheticCamera:
         self.position = np.asarray(position_xyz, dtype=np.float64)
         self.fx_px = FOCAL_PX
         self.fy_px = FOCAL_PX
+        self.image_height_px = IMAGE_HEIGHT
+        self.image_width_px = IMAGE_WIDTH
         self.cx_px = (IMAGE_WIDTH - 1) / 2.0
         self.cy_px = (IMAGE_HEIGHT - 1) / 2.0
 
@@ -52,23 +54,10 @@ class SyntheticCamera:
         return self.position.copy(), direction
 
 
-def polygon_centroid(points_xy: np.ndarray) -> np.ndarray:
-    points = np.asarray(points_xy, dtype=np.float64)
-    following = np.roll(points, -1, axis=0)
-    cross = points[:, 0] * following[:, 1] - following[:, 0] * points[:, 1]
-    return np.array(
-        [
-            np.sum((points[:, 0] + following[:, 0]) * cross),
-            np.sum((points[:, 1] + following[:, 1]) * cross),
-        ],
-        dtype=np.float64,
-    ) / (3.0 * float(np.sum(cross)))
-
-
 def stepped_aperture() -> np.ndarray:
     width_m = 0.0114
     height_m = 0.0070
-    polygon = np.array(
+    return np.array(
         [
             [-0.50 * width_m, -0.50 * height_m],
             [+0.50 * width_m, -0.50 * height_m],
@@ -81,7 +70,6 @@ def stepped_aperture() -> np.ndarray:
         ],
         dtype=np.float64,
     )
-    return polygon - polygon_centroid(polygon)
 
 
 def render_mask(camera, center, horizontal, vertical) -> np.ndarray:
@@ -117,6 +105,8 @@ class ApertureCenterTests(unittest.TestCase):
             right_camera=right,
             plane_origin_world_m=center,
             plane_normal_world=normal,
+            aperture_width_m=0.0114,
+            aperture_height_m=0.0070,
         )
 
         self.assertLess(
@@ -147,7 +137,46 @@ class ApertureCenterTests(unittest.TestCase):
                 right_camera=right,
                 plane_origin_world_m=center,
                 plane_normal_world=normal,
+                aperture_width_m=0.0114,
+                aperture_height_m=0.0070,
             )
+
+    def test_asymmetric_interior_pixels_do_not_move_physical_center(self):
+        left = SyntheticCamera((-0.02, 0.0, 0.0))
+        right = SyntheticCamera((0.02, 0.0, 0.0))
+        center = np.array([0.002, -0.001, -0.16], dtype=np.float64)
+        normal = np.array([0.16, -0.05, 0.986], dtype=np.float64)
+        normal /= np.linalg.norm(normal)
+        baseline = right.camera_center_world_m - left.camera_center_world_m
+        horizontal = baseline - float(np.dot(baseline, normal)) * normal
+        horizontal /= np.linalg.norm(horizontal)
+        vertical = np.cross(normal, horizontal)
+        vertical /= np.linalg.norm(vertical)
+
+        left_mask = render_mask(left, center, horizontal, vertical)
+        right_mask = render_mask(right, center, horizontal, vertical)
+        x, y, width, height = cv2.boundingRect((right_mask > 0).astype(np.uint8))
+        right_mask[
+            y + height // 3 : y + 2 * height // 3,
+            x : x + width // 4,
+        ] = 0
+
+        result = estimate_planar_aperture_center(
+            left_mask=left_mask,
+            right_mask=right_mask,
+            left_camera=left,
+            right_camera=right,
+            plane_origin_world_m=center,
+            plane_normal_world=normal,
+            aperture_width_m=0.0114,
+            aperture_height_m=0.0070,
+        )
+
+        self.assertLess(
+            float(np.linalg.norm(result.center_world_m - center)),
+            0.00035,
+        )
+        self.assertLess(result.left_right_disagreement_m, 0.0005)
 
     def test_no_manual_world_offset_parameter_exists(self):
         import inspect
