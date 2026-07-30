@@ -134,7 +134,7 @@ try:
         }
     )
 
-    from stereo_handoff_runtime import (
+    from settled_stereo_handoff_runtime import (
         AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
     from debug import DebugOutputs
