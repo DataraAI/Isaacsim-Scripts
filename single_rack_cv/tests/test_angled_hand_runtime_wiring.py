@@ -7,6 +7,7 @@ from angled_hand_config import ANGLED_HAND_CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = ROOT / "angled_hand_runtime.py"
+HANDOFF_RUNTIME_PATH = ROOT / "stereo_handoff_runtime.py"
 MAIN_PATH = ROOT / "main.py"
 
 
@@ -21,13 +22,26 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
             1.0,
         )
 
-    def test_main_selects_the_angled_runtime(self):
-        source = MAIN_PATH.read_text(encoding="utf-8")
+    def test_main_selects_the_angled_stereo_handoff_runtime(self):
+        main_source = MAIN_PATH.read_text(encoding="utf-8")
+        handoff_source = HANDOFF_RUNTIME_PATH.read_text(encoding="utf-8")
+
         self.assertIn(
-            "AngledHandCableRuntime as CableMountedSimulationRuntime",
-            source,
+            "AngledHandStereoHandoffRuntime as "
+            "CableMountedSimulationRuntime",
+            main_source,
         )
-        self.assertIn("runtime = CableMountedSimulationRuntime(", source)
+        self.assertIn("runtime = CableMountedSimulationRuntime(", main_source)
+        self.assertIn(
+            "from angled_hand_runtime import AngledHandCableRuntime",
+            handoff_source,
+        )
+        self.assertIn(
+            "class AngledHandStereoHandoffRuntime(\n"
+            "    AngledHandCableRuntime\n"
+            "):",
+            handoff_source,
+        )
 
     def test_runtime_solves_hand_pose_and_tool_transform_together(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
