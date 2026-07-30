@@ -141,6 +141,8 @@ class LiveControlTests(unittest.TestCase):
         self.assertIn("left_mask=observation.left.detection.mask", source)
         self.assertIn("right_mask=observation.right.detection.mask", source)
         self.assertIn("center_world_m=aperture_center.center_world_m", source)
+        self.assertIn("aperture_width_m=aperture_width_m", source)
+        self.assertIn("aperture_height_m=aperture_height_m", source)
 
     def test_public_api_has_no_manual_offset_parameter(self):
         parameters = inspect.signature(apply_front_plane_result).parameters
