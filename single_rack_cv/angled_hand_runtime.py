@@ -6,6 +6,10 @@ from __future__ import annotations
 from dataclasses import replace
 import numpy as np
 
+from angled_grasp_centering import (
+    RearCenteredGraspCalibration,
+    recenter_horizontal_plug_rear_in_pitched_hand,
+)
 from angled_hand_config import ANGLED_HAND_CONFIG, AngledHandConfig
 from cable_runtime import CableMountedSimulationRuntime
 from hand_plug_geometry import (
@@ -49,7 +53,7 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
             angled_cfg.hand_downward_pitch_deg,
             maximum_deg=angled_cfg.maximum_supported_pitch_deg,
         )
-        base_hand_position = np.asarray(
+        original_base_hand_position = np.asarray(
             cfg.ik.initial_position,
             dtype=np.float64,
         )
@@ -65,14 +69,33 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
                 dtype=np.float64,
             )
         )
-        angled_pose = compute_angled_hand_pose_preserving_tool(
-            base_hand_position_m=base_hand_position,
+        camera_positions_hand = np.asarray(
+            [
+                cfg.camera.left_local_position,
+                cfg.camera.right_local_position,
+                cfg.camera.virtual_local_position,
+            ],
+            dtype=np.float64,
+        )
+        grasp_calibration = recenter_horizontal_plug_rear_in_pitched_hand(
+            base_hand_position_m=original_base_hand_position,
             base_hand_rotation_world=base_hand_rotation,
-            base_hand_from_tool_rotation=base_hand_from_tool,
             tool_position_hand_m=np.asarray(
                 cfg.ik.tool_center_local_position_m,
                 dtype=np.float64,
             ),
+            camera_positions_hand_m=camera_positions_hand,
+            plug_body_length_m=angled_cfg.plug_body_length_m,
+            downward_pitch_deg=pitch_deg,
+        )
+        base_hand_position = grasp_calibration.base_hand_position_world_m
+        tool_position_hand = grasp_calibration.tool_position_hand_m
+
+        angled_pose = compute_angled_hand_pose_preserving_tool(
+            base_hand_position_m=base_hand_position,
+            base_hand_rotation_world=base_hand_rotation,
+            base_hand_from_tool_rotation=base_hand_from_tool,
+            tool_position_hand_m=tool_position_hand,
             downward_pitch_deg=pitch_deg,
         )
         angled_hand_orientation = tuple(
@@ -87,8 +110,26 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
                 angled_pose.hand_from_tool_rotation
             )
         )
+        left_camera_position = tuple(
+            float(value)
+            for value in grasp_calibration.camera_positions_hand_m[0]
+        )
+        right_camera_position = tuple(
+            float(value)
+            for value in grasp_calibration.camera_positions_hand_m[1]
+        )
+        virtual_camera_position = tuple(
+            float(value)
+            for value in grasp_calibration.camera_positions_hand_m[2]
+        )
         angled_cfg_runtime = replace(
             cfg,
+            camera=replace(
+                cfg.camera,
+                left_local_position=left_camera_position,
+                right_local_position=right_camera_position,
+                virtual_local_position=virtual_camera_position,
+            ),
             ik=replace(
                 cfg.ik,
                 initial_position=tuple(
@@ -96,6 +137,9 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
                     for value in angled_pose.hand_position_world_m
                 ),
                 initial_orientation_wxyz=angled_hand_orientation,
+                tool_center_local_position_m=tuple(
+                    float(value) for value in tool_position_hand
+                ),
                 tool_center_local_orientation_wxyz=(
                     angled_hand_from_tool_orientation
                 ),
@@ -105,6 +149,9 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
         self._angled_cfg = angled_cfg
         self._configured_hand_pitch_deg = pitch_deg
         self._angled_pose: AngledHandPose = angled_pose
+        self._grasp_calibration: RearCenteredGraspCalibration = (
+            grasp_calibration
+        )
         self._geometry_success_logged = False
         super().__init__(
             simulation_app=simulation_app,
@@ -119,7 +166,10 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
             f"  configured hand-to-plug pitch: {pitch_deg:.3f} deg\n"
             "  view convention: robot right side\n"
             "  requested geometry: wrist higher, fingertips lower\n"
-            "  palm presentation: previous working pose\n"
+            "  grasp presentation: RJ45 rear centered between fingers\n"
+            f"  local rear-centering shift: "
+            f"{grasp_calibration.local_shift_hand_m[0] * 1000.0:.3f} mm\n"
+            "  camera-to-plug calibration: preserved exactly\n"
             f"  preserved plug-tip target: "
             f"{np.round(angled_pose.tool_position_world_m, 6).tolist()}\n"
             f"  solved hand target: "
