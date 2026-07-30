@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
-
 from angled_hand_config import ANGLED_HAND_CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +19,10 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
         self.assertEqual(
             ANGLED_HAND_CONFIG.palm_side_tolerance_deg,
             1.0,
+        )
+        self.assertEqual(
+            ANGLED_HAND_CONFIG.plug_body_length_m,
+            0.036152,
         )
 
     def test_main_selects_the_angled_stereo_handoff_runtime(self):
@@ -61,10 +64,27 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
             source,
         )
         self.assertIn(
+            "tool_center_local_position_m=tuple(",
+            source,
+        )
+        self.assertIn(
             "tool_center_local_orientation_wxyz=(",
             source,
         )
         self.assertIn("ExplicitInsertionAxisAdapter", source)
+
+    def test_runtime_recenters_rear_and_preserves_camera_to_plug_extrinsics(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "recenter_horizontal_plug_rear_in_pitched_hand(",
+            source,
+        )
+        self.assertIn("camera=replace(", source)
+        self.assertIn("left_local_position=left_camera_position", source)
+        self.assertIn("right_local_position=right_camera_position", source)
+        self.assertIn("virtual_local_position=virtual_camera_position", source)
+        self.assertIn("camera-to-plug calibration: preserved exactly", source)
+        self.assertIn("RJ45 rear centered between fingers", source)
 
     def test_runtime_preserves_plug_target_instead_of_local_roll_guess(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
