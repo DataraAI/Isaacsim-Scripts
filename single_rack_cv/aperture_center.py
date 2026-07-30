@@ -202,10 +202,12 @@ def _measure_eye_center(
             f"{notch_width_m * 1000.0:.3f} mm."
         )
 
-    # Horizontal center is the stepped latch-notch symmetry axis. Vertical
-    # center is half the known physical opening height above the visible bottom
-    # boundary. These are object dimensions, not a view-specific world offset.
-    center_x = 0.5 * float(notch_left + notch_right)
+    # The full aperture side walls remain the same physical boundaries in both
+    # eyes even when one view loses part of the upper latch silhouette. Use the
+    # full-width midpoint for horizontal center; keep the upper feature only as
+    # a shape-validity gate. Vertical center remains half the known physical
+    # opening height above the visible bottom boundary.
+    center_x = 0.5 * float(left_edge + right_edge)
     center_y = bottom_edge + 0.5 * aperture_height_m
     center_world = (
         plane_origin
