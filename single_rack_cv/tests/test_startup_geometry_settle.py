@@ -38,6 +38,27 @@ class StartupGeometrySettleTests(unittest.TestCase):
             source,
         )
 
+    def test_insertion_waits_for_consecutive_valid_presentation_samples(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        self.assertIn("ConsecutiveValidityWindow", source)
+        self.assertIn("def update_partial_insertion(self)", source)
+        self.assertIn("self._validate_live_hand_plug_geometry()", source)
+        self.assertIn("self._insertion_presentation_window.observe(False)", source)
+        self.assertIn("self._insertion_presentation_window.observe(True)", source)
+        self.assertIn("INSERTION PRESENTATION VALIDATED", source)
+
+    def test_advancing_insertion_uses_controller_orientation_guard(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        self.assertIn("def _sample_mount_validation_live", source)
+        self.assertIn(
+            "if self.partial_insertion.phase is InsertionPhase.WAITING_FOR_ALIGNMENT:",
+            source,
+        )
+        self.assertIn(
+            "_CableMountedSimulationRuntime._sample_mount_validation_live(",
+            source,
+        )
+
     def test_one_degree_palm_limit_is_not_relaxed(self):
         source = ANGLED_CONFIG_PATH.read_text(encoding="utf-8")
         self.assertIn("palm_side_tolerance_deg: float = 1.0", source)
