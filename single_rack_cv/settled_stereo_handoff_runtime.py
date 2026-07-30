@@ -3,12 +3,17 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from cable_geometry import validate_mount_window
 from cable_runtime import (
     CableMountedSimulationRuntime as _CableMountedSimulationRuntime,
 )
+from insertion import InsertionPhase
+from orientation_hold import update_orientation_hold_command
 from plug_axis_insertion import ExplicitInsertionAxisAdapter
 from settled_insertion import ConsecutivePoseInsertionController
+from sim import log
 from stereo_handoff_runtime import (
     AngledHandStereoHandoffRuntime as _BaseAngledHandStereoHandoffRuntime,
 )
@@ -29,6 +34,11 @@ class AngledHandStereoHandoffRuntime(
     ToolCenter quaternion together. A pre-opening orientation transient resets
     that settle window; it does not count as a settled command. At or inside the
     opening plane, the unchanged orientation limit remains an immediate abort.
+
+    A bounded orientation-hold loop compensates measured physical roll bias by
+    nudging the IK command. The frozen quaternion remains the safety reference;
+    only the command sent to Lula is adjusted. This is closed-loop feedback, not
+    a fixed angular offset.
     """
 
     _TRANSIENT_GEOMETRY_PREFIXES = (
@@ -37,6 +47,10 @@ class AngledHandStereoHandoffRuntime(
         "palm side does not match the previous working pose:",
         "plug horizontal error exceeded limit:",
     )
+    _ORIENTATION_HOLD_GAIN = 0.35
+    _ORIENTATION_HOLD_MAXIMUM_STEP_DEG = 0.15
+    _ORIENTATION_HOLD_MAXIMUM_BIAS_DEG = 3.0
+    _ORIENTATION_HOLD_LOG_INTERVAL_FRAMES = 30
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -50,6 +64,8 @@ class AngledHandStereoHandoffRuntime(
         self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(
             self.partial_insertion
         )
+        self._insertion_orientation_command_wxyz: np.ndarray | None = None
+        self._last_orientation_hold_log_frame = -1_000_000
 
     @classmethod
     def _is_transient_geometry_error(cls, error: RuntimeError) -> bool:
@@ -58,6 +74,70 @@ class AngledHandStereoHandoffRuntime(
             message.startswith(prefix)
             for prefix in cls._TRANSIENT_GEOMETRY_PREFIXES
         )
+
+    def update_ik(self) -> None:
+        """Apply bounded frozen-quaternion feedback before each Lula solve."""
+
+        self._update_insertion_orientation_hold_target()
+        super().update_ik()
+
+    def _update_insertion_orientation_hold_target(self) -> None:
+        controller = self.partial_insertion
+        reference = controller.frozen_orientation_wxyz
+        if (
+            self.ik is None
+            or controller.phase is not InsertionPhase.ADVANCING
+            or reference is None
+        ):
+            self._insertion_orientation_command_wxyz = None
+            return
+
+        if self._insertion_orientation_command_wxyz is None:
+            self._insertion_orientation_command_wxyz = np.asarray(
+                reference,
+                dtype=np.float64,
+            ).copy()
+
+        _, actual_orientation = self._tool_pose_from_articulation()
+        update = update_orientation_hold_command(
+            reference_wxyz=reference,
+            actual_wxyz=actual_orientation,
+            current_command_wxyz=(
+                self._insertion_orientation_command_wxyz
+            ),
+            gain=self._ORIENTATION_HOLD_GAIN,
+            maximum_step_deg=self._ORIENTATION_HOLD_MAXIMUM_STEP_DEG,
+            maximum_bias_deg=self._ORIENTATION_HOLD_MAXIMUM_BIAS_DEG,
+        )
+        self._insertion_orientation_command_wxyz = (
+            update.command_wxyz.copy()
+        )
+
+        target_position, _ = self.ik.target.get_world_pose()
+        self.ik.target.set_world_pose(
+            position=np.asarray(target_position, dtype=np.float64),
+            orientation=self._insertion_orientation_command_wxyz,
+        )
+
+        if (
+            update.actual_error_deg
+            > controller.limits.max_orientation_error_deg
+            and self.frame_index - self._last_orientation_hold_log_frame
+            >= self._ORIENTATION_HOLD_LOG_INTERVAL_FRAMES
+        ):
+            self._last_orientation_hold_log_frame = self.frame_index
+            log(
+                "INSERTION ORIENTATION HOLD ACTIVE\n"
+                f"  actual error: {update.actual_error_deg:.6f} deg\n"
+                f"  command compensation: "
+                f"{update.command_bias_deg:.6f} deg\n"
+                f"  maximum command step: "
+                f"{self._ORIENTATION_HOLD_MAXIMUM_STEP_DEG:.3f} deg/frame\n"
+                f"  maximum command compensation: "
+                f"{self._ORIENTATION_HOLD_MAXIMUM_BIAS_DEG:.3f} deg\n"
+                f"  compensation saturated: {update.bias_saturated}\n"
+                "  safety reference and 1 degree actual-pose limit: unchanged"
+            )
 
     def prepare_for_perception(self) -> None:
         """Settle until the full strict startup geometry window is consecutive."""
