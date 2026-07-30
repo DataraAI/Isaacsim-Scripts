@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Angled stereo handoff runtime with a consecutive startup geometry gate."""
+"""Angled stereo handoff runtime with guarded startup and pose settling."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from cable_geometry import validate_mount_window
 from cable_runtime import (
     CableMountedSimulationRuntime as _CableMountedSimulationRuntime,
 )
+from plug_axis_insertion import ExplicitInsertionAxisAdapter
+from settled_insertion import ConsecutivePoseInsertionController
 from stereo_handoff_runtime import (
     AngledHandStereoHandoffRuntime as _BaseAngledHandStereoHandoffRuntime,
 )
@@ -23,9 +25,10 @@ class AngledHandStereoHandoffRuntime(
     validation window and keep settling. Structural mount failures still raise
     immediately, and every existing numerical limit remains unchanged.
 
-    After stereo handoff completes, insertion safety belongs to the guarded
-    PartialInsertionController. The camera-baseline presentation check must not
-    deadlock command one because it is not the plug insertion orientation.
+    After stereo handoff completes, insertion settles position and the frozen
+    ToolCenter quaternion together. A pre-opening orientation transient resets
+    that settle window; it does not count as a settled command. At or inside the
+    opening plane, the unchanged orientation limit remains an immediate abort.
     """
 
     _TRANSIENT_GEOMETRY_PREFIXES = (
@@ -34,6 +37,19 @@ class AngledHandStereoHandoffRuntime(
         "palm side does not match the previous working pose:",
         "plug horizontal error exceeded limit:",
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # The base runtime creates a fresh controller in WAITING_FOR_ALIGNMENT.
+        # Replace it before any perception or insertion update so every command
+        # requires consecutive position-and-orientation validity. Rebind the
+        # live plug-axis adapter to the replacement controller as well.
+        limits = self.partial_insertion.limits
+        self.partial_insertion = ConsecutivePoseInsertionController(limits)
+        self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(
+            self.partial_insertion
+        )
 
     @classmethod
     def _is_transient_geometry_error(cls, error: RuntimeError) -> bool:
@@ -140,12 +156,10 @@ class AngledHandStereoHandoffRuntime(
         """
         Keep the strict hand/camera presentation gate only before perception.
 
-        Once stereo handoff has completed, the frozen ToolCenter quaternion
-        guard in PartialInsertionController owns orientation safety. It ignores
-        brief non-contact motion transients, then enforces the unchanged one
-        degree limit after settling or at the opening plane. Structural fixed-
-        joint, attachment, plug-tip, and plug-axis checks remain active through
-        the base cable runtime on every insertion frame.
+        Once stereo handoff has completed, frozen-pose insertion safety belongs
+        to ConsecutivePoseInsertionController. Structural fixed-joint,
+        attachment, plug-tip, and plug-axis checks remain active through the
+        base cable runtime on every insertion frame.
         """
 
         if not self.visual_servo.complete:
