@@ -156,9 +156,11 @@ class LiveControlTests(unittest.TestCase):
         )
         self.assertEqual(diagnostics.side_support_counts, (0, 0, 0, 0))
 
-    def test_live_refinement_uses_direct_stereo_center_not_bezel_plane(self):
+    def test_live_refinement_uses_rgb_front_rim_not_bezel_plane(self):
         source = inspect.getsource(refine_live_observation)
         self.assertIn("estimate_stereo_aperture_center", source)
+        self.assertIn("left_rgb=frame.left.rgb", source)
+        self.assertIn("right_rgb=frame.right.rgb", source)
         self.assertIn("left_mask=observation.left.detection.mask", source)
         self.assertIn("right_mask=observation.right.detection.mask", source)
         self.assertIn("apply_stereo_center_result", source)
