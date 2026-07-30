@@ -134,6 +134,15 @@ class LiveControlTests(unittest.TestCase):
             0.01,
             places=12,
         )
+        self.assertEqual(
+            diagnostics.aperture_center_world_m,
+            (0.0, 0.0, -0.13),
+        )
+        self.assertAlmostEqual(
+            diagnostics.aperture_center_disagreement_m,
+            0.0,
+            places=12,
+        )
 
     def test_live_refinement_uses_plane_rectified_aperture_center(self):
         source = inspect.getsource(refine_live_observation)
@@ -143,6 +152,10 @@ class LiveControlTests(unittest.TestCase):
         self.assertIn("center_world_m=aperture_center.center_world_m", source)
         self.assertIn("aperture_width_m=aperture_width_m", source)
         self.assertIn("aperture_height_m=aperture_height_m", source)
+        self.assertIn(
+            "aperture_center.left_right_disagreement_m",
+            source,
+        )
 
     def test_public_api_has_no_manual_offset_parameter(self):
         parameters = inspect.signature(apply_front_plane_result).parameters
