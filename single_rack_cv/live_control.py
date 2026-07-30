@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from aperture_center import estimate_planar_aperture_center
 from front_plane import estimate_front_plane
 
 
@@ -164,6 +165,18 @@ def refine_live_observation(
         right_center_uv=observation.right.detection.center_uv,
         left_camera=frame.left.camera,
         right_camera=frame.right.camera,
+    )
+    aperture_center = estimate_planar_aperture_center(
+        left_mask=observation.left.detection.mask,
+        right_mask=observation.right.detection.mask,
+        left_camera=frame.left.camera,
+        right_camera=frame.right.camera,
+        plane_origin_world_m=result.center_world_m,
+        plane_normal_world=result.normal_world,
+    )
+    result = replace(
+        result,
+        center_world_m=aperture_center.center_world_m,
     )
     return apply_front_plane_result(
         frame=frame,
