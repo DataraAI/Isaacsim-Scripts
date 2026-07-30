@@ -132,8 +132,8 @@ try:
         }
     )
 
-    from angled_hand_runtime import (
-        AngledHandCableRuntime as CableMountedSimulationRuntime,
+    from stereo_handoff_runtime import (
+        AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
     from debug import DebugOutputs
     from live_control import refine_live_observation
