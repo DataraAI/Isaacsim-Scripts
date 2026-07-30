@@ -24,6 +24,8 @@ class LiveFrontPlaneDiagnostics:
     triangulated_count: int
     cluster_count: int
     side_support_counts: tuple[int, int, int, int]
+    aperture_center_world_m: tuple[float, float, float]
+    aperture_center_disagreement_m: float
 
 
 def _project_camera_local(point_camera_usd_m, camera) -> np.ndarray:
@@ -64,6 +66,7 @@ def apply_front_plane_result(
     observation,
     desired_port_virtual_camera_usd,
     front_plane_result,
+    aperture_center_disagreement_m: float = 0.0,
 ):
     """Replace recessed cavity geometry with fitted front-opening geometry."""
     virtual_camera = frame.virtual_camera
@@ -146,6 +149,8 @@ def apply_front_plane_result(
         side_support_counts=tuple(
             int(value) for value in front_plane_result.side_support_counts
         ),
+        aperture_center_world_m=tuple(float(value) for value in center_world),
+        aperture_center_disagreement_m=float(aperture_center_disagreement_m),
     )
     return refined, diagnostics
 
@@ -188,4 +193,7 @@ def refine_live_observation(
         observation=observation,
         desired_port_virtual_camera_usd=desired_port_virtual_camera_usd,
         front_plane_result=result,
+        aperture_center_disagreement_m=(
+            aperture_center.left_right_disagreement_m
+        ),
     )
