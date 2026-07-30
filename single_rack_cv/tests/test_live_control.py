@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from live_control import apply_front_plane_result
+from live_control import apply_front_plane_result, refine_live_observation
 
 
 class FakeCamera:
@@ -134,6 +134,13 @@ class LiveControlTests(unittest.TestCase):
             0.01,
             places=12,
         )
+
+    def test_live_refinement_uses_plane_rectified_aperture_center(self):
+        source = inspect.getsource(refine_live_observation)
+        self.assertIn("estimate_planar_aperture_center", source)
+        self.assertIn("left_mask=observation.left.detection.mask", source)
+        self.assertIn("right_mask=observation.right.detection.mask", source)
+        self.assertIn("center_world_m=aperture_center.center_world_m", source)
 
     def test_public_api_has_no_manual_offset_parameter(self):
         parameters = inspect.signature(apply_front_plane_result).parameters
