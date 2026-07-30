@@ -154,6 +154,9 @@ def refine_live_observation(
     frame,
     observation,
     desired_port_virtual_camera_usd,
+    *,
+    aperture_width_m: float = 0.0114,
+    aperture_height_m: float = 0.0070,
 ):
     """Run qualified SGBM and return front-opening control geometry."""
     result = estimate_front_plane(
@@ -173,6 +176,8 @@ def refine_live_observation(
         right_camera=frame.right.camera,
         plane_origin_world_m=result.center_world_m,
         plane_normal_world=result.normal_world,
+        aperture_width_m=aperture_width_m,
+        aperture_height_m=aperture_height_m,
     )
     result = replace(
         result,
