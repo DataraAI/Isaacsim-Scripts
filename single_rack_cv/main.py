@@ -138,7 +138,7 @@ try:
         AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
     from debug import DebugOutputs
-    from live_control import refine_live_observation
+    from live_control_projective import refine_live_observation
     from perception import YOLOEPortDetector, process_stereo_port
     from sim import warn
 
