@@ -7,7 +7,7 @@ import numpy as np
 
 from hand_plug_geometry import (
     compute_angled_hand_pose_preserving_tool,
-    expected_palm_side_axis_world,
+    expected_camera_baseline_axis_world,
     horizontal_axis_error_deg,
     measure_hand_plug_geometry,
     validate_downward_hand_pitch_deg,
@@ -106,7 +106,7 @@ class PreservedToolPoseTests(unittest.TestCase):
             atol=1.0e-12,
         )
 
-    def test_matches_previous_working_hand_presentation(self):
+    def test_matches_horizontal_stereo_baseline_presentation(self):
         np.testing.assert_allclose(
             self.pose.hand_rotation_world[:, 2],
             np.array(
@@ -116,8 +116,8 @@ class PreservedToolPoseTests(unittest.TestCase):
             atol=1.0e-12,
         )
         np.testing.assert_allclose(
-            self.pose.hand_rotation_world[:, 0],
-            np.array([0.0, -1.0, 0.0], dtype=np.float64),
+            self.pose.hand_rotation_world[:, 1],
+            np.array([0.0, 1.0, 0.0], dtype=np.float64),
             atol=1.0e-12,
         )
         np.testing.assert_allclose(
@@ -130,8 +130,8 @@ class PreservedToolPoseTests(unittest.TestCase):
         pitch = math.radians(30.0)
         expected = np.array(
             [
-                [1.0, 0.0, 0.0],
                 [0.0, math.cos(pitch), math.sin(pitch)],
+                [-1.0, 0.0, 0.0],
                 [0.0, -math.sin(pitch), math.cos(pitch)],
             ],
             dtype=np.float64,
@@ -184,45 +184,49 @@ class PreservedToolPoseTests(unittest.TestCase):
 
 class GeometryMeasurementTests(unittest.TestCase):
     @staticmethod
-    def _hand_rotation(*, flipped_palm: bool) -> np.ndarray:
+    def _hand_rotation(*, wrong_baseline: bool) -> np.ndarray:
         hand_forward = np.array(
             [-math.cos(math.radians(30.0)), 0.0, -0.5],
             dtype=np.float64,
         )
-        hand_side = np.array(
-            [0.0, 1.0 if flipped_palm else -1.0, 0.0],
+        camera_baseline = np.array(
+            [0.0, -1.0 if wrong_baseline else 1.0, 0.0],
             dtype=np.float64,
         )
-        hand_up = np.cross(hand_forward, hand_side)
-        hand_up /= float(np.linalg.norm(hand_up))
-        return np.column_stack((hand_side, hand_up, hand_forward))
+        hand_side = np.cross(camera_baseline, hand_forward)
+        hand_side /= float(np.linalg.norm(hand_side))
+        return np.column_stack((hand_side, camera_baseline, hand_forward))
 
     def test_requested_geometry_passes_all_measurements(self):
         metrics = measure_hand_plug_geometry(
             hand_position_m=np.array([0.88212779, -0.1375, 1.3667]),
-            hand_rotation_world=self._hand_rotation(flipped_palm=False),
+            hand_rotation_world=self._hand_rotation(wrong_baseline=False),
             plug_tip_position_m=np.array([0.7666, -0.1375, 1.3]),
             plug_axis_world=np.array([-1.0, 0.0, 0.0]),
         )
         self.assertAlmostEqual(metrics.relative_pitch_deg, 30.0, places=9)
         self.assertGreater(metrics.wrist_above_tip_m, 0.0)
         self.assertTrue(metrics.wrist_higher_fingertips_lower)
-        self.assertAlmostEqual(metrics.palm_roll_error_deg, 0.0, places=9)
+        self.assertAlmostEqual(metrics.camera_baseline_error_deg, 0.0, places=9)
         self.assertAlmostEqual(metrics.plug_horizontal_error_deg, 0.0, places=12)
 
-    def test_flipped_palm_is_detected(self):
+    def test_opposite_camera_baseline_is_detected(self):
         metrics = measure_hand_plug_geometry(
             hand_position_m=np.array([0.88212779, -0.1375, 1.3667]),
-            hand_rotation_world=self._hand_rotation(flipped_palm=True),
+            hand_rotation_world=self._hand_rotation(wrong_baseline=True),
             plug_tip_position_m=np.array([0.7666, -0.1375, 1.3]),
             plug_axis_world=np.array([-1.0, 0.0, 0.0]),
         )
-        self.assertAlmostEqual(metrics.palm_roll_error_deg, 180.0, places=9)
+        self.assertAlmostEqual(
+            metrics.camera_baseline_error_deg,
+            180.0,
+            places=9,
+        )
 
-    def test_expected_palm_side_axis_matches_old_pose(self):
+    def test_expected_camera_baseline_is_world_positive_y(self):
         np.testing.assert_allclose(
-            expected_palm_side_axis_world([-1.0, 0.0, 0.0]),
-            np.array([0.0, -1.0, 0.0]),
+            expected_camera_baseline_axis_world([-1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
             atol=1.0e-12,
         )
 
