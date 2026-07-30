@@ -39,16 +39,14 @@ class StartupGeometrySettleTests(unittest.TestCase):
             source,
         )
 
-    def test_insertion_waits_for_consecutive_valid_presentation_samples(self):
+    def test_post_handoff_does_not_wait_on_camera_presentation(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
-        self.assertIn("ConsecutiveValidityWindow", source)
-        self.assertIn("def update_partial_insertion(self)", source)
-        self.assertIn("self._validate_live_hand_plug_geometry()", source)
-        self.assertIn("self._insertion_presentation_window.observe(False)", source)
-        self.assertIn("self._insertion_presentation_window.observe(True)", source)
-        self.assertIn("INSERTION PRESENTATION VALIDATED", source)
+        self.assertNotIn("def update_partial_insertion(self)", source)
+        self.assertNotIn("INSERTION PRESENTATION WAITING", source)
+        self.assertNotIn("INSERTION PRESENTATION VALIDATED", source)
+        self.assertNotIn("ConsecutiveValidityWindow", source)
 
-    def test_advancing_insertion_uses_controller_orientation_guard(self):
+    def test_strict_presentation_check_ends_when_visual_handoff_completes(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         tree = ast.parse(source)
         method = next(
@@ -63,10 +61,10 @@ class StartupGeometrySettleTests(unittest.TestCase):
             if isinstance(node, ast.If)
         }
 
+        self.assertIn("not self.visual_servo.complete", conditions)
         self.assertIn(
-            "self.partial_insertion.phase is "
-            "InsertionPhase.WAITING_FOR_ALIGNMENT",
-            conditions,
+            "return super()._sample_mount_validation_live(runtime)",
+            source,
         )
         self.assertIn(
             "_CableMountedSimulationRuntime._sample_mount_validation_live(",
