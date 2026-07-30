@@ -240,13 +240,15 @@ def refine_live_observation(
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
 ):
-    """Triangulate the physical aperture center without a bezel-plane fit."""
+    """Triangulate the physical RGB front-rim center without a bezel-plane fit."""
 
-    # Retained only for call compatibility. Direct calibrated triangulation
-    # needs corresponding center pixels, not a guessed front plane or offset.
+    # Retained only for call compatibility. The center comes from calibrated
+    # front-rim image features, never from a guessed plane or world offset.
     del aperture_width_m, aperture_height_m
 
     stereo_center = estimate_stereo_aperture_center(
+        left_rgb=frame.left.rgb,
+        right_rgb=frame.right.rgb,
         left_mask=observation.left.detection.mask,
         right_mask=observation.right.detection.mask,
         left_camera=frame.left.camera,
