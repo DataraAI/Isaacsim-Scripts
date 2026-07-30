@@ -59,7 +59,7 @@ class CameraConfig:
         0.0,
         0.025,
     )
-    local_y_rotation_deg: float = 177.5
+    local_y_rotation_deg: float = 186.0248
     local_roll_deg: float = 90.0
 
     focal_length_mm: float = 18.0
@@ -323,7 +323,7 @@ class InsertionConfig:
 @dataclass(frozen=True)
 class DebugConfig:
     estimated_port_marker_path: str = "/World/EstimatedPortPoint"
-    estimated_port_marker_radius_m: float = 0.006
+    estimated_port_marker_radius_m: float = 0.001
     estimated_port_marker_color: tuple[float, float, float] = (
         0.0,
         1.0,
