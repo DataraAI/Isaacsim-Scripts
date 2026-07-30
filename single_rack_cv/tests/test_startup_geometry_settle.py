@@ -46,6 +46,21 @@ class StartupGeometrySettleTests(unittest.TestCase):
         self.assertNotIn("INSERTION PRESENTATION VALIDATED", source)
         self.assertNotIn("ConsecutiveValidityWindow", source)
 
+    def test_runtime_installs_consecutive_pose_insertion_controller(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "from settled_insertion import ConsecutivePoseInsertionController",
+            source,
+        )
+        self.assertIn(
+            "self.partial_insertion = ConsecutivePoseInsertionController(limits)",
+            source,
+        )
+        self.assertIn(
+            "self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(",
+            source,
+        )
+
     def test_strict_presentation_check_ends_when_visual_handoff_completes(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         tree = ast.parse(source)
