@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import unittest
 
@@ -49,10 +50,23 @@ class StartupGeometrySettleTests(unittest.TestCase):
 
     def test_advancing_insertion_uses_controller_orientation_guard(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
-        self.assertIn("def _sample_mount_validation_live", source)
+        tree = ast.parse(source)
+        method = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_sample_mount_validation_live"
+        )
+        conditions = {
+            ast.unparse(node.test)
+            for node in ast.walk(method)
+            if isinstance(node, ast.If)
+        }
+
         self.assertIn(
-            "if self.partial_insertion.phase is InsertionPhase.WAITING_FOR_ALIGNMENT:",
-            source,
+            "self.partial_insertion.phase is "
+            "InsertionPhase.WAITING_FOR_ALIGNMENT",
+            conditions,
         )
         self.assertIn(
             "_CableMountedSimulationRuntime._sample_mount_validation_live(",
