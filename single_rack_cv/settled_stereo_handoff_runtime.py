@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Angled stereo handoff runtime with consecutive geometry settle gates."""
+"""Angled stereo handoff runtime with a consecutive startup geometry gate."""
 
 from __future__ import annotations
 
@@ -7,24 +7,25 @@ from cable_geometry import validate_mount_window
 from cable_runtime import (
     CableMountedSimulationRuntime as _CableMountedSimulationRuntime,
 )
-from insertion import InsertionPhase
-from sim import log
 from stereo_handoff_runtime import (
     AngledHandStereoHandoffRuntime as _BaseAngledHandStereoHandoffRuntime,
 )
-from validation_window import ConsecutiveValidityWindow
 
 
 class AngledHandStereoHandoffRuntime(
     _BaseAngledHandStereoHandoffRuntime
 ):
     """
-    Require complete consecutive windows of valid hand/plug geometry.
+    Require a complete consecutive window of valid startup hand/plug geometry.
 
     Position convergence can become ready a few frames before the hand/plug
-    orientation finishes settling. Geometry-only misses reset the relevant
+    orientation finishes settling. Geometry-only misses reset the startup
     validation window and keep settling. Structural mount failures still raise
     immediately, and every existing numerical limit remains unchanged.
+
+    After stereo handoff completes, insertion safety belongs to the guarded
+    PartialInsertionController. The camera-baseline presentation check must not
+    deadlock command one because it is not the plug insertion orientation.
     """
 
     _TRANSIENT_GEOMETRY_PREFIXES = (
@@ -33,15 +34,6 @@ class AngledHandStereoHandoffRuntime(
         "palm side does not match the previous working pose:",
         "plug horizontal error exceeded limit:",
     )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._insertion_presentation_window = ConsecutiveValidityWindow(
-            required_frames=(
-                self.partial_insertion.limits.required_settled_frames
-            )
-        )
-        self._last_insertion_presentation_wait_log_frame = -1_000_000
 
     @classmethod
     def _is_transient_geometry_error(cls, error: RuntimeError) -> bool:
@@ -52,7 +44,7 @@ class AngledHandStereoHandoffRuntime(
         )
 
     def prepare_for_perception(self) -> None:
-        """Settle until the full strict geometry window is consecutive."""
+        """Settle until the full strict startup geometry window is consecutive."""
 
         if self.cable_mount is None:
             return
@@ -144,66 +136,19 @@ class AngledHandStereoHandoffRuntime(
         )
         self.cable_mount.log_success(validation)
 
-    def update_partial_insertion(self) -> None:
-        """Require stable presentation before freezing command-one geometry."""
-
-        if (
-            self.partial_insertion.phase
-            is InsertionPhase.WAITING_FOR_ALIGNMENT
-            and self.visual_servo.complete
-        ):
-            try:
-                self._validate_live_hand_plug_geometry()
-            except RuntimeError as error:
-                if not self._is_transient_geometry_error(error):
-                    raise
-                self._insertion_presentation_window.observe(False)
-                if (
-                    self.frame_index
-                    - self._last_insertion_presentation_wait_log_frame
-                    >= 120
-                ):
-                    self._last_insertion_presentation_wait_log_frame = (
-                        self.frame_index
-                    )
-                    log(
-                        "INSERTION PRESENTATION WAITING\n"
-                        f"  valid frames: 0/"
-                        f"{self._insertion_presentation_window.required_frames}\n"
-                        f"  current geometry miss: {error}\n"
-                        "  action: hold the pre-insert ToolCenter target"
-                    )
-                return
-
-            ready = self._insertion_presentation_window.observe(True)
-            if not ready:
-                return
-            log(
-                "INSERTION PRESENTATION VALIDATED\n"
-                f"  valid frames: "
-                f"{self._insertion_presentation_window.valid_frames}/"
-                f"{self._insertion_presentation_window.required_frames}\n"
-                "  next action: freeze insertion pose and issue command 1"
-            )
-
-        super().update_partial_insertion()
-
     def _sample_mount_validation_live(self, runtime) -> tuple[float, float]:
         """
-        Keep the strict palm/baseline gate before insertion starts.
+        Keep the strict hand/camera presentation gate only before perception.
 
-        Once insertion is advancing, the frozen ToolCenter quaternion guard in
-        PartialInsertionController owns orientation safety. It already ignores
-        brief non-contact transients while a command is moving, then enforces
-        the unchanged 1 degree limit after settling or at the opening plane.
-        Structural fixed-joint, attachment, plug-tip, and plug-axis checks stay
-        active on every frame through the base cable runtime.
+        Once stereo handoff has completed, the frozen ToolCenter quaternion
+        guard in PartialInsertionController owns orientation safety. It ignores
+        brief non-contact motion transients, then enforces the unchanged one
+        degree limit after settling or at the opening plane. Structural fixed-
+        joint, attachment, plug-tip, and plug-axis checks remain active through
+        the base cable runtime on every insertion frame.
         """
 
-        if (
-            self.partial_insertion.phase
-            is InsertionPhase.WAITING_FOR_ALIGNMENT
-        ):
+        if not self.visual_servo.complete:
             return super()._sample_mount_validation_live(runtime)
         return _CableMountedSimulationRuntime._sample_mount_validation_live(
             self,
