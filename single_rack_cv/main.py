@@ -9,6 +9,8 @@ import threading
 import traceback
 from pathlib import Path
 
+import numpy as np
+
 from config import CONFIG
 
 
@@ -206,6 +208,8 @@ try:
                     f"cavity_range={front_plane.cavity_range_m * 1000.0:.2f}mm "
                     f"opening_range={front_plane.opening_range_m * 1000.0:.2f}mm "
                     f"recess={front_plane.recess_depth_m * 1000.0:+.2f}mm "
+                    f"center={list(np.round(front_plane.aperture_center_world_m, 6))} "
+                    f"center_pair={front_plane.aperture_center_disagreement_m * 1000.0:.3f}mm "
                     f"plane_residual={front_plane.plane_residual_m * 1000.0:.3f}mm "
                     f"ray_gap={front_plane.max_ray_gap_m * 1000.0:.3f}mm "
                     f"dense={front_plane.consistent_disparity_count}/"
