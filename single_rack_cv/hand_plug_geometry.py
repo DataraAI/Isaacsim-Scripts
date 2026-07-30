@@ -69,8 +69,10 @@ def _directional_axis_error_deg(
     return math.degrees(math.acos(dot))
 
 
-def expected_palm_side_axis_world(plug_axis_world: np.ndarray) -> np.ndarray:
-    """Return the previous working palm-side direction for a horizontal plug."""
+def expected_camera_baseline_axis_world(
+    plug_axis_world: np.ndarray,
+) -> np.ndarray:
+    """Return the horizontal world direction for hand-local +Y stereo baseline."""
 
     plug_axis = _axis3(plug_axis_world, label="plug_axis_world")
     world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
@@ -79,12 +81,20 @@ def expected_palm_side_axis_world(plug_axis_world: np.ndarray) -> np.ndarray:
     )
     horizontal_norm = float(np.linalg.norm(horizontal_plug))
     if horizontal_norm <= _EPS:
-        raise ValueError("plug axis cannot be vertical when checking palm side")
+        raise ValueError(
+            "plug axis cannot be vertical when checking camera baseline"
+        )
     horizontal_plug /= horizontal_norm
     return _axis3(
-        np.cross(world_up, horizontal_plug),
-        label="expected_palm_side_axis_world",
+        np.cross(horizontal_plug, world_up),
+        label="expected_camera_baseline_axis_world",
     )
+
+
+def expected_palm_side_axis_world(plug_axis_world: np.ndarray) -> np.ndarray:
+    """Backward-compatible old local-X reference; not used for stereo control."""
+
+    return -expected_camera_baseline_axis_world(plug_axis_world)
 
 
 def _rotate_axis_about_axis(
@@ -131,10 +141,11 @@ def compute_angled_hand_pose_preserving_tool(
     Solve a downward hand pose around the exact existing world tool pose.
 
     The existing validated plug-tip position and orientation are treated as
-    immutable. The new hand forward axis is obtained by rotating the plug axis
-    downward about the previous working palm-side axis. The hand position and
-    hand_T_tool rotation are then solved so composing them reconstructs the
-    original tool pose exactly.
+    immutable. Hand-local +Y is constrained to the horizontal left/right
+    stereo baseline. The hand forward axis is pitched downward around that
+    baseline, and hand-local +X is rebuilt to keep a right-handed frame. The
+    hand position and hand_T_tool rotation are then solved so composing them
+    reconstructs the original tool pose exactly.
     """
 
     base_hand_position = _vector3(
@@ -168,23 +179,25 @@ def compute_angled_hand_pose_preserving_tool(
         tool_rotation_world[:, 2],
         label="plug_axis_world",
     )
-    hand_side_world = expected_palm_side_axis_world(plug_axis_world)
+    camera_baseline_world = expected_camera_baseline_axis_world(
+        plug_axis_world
+    )
     hand_forward_world = _rotate_axis_about_axis(
         plug_axis_world,
-        hand_side_world,
-        pitch_rad,
-    )
-    hand_up_world = _axis3(
-        np.cross(hand_forward_world, hand_side_world),
-        label="hand_up_world",
+        camera_baseline_world,
+        -pitch_rad,
     )
     hand_side_world = _axis3(
-        np.cross(hand_up_world, hand_forward_world),
+        np.cross(camera_baseline_world, hand_forward_world),
         label="hand_side_world",
+    )
+    camera_baseline_world = _axis3(
+        np.cross(hand_forward_world, hand_side_world),
+        label="camera_baseline_world",
     )
     hand_rotation_world = _rotation3(
         np.column_stack(
-            (hand_side_world, hand_up_world, hand_forward_world)
+            (hand_side_world, camera_baseline_world, hand_forward_world)
         ),
         label="hand_rotation_world",
     )
@@ -230,8 +243,13 @@ class HandPlugGeometryMetrics:
     relative_pitch_deg: float
     wrist_above_tip_m: float
     plug_horizontal_error_deg: float
-    palm_roll_error_deg: float
+    camera_baseline_error_deg: float
     wrist_higher_fingertips_lower: bool
+
+    @property
+    def palm_roll_error_deg(self) -> float:
+        """Backward-compatible alias for the retired local-X validation."""
+        return self.camera_baseline_error_deg
 
 
 def measure_hand_plug_geometry(
@@ -252,9 +270,9 @@ def measure_hand_plug_geometry(
         hand_rotation[:, 2],
         label="hand_forward_axis",
     )
-    hand_side = _axis3(
-        hand_rotation[:, 0],
-        label="hand_side_axis",
+    camera_baseline = _axis3(
+        hand_rotation[:, 1],
+        label="camera_baseline_axis",
     )
 
     dot = float(np.clip(np.dot(hand_forward, plug_axis), -1.0, 1.0))
@@ -264,15 +282,15 @@ def measure_hand_plug_geometry(
         wrist_above_tip_m > 0.0
         and hand_forward[2] < plug_axis[2]
     )
-    palm_roll_error_deg = _directional_axis_error_deg(
-        hand_side,
-        expected_palm_side_axis_world(plug_axis),
+    camera_baseline_error_deg = _directional_axis_error_deg(
+        camera_baseline,
+        expected_camera_baseline_axis_world(plug_axis),
     )
 
     return HandPlugGeometryMetrics(
         relative_pitch_deg=relative_pitch_deg,
         wrist_above_tip_m=wrist_above_tip_m,
         plug_horizontal_error_deg=horizontal_axis_error_deg(plug_axis),
-        palm_roll_error_deg=palm_roll_error_deg,
+        camera_baseline_error_deg=camera_baseline_error_deg,
         wrist_higher_fingertips_lower=direction_ok,
     )
