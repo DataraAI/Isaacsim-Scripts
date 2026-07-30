@@ -197,6 +197,8 @@ try:
                     desired_port_virtual_camera_usd=(
                         runtime.desired_port_virtual_camera_usd
                     ),
+                    aperture_width_m=CONFIG.perception.port_width_m,
+                    aperture_height_m=CONFIG.perception.port_height_m,
                 )
                 print(
                     "[LIVE FRONT PLANE] "
