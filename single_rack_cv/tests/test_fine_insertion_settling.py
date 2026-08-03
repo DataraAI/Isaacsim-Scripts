@@ -27,6 +27,15 @@ def _limits() -> InsertionLimits:
     )
 
 
+def _controller() -> ConsecutivePoseInsertionController:
+    return ConsecutivePoseInsertionController(
+        _limits(),
+        fine_settle_tolerance_m=0.0001,
+        fine_required_settled_frames=10,
+        fine_max_motion_per_frame_m=0.00003,
+    )
+
+
 def _sample(
     *,
     frame_index: int,
@@ -83,7 +92,7 @@ def _advance_to_first_fine_command(
 
 class FineInsertionSettlingTests(unittest.TestCase):
     def test_fine_step_does_not_accept_old_point_three_mm_tolerance(self):
-        controller = ConsecutivePoseInsertionController(_limits())
+        controller = _controller()
         frame, command = _advance_to_first_fine_command(controller)
 
         for _ in range(10):
@@ -100,7 +109,7 @@ class FineInsertionSettlingTests(unittest.TestCase):
         self.assertEqual(controller.settled_frame_count, 0)
 
     def test_fine_step_requires_ten_quiet_frames_after_arrival(self):
-        controller = ConsecutivePoseInsertionController(_limits())
+        controller = _controller()
         frame, command = _advance_to_first_fine_command(controller)
 
         frame += 1
@@ -137,7 +146,7 @@ class FineInsertionSettlingTests(unittest.TestCase):
         self.assertEqual(settled.settled_step_index, 9)
 
     def test_fine_step_rejects_motion_through_position_window(self):
-        controller = ConsecutivePoseInsertionController(_limits())
+        controller = _controller()
         frame, command = _advance_to_first_fine_command(controller)
         target = np.asarray(command.target_position_m, dtype=np.float64)
 
