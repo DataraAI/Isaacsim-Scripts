@@ -25,6 +25,19 @@ class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("estimate_outer_bezel_aperture_center(", source)
         self.assertNotIn("estimate_planar_aperture_center", source)
 
+    def test_outer_bezel_center_uses_outer_front_mouth_edges(self):
+        source = (ROOT / "outer_bezel_projective_center.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "from front_mouth_projective_center import aperture_center_pixel",
+            source,
+        )
+        self.assertNotIn(
+            "from stereo_center_projective import",
+            source,
+        )
+
     def test_main_routes_live_observations_through_corrected_adapter(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn(
