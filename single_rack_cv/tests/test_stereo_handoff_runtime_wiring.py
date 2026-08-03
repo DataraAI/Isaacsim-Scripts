@@ -68,12 +68,11 @@ class StereoHandoffWiringTests(unittest.TestCase):
         self.assertNotIn("state.acquisition_features.clear()", source)
 
     def test_frozen_port_marker_is_wired(self):
-        config_source = CONFIG_PATH.read_text(encoding="utf-8")
         debug_source = DEBUG_PATH.read_text(encoding="utf-8")
         main_source = MAIN_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("frozen_port_marker_path", config_source)
         self.assertIn("update_frozen_port_point", debug_source)
+        self.assertIn('"/World/FrozenPortPoint"', debug_source)
         self.assertIn("runtime.frozen_port_point_world_m", main_source)
 
     def test_camera_remains_on_last_visible_mount(self):
