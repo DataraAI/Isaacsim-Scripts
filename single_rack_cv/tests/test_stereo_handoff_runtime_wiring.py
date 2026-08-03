@@ -22,7 +22,7 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
 
-    def test_runtime_freezes_stable_goal_before_continuous_vision_collapses(self):
+    def test_runtime_waits_for_acquired_nearby_goal_before_handoff(self):
         source = RUNTIME_PATH.read_text(
             encoding="utf-8"
         )
@@ -32,11 +32,15 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "_MAXIMUM_HANDOFF_DISTANCE_M = 0.100",
+            "_MAXIMUM_HANDOFF_DISTANCE_M = 0.035",
             source,
         )
         self.assertIn(
             "select_recent_bounded_goal",
+            source,
+        )
+        self.assertIn(
+            "not state.acquired",
             source,
         )
         self.assertIn(
@@ -45,19 +49,29 @@ class StereoHandoffWiringTests(unittest.TestCase):
         )
 
         correction = source.index("correction_world_m = np.asarray(")
-        append = source.index(
-            "self._stereo_goal_candidates.append(",
-            correction,
-        )
         visual_step = source.index(
             "super().observe_visual_servo(",
             correction,
         )
-        self.assertLess(
-            append,
+        acquired_gate = source.index(
+            "not state.acquired",
             visual_step,
-            "A valid world-goal sample must be recorded before the visual "
-            "controller changes its target or loses the next camera view.",
+        )
+        append = source.index(
+            "self._stereo_goal_candidates.append(",
+            acquired_gate,
+        )
+        self.assertLess(
+            visual_step,
+            acquired_gate,
+            "The base controller must establish acquisition state before "
+            "handoff samples are accepted.",
+        )
+        self.assertLess(
+            acquired_gate,
+            append,
+            "World-goal samples must be rejected until stereo acquisition "
+            "has completed.",
         )
 
     def test_runtime_keeps_safety_limits(self):
