@@ -8,19 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
-    def test_runtime_adapter_uses_front_rim_plane_estimator(self):
+    def test_runtime_adapter_uses_outer_bezel_plane_estimator(self):
         source = (ROOT / "live_control_projective.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "from stereo_front_rim_plane import "
-            "estimate_stereo_aperture_center",
+            "from outer_bezel_center import "
+            "estimate_outer_bezel_aperture_center",
             source,
         )
-        self.assertNotIn(
-            "from stereo_center_projective import",
-            source,
-        )
+        self.assertNotIn("from stereo_front_rim_plane import", source)
+        self.assertNotIn("estimate_stereo_aperture_center(", source)
 
     def test_main_routes_live_observations_through_corrected_adapter(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
