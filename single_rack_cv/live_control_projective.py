@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from live_control import apply_front_plane_result
-from outer_bezel_center import estimate_outer_bezel_aperture_center
+from outer_bezel_projective_center import (
+    estimate_outer_bezel_projective_center,
+)
 
 
 def refine_live_observation(
@@ -15,9 +17,9 @@ def refine_live_observation(
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
 ):
-    """Estimate the physical opening center on the outer rack-face plane."""
+    """Intersect proven per-eye front-rim centers with the outer rack plane."""
 
-    outer_result = estimate_outer_bezel_aperture_center(
+    outer_result = estimate_outer_bezel_projective_center(
         left_rgb=frame.left.rgb,
         right_rgb=frame.right.rgb,
         left_mask=observation.left.detection.mask,
