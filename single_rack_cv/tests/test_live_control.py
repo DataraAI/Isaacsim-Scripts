@@ -124,7 +124,7 @@ class LiveControlTests(unittest.TestCase):
         self.assertAlmostEqual(diagnostics.cavity_range_m, 0.14, places=12)
         self.assertAlmostEqual(diagnostics.opening_range_m, 0.13, places=12)
 
-    def test_direct_stereo_center_replaces_control_center(self):
+    def test_front_rim_plane_center_replaces_control_center(self):
         camera = FakeCamera()
         frame = SimpleNamespace(virtual_camera=camera)
         stereo_center = SimpleNamespace(
@@ -154,7 +154,8 @@ class LiveControlTests(unittest.TestCase):
             0.0002,
             places=12,
         )
-        self.assertEqual(diagnostics.side_support_counts, (0, 0, 0, 0))
+        self.assertEqual(diagnostics.triangulated_count, 4)
+        self.assertEqual(diagnostics.side_support_counts, (1, 1, 1, 1))
 
     def test_live_refinement_uses_rgb_front_rim_not_bezel_plane(self):
         source = inspect.getsource(refine_live_observation)
