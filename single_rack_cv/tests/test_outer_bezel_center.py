@@ -14,6 +14,7 @@ from outer_bezel_center import (
 from outer_bezel_projective_center import (
     estimate_outer_bezel_projective_center,
 )
+from stereo_center import StereoApertureCenter
 
 
 class DummyDisparity:
@@ -180,24 +181,31 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
             disparity=DummyDisparity(),
         )
 
-    def test_intersects_projective_centers_with_outer_plane(self):
+    def test_places_direct_stereo_centerline_on_outer_plane(self):
         plane = self._plane()
         left_uv = np.array([70.0, 45.0])
         right_uv = np.array([50.0, 45.0])
-        left_point = np.array([0.65, -0.1921, 1.323])
-        right_point = np.array([0.65, -0.1919, 1.323])
+        direct_stereo = StereoApertureCenter(
+            center_world_m=np.array([0.658, -0.1921, 1.323]),
+            left_center_uv=left_uv,
+            right_center_uv=right_uv,
+            ray_gap_m=0.0002,
+            reprojection_rms_px=0.08,
+            max_reprojection_px=0.11,
+        )
+        front_center = np.array([0.65, -0.1920, 1.323])
         camera = DummyCamera()
 
         with patch(
             "outer_bezel_projective_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_projective_center.projective_center_pixel",
-            side_effect=(left_uv, right_uv),
-        ), patch(
-            "outer_bezel_projective_center.intersect_pixel_with_plane",
-            side_effect=(left_point, right_point),
-        ):
+            "outer_bezel_projective_center.estimate_projective_stereo_center",
+            return_value=direct_stereo,
+        ) as direct_estimator, patch(
+            "outer_bezel_projective_center.intersect_midpoint_ray_with_plane",
+            return_value=front_center,
+        ) as centerline_intersection:
             result = estimate_outer_bezel_projective_center(
                 left_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
                 right_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
@@ -213,10 +221,11 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
                 aperture_height_m=0.0070,
             )
 
-        np.testing.assert_allclose(
-            result.center_world_m,
-            0.5 * (left_point + right_point),
-        )
+        direct_estimator.assert_called_once()
+        centerline_intersection.assert_called_once()
+        np.testing.assert_allclose(result.center_world_m, front_center)
+        np.testing.assert_allclose(result.left_center_world_m, front_center)
+        np.testing.assert_allclose(result.right_center_world_m, front_center)
         np.testing.assert_allclose(result.left_center_uv, left_uv)
         np.testing.assert_allclose(result.right_center_uv, right_uv)
         np.testing.assert_allclose(
@@ -227,26 +236,21 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
         self.assertAlmostEqual(result.eye_disagreement_m, 0.0002)
         self.assertIs(result.front_plane_config, OUTER_BEZEL_CONFIG)
 
-    def test_rejects_projective_centers_that_disagree_on_outer_plane(self):
+    def test_rejects_direct_projective_center_with_bad_stereo_ray_gap(self):
         plane = self._plane()
         camera = DummyCamera()
-        left_point = np.array([0.65, -0.1920, 1.3230])
-        right_point = np.array([0.65, -0.1913, 1.3230])
 
         with patch(
             "outer_bezel_projective_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_projective_center.projective_center_pixel",
-            side_effect=(np.array([70.0, 45.0]), np.array([50.0, 45.0])),
-        ), patch(
-            "outer_bezel_projective_center.intersect_pixel_with_plane",
-            side_effect=(left_point, right_point),
+            "outer_bezel_projective_center.estimate_projective_stereo_center",
+            side_effect=RuntimeError(
+                "Stereo projective front-rim center ray gap is 0.700 mm; "
+                "limit is 0.500 mm."
+            ),
         ):
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "projective centers disagree",
-            ):
+            with self.assertRaisesRegex(RuntimeError, "ray gap is 0.700 mm"):
                 estimate_outer_bezel_projective_center(
                     left_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
                     right_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
@@ -262,9 +266,10 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
 
     def test_metric_mask_contour_reconstruction_is_not_used(self):
         source = inspect.getsource(estimate_outer_bezel_projective_center)
-        self.assertIn("projective_center_pixel", source)
-        self.assertIn("intersect_pixel_with_plane", source)
+        self.assertIn("estimate_projective_stereo_center", source)
+        self.assertIn("intersect_midpoint_ray_with_plane", source)
         self.assertNotIn("estimate_planar_aperture_center", source)
+        self.assertNotIn("intersect_pixel_with_plane", source)
         self.assertNotIn("Rectified aperture width", source)
         self.assertNotIn("latch-notch", source)
 
