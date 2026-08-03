@@ -24,14 +24,15 @@ from stereo_geometry import triangulate_pixel_pair, unit_vector
 _SIDE_COUNT = 4
 _MIN_SUPPORTED_REGIONS = 2
 _MIN_SUPPORT_SPAN_U_PX = 12.0
-_MIN_SUPPORT_SPAN_V_PX = 12.0
-_MIN_SUPPORT_MINOR_STD_PX = 3.0
+_MIN_SUPPORT_SPAN_V_PX = 6.0
+_MIN_SUPPORT_MINOR_STD_PX = 2.0
+_MIN_POINTS_PER_SPATIAL_REGION = 8
 
 OUTER_BEZEL_CONFIG = replace(
     DEFAULT_FRONT_PLANE_CONFIG,
-    roi_margin_px=48,
+    roi_margin_px=64,
     ring_inner_offset_px=6,
-    ring_outer_offset_px=36,
+    ring_outer_offset_px=48,
     depth_cluster_tolerance_m=0.0020,
     min_cluster_points=20,
     min_points_per_side=1,
@@ -46,6 +47,7 @@ class BezelSupportDiagnostics:
     major_std_px: float
     minor_std_px: float
     side_counts: tuple[int, int, int, int]
+    spatial_region_counts: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class OuterBezelPlaneResult:
     cluster_count: int
     side_support_counts: tuple[int, int, int, int]
     support_region_count: int
+    spatial_region_counts: tuple[int, int, int, int]
     support_span_u_px: float
     support_span_v_px: float
     support_minor_std_px: float
@@ -89,6 +92,11 @@ class OuterBezelPlaneResult:
             self,
             "side_support_counts",
             tuple(int(value) for value in self.side_support_counts),
+        )
+        object.__setattr__(
+            self,
+            "spatial_region_counts",
+            tuple(int(value) for value in self.spatial_region_counts),
         )
 
 
@@ -116,6 +124,7 @@ class OuterBezelApertureResult:
     cluster_count: int
     side_support_counts: tuple[int, int, int, int]
     support_region_count: int
+    spatial_region_counts: tuple[int, int, int, int]
     support_span_u_px: float
     support_span_v_px: float
     support_minor_std_px: float
@@ -153,6 +162,11 @@ class OuterBezelApertureResult:
             "side_support_counts",
             tuple(int(value) for value in self.side_support_counts),
         )
+        object.__setattr__(
+            self,
+            "spatial_region_counts",
+            tuple(int(value) for value in self.spatial_region_counts),
+        )
 
     @property
     def normal_world(self) -> np.ndarray:
@@ -162,6 +176,8 @@ class OuterBezelApertureResult:
 def support_diagnostics(
     pixels_uv: np.ndarray,
     side_labels: np.ndarray,
+    *,
+    min_points_per_spatial_region: int = _MIN_POINTS_PER_SPATIAL_REGION,
 ) -> BezelSupportDiagnostics:
     pixels = np.asarray(pixels_uv, dtype=np.float64).reshape(-1, 2)
     labels = np.asarray(side_labels, dtype=np.int64).reshape(-1)
@@ -173,22 +189,54 @@ def support_diagnostics(
         raise RuntimeError("Outer-bezel support pixels must be finite.")
     if np.any(labels < 0) or np.any(labels >= _SIDE_COUNT):
         raise RuntimeError("Outer-bezel side labels must be in [0, 3].")
+    if int(min_points_per_spatial_region) < 1:
+        raise ValueError("min_points_per_spatial_region must be positive.")
 
-    centered = pixels - np.mean(pixels, axis=0)
-    covariance = centered.T @ centered / float(pixels.shape[0])
-    eigenvalues = np.maximum(np.linalg.eigvalsh(covariance), 0.0)
+    # Use central image-space support so one isolated stereo mismatch cannot
+    # manufacture thickness or a second region around an otherwise thin edge.
+    lower, upper = np.percentile(pixels, [5.0, 95.0], axis=0)
+    core_mask = np.all((pixels >= lower) & (pixels <= upper), axis=1)
+    core_pixels = pixels[core_mask]
+    if core_pixels.shape[0] < max(3, 2 * int(min_points_per_spatial_region)):
+        core_pixels = pixels
+        lower = np.min(core_pixels, axis=0)
+        upper = np.max(core_pixels, axis=0)
+
+    centered = core_pixels - np.mean(core_pixels, axis=0)
+    covariance = centered.T @ centered / float(core_pixels.shape[0])
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    eigenvalues = np.maximum(eigenvalues, 0.0)
     minor_std, major_std = np.sqrt(eigenvalues)
+
+    projected = centered @ eigenvectors
+    split_minor = float(np.median(projected[:, 0]))
+    split_major = float(np.median(projected[:, 1]))
+    minor_high = projected[:, 0] >= split_minor
+    major_high = projected[:, 1] >= split_major
+    spatial_region_counts = (
+        int(np.count_nonzero(~minor_high & ~major_high)),
+        int(np.count_nonzero(~minor_high & major_high)),
+        int(np.count_nonzero(minor_high & ~major_high)),
+        int(np.count_nonzero(minor_high & major_high)),
+    )
+    region_count = int(
+        sum(
+            count >= int(min_points_per_spatial_region)
+            for count in spatial_region_counts
+        )
+    )
     side_counts = tuple(
         int(np.count_nonzero(labels == side_index))
         for side_index in range(_SIDE_COUNT)
     )
     return BezelSupportDiagnostics(
-        region_count=int(sum(count > 0 for count in side_counts)),
-        span_u_px=float(np.ptp(pixels[:, 0])),
-        span_v_px=float(np.ptp(pixels[:, 1])),
+        region_count=region_count,
+        span_u_px=float(upper[0] - lower[0]),
+        span_v_px=float(upper[1] - lower[1]),
         major_std_px=float(major_std),
         minor_std_px=float(minor_std),
         side_counts=side_counts,
+        spatial_region_counts=spatial_region_counts,
     )
 
 
@@ -219,6 +267,7 @@ def select_nearest_supported_range_cluster(
     min_span_u_px: float = _MIN_SUPPORT_SPAN_U_PX,
     min_span_v_px: float = _MIN_SUPPORT_SPAN_V_PX,
     min_minor_std_px: float = _MIN_SUPPORT_MINOR_STD_PX,
+    min_points_per_spatial_region: int = _MIN_POINTS_PER_SPATIAL_REGION,
 ) -> tuple[np.ndarray, BezelSupportDiagnostics]:
     ranges = np.asarray(ranges_m, dtype=np.float64).reshape(-1)
     pixels = np.asarray(pixels_uv, dtype=np.float64).reshape(-1, 2)
@@ -233,6 +282,8 @@ def select_nearest_supported_range_cluster(
         raise ValueError("min_points must be at least three.")
     if not 1 <= int(min_supported_regions) <= _SIDE_COUNT:
         raise ValueError("min_supported_regions must be between 1 and 4.")
+    if int(min_points_per_spatial_region) < 1:
+        raise ValueError("min_points_per_spatial_region must be positive.")
 
     order = np.argsort(ranges)
     values = ranges[order]
@@ -250,6 +301,7 @@ def select_nearest_supported_range_cluster(
         diagnostics = support_diagnostics(
             pixels[candidate_indices],
             labels[candidate_indices],
+            min_points_per_spatial_region=min_points_per_spatial_region,
         )
         if not _support_is_qualified(
             diagnostics,
@@ -434,6 +486,7 @@ def estimate_outer_bezel_plane(
     final_support = support_diagnostics(
         cluster_pixels[plane_inliers],
         cluster_labels[plane_inliers],
+        min_points_per_spatial_region=_MIN_POINTS_PER_SPATIAL_REGION,
     )
     if not _support_is_qualified(
         final_support,
@@ -514,6 +567,7 @@ def estimate_outer_bezel_plane(
         cluster_count=int(np.count_nonzero(cluster)),
         side_support_counts=final_support.side_counts,
         support_region_count=final_support.region_count,
+        spatial_region_counts=final_support.spatial_region_counts,
         support_span_u_px=final_support.span_u_px,
         support_span_v_px=final_support.span_v_px,
         support_minor_std_px=final_support.minor_std_px,
@@ -586,6 +640,7 @@ def estimate_outer_bezel_aperture_center(
         cluster_count=plane.cluster_count,
         side_support_counts=plane.side_support_counts,
         support_region_count=plane.support_region_count,
+        spatial_region_counts=plane.spatial_region_counts,
         support_span_u_px=plane.support_span_u_px,
         support_span_v_px=plane.support_span_v_px,
         support_minor_std_px=plane.support_minor_std_px,
