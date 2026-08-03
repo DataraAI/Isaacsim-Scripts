@@ -145,6 +145,13 @@ def _lower_mouth_lines(
 
     component = _largest_component_mask(mask, camera)
     binary = component > 0
+    contours, _ = cv2.findContours(
+        component,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    boundary = np.zeros_like(component)
+    cv2.drawContours(boundary, contours, -1, 255, thickness=1)
     supported_rows = np.flatnonzero(np.any(binary, axis=1))
     if supported_rows.size < 8:
         raise RuntimeError("Aperture mask has too few supported rows.")
@@ -157,16 +164,27 @@ def _lower_mouth_lines(
         )
 
     maximum_width = max(width for _, _, _, width in rows)
-    broad_rows = [
+    broad_candidates = [
         geometry
         for geometry in rows
         if geometry[3] >= _BROAD_ROW_FRACTION * maximum_width
     ]
+    runs: list[list[tuple[int, int, int, int]]] = []
+    for geometry in broad_candidates:
+        if not runs or geometry[0] != runs[-1][-1][0] + 1:
+            runs.append([geometry])
+        else:
+            runs[-1].append(geometry)
+    broad_rows = max(
+        runs,
+        key=lambda run: (len(run), run[-1][0]),
+        default=[],
+    )
     if len(broad_rows) < 6:
         raise RuntimeError("Stepped aperture has no stable lower mouth.")
 
-    broad_start = min(row for row, _, _, _ in broad_rows)
-    broad_end = max(row for row, _, _, _ in broad_rows)
+    broad_start = int(broad_rows[0][0])
+    broad_end = int(broad_rows[-1][0])
     lower_height = broad_end - broad_start + 1
     if lower_height < 6:
         raise RuntimeError("Lower mouth is too short for projective fitting.")
@@ -216,14 +234,21 @@ def _lower_mouth_lines(
             fraction <= _OUTER_BAND_FRACTION
             or fraction >= 1.0 - _OUTER_BAND_FRACTION
         )
-        top_row = int(rows_at_column[0])
-        if (
-            in_outer_shoulder
-            and broad_start - shoulder_slack
-            <= top_row
-            <= broad_start + shoulder_slack
-        ):
-            top_samples.append((float(column), float(top_row)))
+        boundary_rows = np.flatnonzero(boundary[:, column])
+        shoulder_rows = boundary_rows[
+            (boundary_rows >= broad_start - shoulder_slack)
+            & (boundary_rows <= broad_start + shoulder_slack)
+        ]
+        if in_outer_shoulder and shoulder_rows.size > 0:
+            nearest_index = int(
+                np.argmin(np.abs(shoulder_rows - broad_start))
+            )
+            top_samples.append(
+                (
+                    float(column),
+                    float(shoulder_rows[nearest_index]),
+                )
+            )
 
         if 0.12 <= fraction <= 0.88:
             bottom_samples.append(
@@ -238,9 +263,10 @@ def _lower_mouth_lines(
     top = _robust_fit_y_from_x(top_samples)
     bottom = _robust_fit_y_from_x(bottom_samples)
 
-    center_column = 0.5 * (left_middle + right_middle)
-    top_middle = top[0] * center_column + top[1]
-    bottom_middle = bottom[0] * center_column + bottom[1]
+    top_middle = top[0] * (0.5 * (left_middle + right_middle)) + top[1]
+    bottom_middle = (
+        bottom[0] * (0.5 * (left_middle + right_middle)) + bottom[1]
+    )
     fitted_height = float(bottom_middle - top_middle)
     if fitted_height < 5.0 or fitted_height > 2.0 * lower_height:
         raise RuntimeError(
