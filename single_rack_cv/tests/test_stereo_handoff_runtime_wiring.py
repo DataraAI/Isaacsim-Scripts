@@ -74,6 +74,28 @@ class StereoHandoffWiringTests(unittest.TestCase):
             "has completed.",
         )
 
+    def test_unacquired_sparse_samples_survive_rejected_frames(self):
+        source = RUNTIME_PATH.read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "retained_acquisition_features",
+            source,
+        )
+        self.assertIn(
+            "not state.acquired and state.acquisition_features",
+            source,
+        )
+        self.assertIn(
+            "state.acquisition_features.extend(",
+            source,
+        )
+        self.assertIn(
+            "retaining accepted acquisition samples while the hand is stationary",
+            source,
+        )
+
     def test_runtime_keeps_safety_limits(self):
         source = RUNTIME_PATH.read_text(
             encoding="utf-8"
