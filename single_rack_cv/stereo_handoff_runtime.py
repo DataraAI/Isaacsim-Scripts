@@ -57,6 +57,7 @@ class AngledHandStereoHandoffRuntime(
         ) = None
         self._handoff_active = False
         self._handoff_step_index = 0
+        self._sparse_acquisition_notice_logged = False
 
         super().__init__(
             simulation_app=simulation_app,
@@ -140,7 +141,7 @@ class AngledHandStereoHandoffRuntime(
     def note_perception_failure(
         self,
     ) -> None:
-        """Use the same stable goal on the first missed image when available."""
+        """Preserve accepted startup samples while the stationary view is sparse."""
 
         state = self.visual_servo
 
@@ -158,7 +159,38 @@ class AngledHandStereoHandoffRuntime(
         ):
             return
 
+        retained_acquisition_features = None
+        if not state.acquired and state.acquisition_features:
+            retained_acquisition_features = [
+                np.asarray(
+                    feature,
+                    dtype=np.float64,
+                ).copy()
+                for feature in state.acquisition_features
+            ]
+
         super().note_perception_failure()
+
+        if (
+            retained_acquisition_features is not None
+            and not state.acquired
+            and not state.acquisition_features
+        ):
+            keep_count = int(
+                self.cfg.visual_servo.required_acquisition_samples
+            )
+            state.acquisition_features.extend(
+                retained_acquisition_features[-keep_count:]
+            )
+
+            if not self._sparse_acquisition_notice_logged:
+                self._sparse_acquisition_notice_logged = True
+                log(
+                    "RGB stereo retaining accepted acquisition samples while the hand is stationary\n"
+                    f"  retained samples: {len(state.acquisition_features)}/"
+                    f"{keep_count}\n"
+                    "  rejected frames clear detector references, not accepted 3D evidence"
+                )
 
     def _try_start_handoff(
         self,
