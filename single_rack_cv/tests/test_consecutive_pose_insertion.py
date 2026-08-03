@@ -35,12 +35,13 @@ def _sample(
     z_m: float,
     target_error_m: float,
     orientation_deg: float,
+    x_m: float = 0.0,
     alignment_complete: bool = True,
 ) -> InsertionSample:
     return InsertionSample(
         frame_index=frame_index,
         alignment_complete=alignment_complete,
-        actual_position_m=np.array([0.0, 0.0, z_m]),
+        actual_position_m=np.array([x_m, 0.0, z_m]),
         actual_orientation_wxyz=_quat_x_deg(orientation_deg),
         target_error_m=target_error_m,
         mount_tip_error_m=0.0,
@@ -78,6 +79,65 @@ class ConsecutivePoseInsertionTests(unittest.TestCase):
         self.assertEqual(controller.phase, InsertionPhase.ADVANCING)
         self.assertEqual(controller.settled_frame_count, 0)
         self.assertIsNone(controller.abort_reason)
+
+    def test_inflight_lateral_excursion_waits_for_centerline_recovery(self):
+        controller = ConsecutivePoseInsertionController(
+            _limits(opening_depth_m=0.0)
+        )
+        controller.update(
+            _sample(
+                frame_index=0,
+                z_m=0.0,
+                target_error_m=0.0,
+                orientation_deg=0.0,
+            )
+        )
+
+        transient = controller.update(
+            _sample(
+                frame_index=14,
+                z_m=0.004463,
+                x_m=0.000509654,
+                target_error_m=0.000511,
+                orientation_deg=0.036425,
+            )
+        )
+
+        self.assertEqual(transient.kind, "waiting_for_settle")
+        self.assertEqual(controller.phase, InsertionPhase.ADVANCING)
+        self.assertEqual(controller.settled_frame_count, 0)
+        self.assertIsNone(controller.abort_reason)
+        self.assertGreater(
+            transient.metrics.lateral_drift_m,
+            controller.limits.max_lateral_drift_m,
+        )
+
+    def test_settled_lateral_drift_over_limit_still_aborts(self):
+        controller = ConsecutivePoseInsertionController(
+            _limits(opening_depth_m=0.0)
+        )
+        controller.update(
+            _sample(
+                frame_index=0,
+                z_m=0.0,
+                target_error_m=0.0,
+                orientation_deg=0.0,
+            )
+        )
+
+        aborted = controller.update(
+            _sample(
+                frame_index=15,
+                z_m=0.005,
+                x_m=0.000500001,
+                target_error_m=0.0002,
+                orientation_deg=0.0,
+            )
+        )
+
+        self.assertEqual(aborted.kind, "aborted")
+        self.assertEqual(controller.phase, InsertionPhase.ABORTED)
+        self.assertIn("lateral drift exceeded limit", aborted.reason)
 
     def test_step_requires_six_frames_with_position_and_orientation_valid(self):
         controller = ConsecutivePoseInsertionController(_limits())
