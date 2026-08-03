@@ -32,12 +32,12 @@ class DummyCamera:
 class OuterBezelSupportTests(unittest.TestCase):
     def test_nearer_supported_plane_beats_larger_recessed_cluster(self):
         near_uv = np.array(
-            [[20.0 + x, 20.0] for x in range(0, 29, 4)]
-            + [[20.0, 20.0 + y] for y in range(4, 33, 4)],
+            [[20.0 + x, 20.0] for x in range(0, 45, 4)]
+            + [[20.0, 20.0 + y] for y in range(4, 49, 4)],
             dtype=np.float64,
         )
         near_ranges = np.linspace(0.1800, 0.1804, near_uv.shape[0])
-        near_labels = np.array([0] * 8 + [3] * 8, dtype=np.int64)
+        near_labels = np.array([0] * 12 + [3] * 12, dtype=np.int64)
 
         far_x, far_y = np.meshgrid(
             np.arange(40.0, 80.0, 4.0),
@@ -57,11 +57,11 @@ class OuterBezelSupportTests(unittest.TestCase):
             min_span_u_px=16.0,
             min_span_v_px=16.0,
             min_minor_std_px=3.0,
-            min_points_per_supported_region=8,
+            min_points_per_spatial_region=4,
         )
 
         self.assertEqual(int(np.count_nonzero(selected)), near_uv.shape[0])
-        self.assertEqual(diagnostics.region_count, 2)
+        self.assertGreaterEqual(diagnostics.region_count, 2)
         self.assertGreaterEqual(diagnostics.span_u_px, 16.0)
         self.assertGreaterEqual(diagnostics.span_v_px, 16.0)
         self.assertGreaterEqual(diagnostics.minor_std_px, 3.0)
@@ -87,13 +87,14 @@ class OuterBezelSupportTests(unittest.TestCase):
             )
 
     def test_one_stray_pixel_does_not_fake_a_second_region(self):
-        top_x, top_y = np.meshgrid(
-            np.arange(10.0, 70.0, 4.0),
-            np.arange(10.0, 30.0, 4.0),
+        pixels = np.column_stack(
+            (
+                np.linspace(10.0, 90.0, 40),
+                np.full(40, 20.0),
+            )
         )
-        pixels = np.column_stack((top_x.reshape(-1), top_y.reshape(-1)))
         labels = np.zeros(pixels.shape[0], dtype=np.int64)
-        pixels = np.vstack((pixels, np.array([[5.0, 45.0]])))
+        pixels = np.vstack((pixels, np.array([[5.0, 55.0]])))
         labels = np.concatenate((labels, np.array([3], dtype=np.int64)))
         ranges = np.linspace(0.1800, 0.1804, pixels.shape[0])
 
@@ -106,10 +107,36 @@ class OuterBezelSupportTests(unittest.TestCase):
                 min_points=20,
                 min_supported_regions=2,
                 min_span_u_px=12.0,
-                min_span_v_px=12.0,
-                min_minor_std_px=3.0,
-                min_points_per_supported_region=8,
+                min_span_v_px=8.0,
+                min_minor_std_px=2.0,
+                min_points_per_spatial_region=4,
             )
+
+    def test_broad_single_side_patch_is_valid_two_dimensional_support(self):
+        grid_u, grid_v = np.meshgrid(
+            np.arange(10.0, 110.0, 4.0),
+            np.arange(20.0, 32.0, 2.0),
+        )
+        pixels = np.column_stack((grid_u.reshape(-1), grid_v.reshape(-1)))
+        labels = np.zeros(pixels.shape[0], dtype=np.int64)
+        ranges = np.linspace(0.1800, 0.1804, pixels.shape[0])
+
+        selected, diagnostics = select_nearest_supported_range_cluster(
+            ranges_m=ranges,
+            pixels_uv=pixels,
+            side_labels=labels,
+            tolerance_m=0.0010,
+            min_points=20,
+            min_supported_regions=2,
+            min_span_u_px=12.0,
+            min_span_v_px=8.0,
+            min_minor_std_px=2.0,
+            min_points_per_spatial_region=8,
+        )
+
+        self.assertEqual(int(np.count_nonzero(selected)), pixels.shape[0])
+        self.assertGreaterEqual(diagnostics.region_count, 2)
+        self.assertEqual(diagnostics.side_counts, (pixels.shape[0], 0, 0, 0))
 
 
 class OuterBezelCenterTests(unittest.TestCase):
@@ -138,6 +165,7 @@ class OuterBezelCenterTests(unittest.TestCase):
             cluster_count=28,
             side_support_counts=(12, 0, 8, 8),
             support_region_count=3,
+            spatial_region_counts=(12, 12, 12, 12),
             support_span_u_px=24.0,
             support_span_v_px=20.0,
             support_minor_std_px=4.0,
