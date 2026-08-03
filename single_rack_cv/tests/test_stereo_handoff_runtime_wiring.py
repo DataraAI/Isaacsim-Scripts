@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = ROOT / "stereo_handoff_runtime.py"
 MAIN_PATH = ROOT / "main.py"
 CONFIG_PATH = ROOT / "config.py"
+DEBUG_PATH = ROOT / "debug.py"
 
 
 class StereoHandoffWiringTests(unittest.TestCase):
@@ -22,101 +23,58 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
 
-    def test_runtime_waits_for_acquired_nearby_goal_before_handoff(self):
+    def test_runtime_qualifies_stationary_port_before_any_motion(self):
         source = RUNTIME_PATH.read_text(
             encoding="utf-8"
         )
 
-        self.assertIn(
-            "_RECENT_GOAL_WINDOW = 3",
-            source,
-        )
-        self.assertIn(
-            "_MAXIMUM_HANDOFF_DISTANCE_M = 0.035",
-            source,
-        )
-        self.assertIn(
-            "select_recent_bounded_goal",
-            source,
-        )
-        self.assertIn(
-            "not state.acquired",
-            source,
-        )
-        self.assertIn(
-            "newest stable stereo goals entered",
-            source,
-        )
+        self.assertIn("qualify_stationary_port_goal", source)
+        self.assertIn("observation.center_world_xyz_m", source)
+        self.assertIn("actual_position_before + correction_world_m", source)
+        self.assertIn("_frozen_port_point_world_m", source)
+        self.assertIn("STATIONARY PORT POSE QUALIFIED", source)
+        self.assertIn("state.acquired", source)
 
-        correction = source.index("correction_world_m = np.asarray(")
-        visual_step = source.index(
+        observe_start = source.index("def observe_visual_servo(")
+        failure_start = source.index("def note_perception_failure(")
+        observe_source = source[observe_start:failure_start]
+        self.assertNotIn(
             "super().observe_visual_servo(",
-            correction,
-        )
-        acquired_gate = source.index(
-            "not state.acquired",
-            visual_step,
-        )
-        append = source.index(
-            "self._stereo_goal_candidates.append(",
-            acquired_gate,
-        )
-        self.assertLess(
-            visual_step,
-            acquired_gate,
-            "The base controller must establish acquisition state before "
-            "handoff samples are accepted.",
-        )
-        self.assertLess(
-            acquired_gate,
-            append,
-            "World-goal samples must be rejected until stereo acquisition "
-            "has completed.",
+            observe_source,
+            "Stationary qualification must not issue the old continuous "
+            "visual-servo step before freezing the port pose.",
         )
 
-    def test_unacquired_sparse_samples_survive_rejected_frames(self):
+    def test_runtime_stops_camera_after_qualified_goal(self):
         source = RUNTIME_PATH.read_text(
             encoding="utf-8"
         )
 
-        self.assertIn(
-            "retained_acquisition_features",
-            source,
-        )
-        self.assertIn(
-            "not state.acquired and state.acquisition_features",
-            source,
-        )
-        self.assertIn(
-            "state.acquisition_features.extend(",
-            source,
-        )
-        self.assertIn(
-            "retaining accepted acquisition samples while the hand is stationary",
-            source,
-        )
+        self.assertIn("if self._handoff_active", source)
+        self.assertIn("self._advance_handoff_if_settled()", source)
+        self.assertIn("return False", source)
+        self.assertIn("bounded_step_to_goal", source)
+        self.assertIn("_MAXIMUM_HANDOFF_STEP_M = 0.005", source)
+        self.assertIn("destination: frozen physical port pose", source)
 
-    def test_runtime_keeps_safety_limits(self):
+    def test_runtime_preserves_stationary_evidence_across_rejected_frames(self):
         source = RUNTIME_PATH.read_text(
             encoding="utf-8"
         )
 
-        self.assertIn(
-            "_MAXIMUM_GOAL_SPREAD_M = 0.002",
-            source,
-        )
-        self.assertIn(
-            "_MAXIMUM_HANDOFF_STEP_M = 0.005",
-            source,
-        )
-        self.assertIn(
-            "destination: stereo-derived 50 mm pre-insert standoff",
-            source,
-        )
-        self.assertIn(
-            "orientation: unchanged horizontal plug",
-            source,
-        )
+        self.assertIn("accepted stationary 3D evidence", source)
+        self.assertIn("state.left_reference = None", source)
+        self.assertIn("state.right_reference = None", source)
+        self.assertNotIn("state.acquisition_features.clear()", source)
+
+    def test_frozen_port_marker_is_wired(self):
+        config_source = CONFIG_PATH.read_text(encoding="utf-8")
+        debug_source = DEBUG_PATH.read_text(encoding="utf-8")
+        main_source = MAIN_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("frozen_port_marker_path", config_source)
+        self.assertIn("update_frozen_port_point", debug_source)
+        self.assertIn("runtime.frozen_port_point_world_m", main_source)
 
     def test_camera_remains_on_last_visible_mount(self):
         source = CONFIG_PATH.read_text(
