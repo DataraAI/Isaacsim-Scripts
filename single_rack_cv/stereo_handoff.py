@@ -46,6 +46,18 @@ class HandoffDecision:
     remaining_m: float
 
 
+@dataclass(frozen=True)
+class QualifiedPortGoal:
+    """One stationary, geometry-qualified port opening and preinsert goal."""
+
+    opening_position_m: np.ndarray
+    tool_goal_position_m: np.ndarray
+    opening_spread_m: float
+    goal_spread_m: float
+    standoff_m: float
+    sample_count: int
+
+
 def estimate_stable_goal(
     goal_candidates_m: Iterable[object],
     *,
@@ -93,6 +105,89 @@ def estimate_stable_goal(
         position_m=median,
         spread_m=spread_m,
         sample_count=len(candidates),
+    )
+
+
+def qualify_stationary_port_goal(
+    opening_candidates_m: Iterable[object],
+    tool_goal_candidates_m: Iterable[object],
+    *,
+    minimum_samples: int,
+    recent_sample_count: int,
+    maximum_opening_spread_m: float,
+    maximum_goal_spread_m: float,
+    expected_standoff_m: float,
+    standoff_tolerance_m: float,
+) -> QualifiedPortGoal | None:
+    """
+    Freeze a physical mouth point only when its derived preinsert goal agrees.
+
+    The two candidate lists must describe the same accepted stationary stereo
+    frames. The opening is the measured RGB front-mouth point. The tool goal is
+    the ToolCenter destination implied by that same observation. Their median
+    separation must remain the configured physical preinsert standoff; this
+    rejects three mutually consistent cavity points without introducing a
+    manual world-coordinate offset.
+    """
+
+    if recent_sample_count < minimum_samples:
+        raise ValueError(
+            "recent_sample_count must be at least minimum_samples."
+        )
+    if (
+        not math.isfinite(expected_standoff_m)
+        or expected_standoff_m <= 0.0
+    ):
+        raise ValueError(
+            "expected_standoff_m must be finite and positive."
+        )
+    if (
+        not math.isfinite(standoff_tolerance_m)
+        or standoff_tolerance_m <= 0.0
+    ):
+        raise ValueError(
+            "standoff_tolerance_m must be finite and positive."
+        )
+
+    openings = list(opening_candidates_m)
+    goals = list(tool_goal_candidates_m)
+    if len(openings) != len(goals):
+        raise ValueError(
+            "opening and tool-goal candidate counts must match."
+        )
+
+    recent_openings = openings[-recent_sample_count:]
+    recent_goals = goals[-recent_sample_count:]
+
+    opening = estimate_stable_goal(
+        recent_openings,
+        minimum_samples=minimum_samples,
+        maximum_spread_m=maximum_opening_spread_m,
+    )
+    goal = estimate_stable_goal(
+        recent_goals,
+        minimum_samples=minimum_samples,
+        maximum_spread_m=maximum_goal_spread_m,
+    )
+
+    if opening is None or goal is None:
+        return None
+
+    standoff_m = float(
+        np.linalg.norm(
+            goal.position_m - opening.position_m
+        )
+    )
+    if abs(standoff_m - expected_standoff_m) > standoff_tolerance_m:
+        return None
+
+    return QualifiedPortGoal(
+        opening_position_m=opening.position_m.copy(),
+        tool_goal_position_m=goal.position_m.copy(),
+        opening_spread_m=opening.spread_m,
+        goal_spread_m=goal.spread_m,
+        standoff_m=standoff_m,
+        sample_count=min(opening.sample_count, goal.sample_count),
     )
 
 
