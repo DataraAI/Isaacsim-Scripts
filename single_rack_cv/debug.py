@@ -48,6 +48,16 @@ class DebugOutputs:
             cfg.estimated_port_marker_color,
         )
 
+    def update_frozen_port_point(self, position: np.ndarray) -> None:
+        """Show the immutable qualified mouth point separately from live vision."""
+
+        self._update_sphere(
+            "/World/FrozenPortPoint",
+            np.asarray(position, dtype=np.float64),
+            0.0015,
+            (1.0, 0.0, 1.0),
+        )
+
     @staticmethod
     def _update_sphere(
         path: str,
