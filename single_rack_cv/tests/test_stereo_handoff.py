@@ -7,6 +7,7 @@ import numpy as np
 from stereo_handoff import (
     bounded_step_to_goal,
     estimate_stable_goal,
+    qualify_stationary_port_goal,
     select_recent_bounded_goal,
 )
 
@@ -53,6 +54,91 @@ class StableGoalTests(unittest.TestCase):
         )
 
         self.assertIsNone(estimate)
+
+
+class StationaryPortQualificationTests(unittest.TestCase):
+    def test_freezes_median_physical_opening_and_preinsert_goal(self):
+        openings = [
+            [0.652428, -0.191790, 1.323579],
+            [0.652331, -0.192126, 1.323409],
+            [0.652328, -0.192235, 1.323591],
+        ]
+        goals = [
+            [0.702428, -0.191790, 1.323579],
+            [0.702331, -0.192126, 1.323409],
+            [0.702328, -0.192235, 1.323591],
+        ]
+
+        result = qualify_stationary_port_goal(
+            openings,
+            goals,
+            minimum_samples=3,
+            recent_sample_count=3,
+            maximum_opening_spread_m=0.001,
+            maximum_goal_spread_m=0.001,
+            expected_standoff_m=0.050,
+            standoff_tolerance_m=0.003,
+        )
+
+        self.assertIsNotNone(result)
+        np.testing.assert_allclose(
+            result.opening_position_m,
+            np.median(np.asarray(openings), axis=0),
+            atol=1.0e-12,
+        )
+        np.testing.assert_allclose(
+            result.tool_goal_position_m,
+            np.median(np.asarray(goals), axis=0),
+            atol=1.0e-12,
+        )
+        self.assertAlmostEqual(result.standoff_m, 0.050, places=9)
+
+    def test_rejects_three_consistent_cavity_points_with_wrong_standoff(self):
+        openings = [
+            [0.64710, -0.1920, 1.3235],
+            [0.64715, -0.1921, 1.3235],
+            [0.64705, -0.1919, 1.3234],
+        ]
+        goals = [
+            [0.70240, -0.1920, 1.3235],
+            [0.70245, -0.1921, 1.3235],
+            [0.70235, -0.1919, 1.3234],
+        ]
+
+        result = qualify_stationary_port_goal(
+            openings,
+            goals,
+            minimum_samples=3,
+            recent_sample_count=3,
+            maximum_opening_spread_m=0.001,
+            maximum_goal_spread_m=0.001,
+            expected_standoff_m=0.050,
+            standoff_tolerance_m=0.003,
+        )
+
+        self.assertIsNone(result)
+
+    def test_rejects_unstable_physical_opening_even_when_goals_agree(self):
+        result = qualify_stationary_port_goal(
+            [
+                [0.6520, -0.1920, 1.3235],
+                [0.6570, -0.1920, 1.3235],
+                [0.6470, -0.1920, 1.3235],
+            ],
+            [
+                [0.7020, -0.1920, 1.3235],
+                [0.7021, -0.1920, 1.3235],
+                [0.7019, -0.1920, 1.3235],
+            ],
+            minimum_samples=3,
+            recent_sample_count=3,
+            maximum_opening_spread_m=0.001,
+            maximum_goal_spread_m=0.001,
+            expected_standoff_m=0.050,
+            standoff_tolerance_m=0.003,
+        )
+
+        self.assertIsNone(result)
 
 
 class HandoffDecisionTests(unittest.TestCase):
