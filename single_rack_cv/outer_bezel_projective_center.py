@@ -7,8 +7,8 @@ import math
 
 import numpy as np
 
-from front_mouth_projective_center import aperture_center_pixel
 from front_plane import FrontPlaneConfig, intersect_pixel_with_plane
+from lower_mouth_projective_center import aperture_center_pixel
 from outer_bezel_center import (
     OUTER_BEZEL_CONFIG,
     OuterBezelApertureResult,
@@ -36,17 +36,18 @@ def estimate_outer_bezel_projective_center(
     front_plane_config: FrontPlaneConfig = OUTER_BEZEL_CONFIG,
     max_center_disagreement_m: float = MAX_OUTER_PLANE_CENTER_DISAGREEMENT_M,
 ) -> OuterBezelApertureResult:
-    """Fuse outer-mouth image centers on the measured rack-face plane.
+    """Fuse lower-mouth projective centers on the measured rack-face plane.
 
-    The dark masks localize the port. RGB contrast polarity selects the
-    physical outer left/right mouth edges instead of stronger recessed edges.
-    Dense stereo support outside the opening determines the physical depth
-    plane. No metric contour scaling or world-space correction is used.
+    Each eye independently fits the four projected boundaries of the wide
+    lower insertion mouth. Its diagonal intersection is perspective-correct;
+    the upper latch-notch shape cannot pull that center. Dense stereo support
+    outside the opening determines only the physical front-plane depth. No
+    metric contour scaling or world-space correction is used.
     """
 
     # Kept for API compatibility with the existing runtime configuration. The
-    # physical dimensions are not used to turn the recessed semantic contour
-    # into metric geometry.
+    # physical dimensions are not used to turn the semantic contour into metric
+    # geometry or to inject an image-space/world-space correction.
     del aperture_width_m, aperture_height_m
 
     maximum = float(max_center_disagreement_m)
@@ -88,7 +89,7 @@ def estimate_outer_bezel_projective_center(
     disagreement = float(np.linalg.norm(left_point - right_point))
     if disagreement > maximum:
         raise RuntimeError(
-            "Outer-bezel projective centers disagree by "
+            "Lower-mouth projective centers disagree by "
             f"{disagreement * 1000.0:.3f} mm; "
             f"limit is {maximum * 1000.0:.3f} mm."
         )
