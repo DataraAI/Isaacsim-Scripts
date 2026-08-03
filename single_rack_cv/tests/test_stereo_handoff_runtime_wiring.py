@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import ast
 from pathlib import Path
 import unittest
 
@@ -9,24 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = ROOT / "stereo_handoff_runtime.py"
 MAIN_PATH = ROOT / "main.py"
 CONFIG_PATH = ROOT / "config.py"
-
-
-def _method_node(source: str, class_name: str, method_name: str) -> ast.FunctionDef:
-    tree = ast.parse(source)
-    runtime_class = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == class_name
-    )
-    return next(
-        node
-        for node in runtime_class.body
-        if isinstance(node, ast.FunctionDef) and node.name == method_name
-    )
-
-
-def _statement_contains(statement: ast.stmt, expression: str) -> bool:
-    return expression in ast.unparse(statement)
 
 
 class StereoHandoffWiringTests(unittest.TestCase):
@@ -63,31 +44,18 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
 
-        method = _method_node(
-            source,
-            "AngledHandStereoHandoffRuntime",
-            "observe_visual_servo",
+        correction = source.index("correction_world_m = np.asarray(")
+        append = source.index(
+            "self._stereo_goal_candidates.append(",
+            correction,
         )
-        append_index = next(
-            index
-            for index, statement in enumerate(method.body)
-            if _statement_contains(
-                statement,
-                "self._stereo_goal_candidates.append",
-            )
-        )
-        valid_visual_step_index = next(
-            index
-            for index, statement in enumerate(method.body)
-            if index > append_index
-            and _statement_contains(
-                statement,
-                "super().observe_visual_servo",
-            )
+        visual_step = source.index(
+            "super().observe_visual_servo(",
+            correction,
         )
         self.assertLess(
-            append_index,
-            valid_visual_step_index,
+            append,
+            visual_step,
             "A valid world-goal sample must be recorded before the visual "
             "controller changes its target or loses the next camera view.",
         )

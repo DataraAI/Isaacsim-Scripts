@@ -23,24 +23,23 @@ class AngledHandStereoHandoffRuntime(
     AngledHandCableRuntime
 ):
     """
-    Use stereo until a stable world goal exists, then finish kinematically.
+    Use stereo until a stable nearby world goal exists, then finish kinematically.
 
     Every valid stereo observation implies a final world-space ToolCenter goal:
 
         actual_tool_position + correction_world
 
-    The candidate is recorded before the visual controller changes its target,
-    so a correct measurement is not lost merely because the next angled camera
-    view becomes unusable. Only the newest three implied goals are considered.
-    Once they agree within 2 mm and the remaining translation is at most 100 mm,
-    the runtime freezes their median goal and finishes in bounded 5 mm steps.
+    Only the newest three implied goals are considered. Once they agree within
+    2 mm and the remaining translation is at most 35 mm, the runtime freezes
+    their median goal and finishes in bounded 5 mm steps. This transition is
+    proactive; it occurs before the angled wrist destroys the camera view.
     """
 
     _GOAL_HISTORY_LENGTH = 8
     _MINIMUM_GOAL_SAMPLES = 3
     _RECENT_GOAL_WINDOW = 3
     _MAXIMUM_GOAL_SPREAD_M = 0.002
-    _MAXIMUM_HANDOFF_DISTANCE_M = 0.100
+    _MAXIMUM_HANDOFF_DISTANCE_M = 0.035
     _MAXIMUM_HANDOFF_STEP_M = 0.005
 
     def __init__(
@@ -80,7 +79,7 @@ class AngledHandStereoHandoffRuntime(
         self,
         observation,
     ) -> None:
-        """Record each valid implied world goal before issuing visual motion."""
+        """Record the implied world goal and hand off before vision collapses."""
 
         if self._handoff_active:
             return
@@ -107,27 +106,6 @@ class AngledHandStereoHandoffRuntime(
             dtype=np.float64,
         )
 
-        if (
-            correction_world_m.shape != (3,)
-            or not np.all(
-                np.isfinite(
-                    correction_world_m
-                )
-            )
-        ):
-            super().observe_visual_servo(
-                observation
-            )
-            return
-
-        # This must happen before the base controller publishes its next target.
-        # The candidate represents the world goal implied by the camera pose that
-        # actually produced this observation, even if the next view is occluded.
-        self._stereo_goal_candidates.append(
-            actual_position_before
-            + correction_world_m
-        )
-
         super().observe_visual_servo(
             observation
         )
@@ -135,10 +113,22 @@ class AngledHandStereoHandoffRuntime(
         state = self.visual_servo
 
         if (
-            state.visual_aligned
+            not state.acquired
+            or state.visual_aligned
             or state.complete
+            or correction_world_m.shape != (3,)
+            or not np.all(
+                np.isfinite(
+                    correction_world_m
+                )
+            )
         ):
             return
+
+        self._stereo_goal_candidates.append(
+            actual_position_before
+            + correction_world_m
+        )
 
         self._try_start_handoff(
             reason=(
@@ -175,7 +165,7 @@ class AngledHandStereoHandoffRuntime(
         *,
         reason: str,
     ) -> bool:
-        """Start once the newest stable stereo goal is within 100 mm."""
+        """Start once the newest stable stereo goal is within 35 mm."""
 
         state = self.visual_servo
 
