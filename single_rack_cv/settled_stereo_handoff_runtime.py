@@ -35,6 +35,11 @@ class AngledHandStereoHandoffRuntime(
     that settle window; it does not count as a settled command. At or inside the
     opening plane, the unchanged orientation limit remains an immediate abort.
 
+    Fine insertion additionally requires a tighter ToolCenter position window,
+    a longer consecutive settle window, and low measured ToolCenter motion.
+    This prevents a new 0.5 mm command from being issued while the previous
+    command is still oscillating through the old 0.3 mm acceptance radius.
+
     A bounded orientation-hold loop compensates measured physical roll bias by
     nudging the IK command. The frozen quaternion remains the safety reference;
     only the command sent to Lula is adjusted. This is closed-loop feedback, not
@@ -57,15 +62,31 @@ class AngledHandStereoHandoffRuntime(
 
         # The base runtime creates a fresh controller in WAITING_FOR_ALIGNMENT.
         # Replace it before any perception or insertion update so every command
-        # requires consecutive position-and-orientation validity. Rebind the
-        # live plug-axis adapter to the replacement controller as well.
+        # requires consecutive position-and-orientation validity. Fine 0.5 mm
+        # commands use a tighter, motion-aware settle policy; coarse 5 mm
+        # approach commands retain the existing 0.3 mm / six-frame policy.
+        # Rebind the live plug-axis adapter to the replacement controller too.
         limits = self.partial_insertion.limits
-        self.partial_insertion = ConsecutivePoseInsertionController(limits)
+        self.partial_insertion = ConsecutivePoseInsertionController(
+            limits,
+            fine_settle_tolerance_m=0.0001,
+            fine_required_settled_frames=10,
+            fine_max_motion_per_frame_m=0.00003,
+        )
         self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(
             self.partial_insertion
         )
         self._insertion_orientation_command_wxyz: np.ndarray | None = None
         self._last_orientation_hold_log_frame = -1_000_000
+
+        log(
+            "FINE INSERTION SETTLING ACTIVE\n"
+            "  position tolerance: 0.100 mm\n"
+            "  maximum ToolCenter motion: 0.030 mm/frame\n"
+            "  required consecutive quiet frames: 10\n"
+            "  coarse approach settling: unchanged\n"
+            "  stiffness, damping, force limits, and safety limits: unchanged"
+        )
 
     @classmethod
     def _is_transient_geometry_error(cls, error: RuntimeError) -> bool:
