@@ -65,6 +65,18 @@ class LowerMouthProjectiveCenterTests(unittest.TestCase):
 
         self.assertLess(float(np.linalg.norm(first - second)), 0.35)
 
+    def test_isolated_wide_upper_row_does_not_replace_lower_mouth(self):
+        camera = _Camera()
+        rgb = np.zeros((90, 120, 3), dtype=np.uint8)
+        clean = _mask_with_notch(42, 59)
+        contaminated = clean.copy()
+        contaminated[24, 30:76] = 255
+
+        expected = aperture_center_pixel(rgb, clean, camera)
+        actual = aperture_center_pixel(rgb, contaminated, camera)
+
+        self.assertLess(float(np.linalg.norm(actual - expected)), 0.35)
+
     def test_recovers_projective_center_of_lower_quadrilateral(self):
         camera = _Camera()
         rgb = np.zeros((90, 120, 3), dtype=np.uint8)
