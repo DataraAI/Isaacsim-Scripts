@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import numpy as np
 
-from aperture_center import PlanarApertureCenter
 from outer_bezel_center import (
     OUTER_BEZEL_CONFIG,
     OuterBezelPlaneResult,
@@ -26,7 +25,9 @@ class DummyCamera:
 
     def project_world(self, point):
         point = np.asarray(point, dtype=np.float64)
-        return np.array([80.0 + point[1] * 100.0, 60.0 - point[2] * 100.0])
+        return np.array(
+            [80.0 + point[1] * 100.0, 60.0 - point[2] * 100.0]
+        )
 
 
 class OuterBezelSupportTests(unittest.TestCase):
@@ -136,12 +137,16 @@ class OuterBezelSupportTests(unittest.TestCase):
 
         self.assertEqual(int(np.count_nonzero(selected)), pixels.shape[0])
         self.assertGreaterEqual(diagnostics.region_count, 2)
-        self.assertEqual(diagnostics.side_counts, (pixels.shape[0], 0, 0, 0))
+        self.assertEqual(
+            diagnostics.side_counts,
+            (pixels.shape[0], 0, 0, 0),
+        )
 
 
 class OuterBezelCenterTests(unittest.TestCase):
-    def test_uses_outer_plane_and_plane_rectified_center(self):
-        plane = OuterBezelPlaneResult(
+    @staticmethod
+    def _plane() -> OuterBezelPlaneResult:
+        return OuterBezelPlaneResult(
             center_world_m=np.array([0.65, -0.19, 1.32]),
             normal_world=np.array([-1.0, 0.0, 0.0]),
             corners_world_m=np.array(
@@ -172,20 +177,24 @@ class OuterBezelCenterTests(unittest.TestCase):
             median_disparity_px=220.0,
             disparity=DummyDisparity(),
         )
-        center = PlanarApertureCenter(
-            center_world_m=np.array([0.65, -0.192, 1.323]),
-            left_center_world_m=np.array([0.65, -0.1921, 1.323]),
-            right_center_world_m=np.array([0.65, -0.1919, 1.323]),
-            left_right_disagreement_m=0.0002,
-        )
+
+    def test_intersects_projective_centers_with_outer_plane(self):
+        plane = self._plane()
+        left_uv = np.array([70.0, 45.0])
+        right_uv = np.array([50.0, 45.0])
+        left_point = np.array([0.65, -0.1921, 1.323])
+        right_point = np.array([0.65, -0.1919, 1.323])
         camera = DummyCamera()
 
         with patch(
             "outer_bezel_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_center.estimate_planar_aperture_center",
-            return_value=center,
+            "outer_bezel_center.projective_center_pixel",
+            side_effect=(left_uv, right_uv),
+        ), patch(
+            "outer_bezel_center.intersect_pixel_with_plane",
+            side_effect=(left_point, right_point),
         ):
             result = estimate_outer_bezel_aperture_center(
                 left_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
@@ -202,11 +211,60 @@ class OuterBezelCenterTests(unittest.TestCase):
                 aperture_height_m=0.0070,
             )
 
-        np.testing.assert_allclose(result.center_world_m, center.center_world_m)
-        np.testing.assert_allclose(result.plane_origin_world_m, plane.center_world_m)
+        np.testing.assert_allclose(
+            result.center_world_m,
+            0.5 * (left_point + right_point),
+        )
+        np.testing.assert_allclose(result.left_center_uv, left_uv)
+        np.testing.assert_allclose(result.right_center_uv, right_uv)
+        np.testing.assert_allclose(
+            result.plane_origin_world_m,
+            plane.center_world_m,
+        )
         self.assertEqual(result.support_region_count, 3)
         self.assertAlmostEqual(result.eye_disagreement_m, 0.0002)
         self.assertIs(result.front_plane_config, OUTER_BEZEL_CONFIG)
+
+    def test_rejects_projective_centers_that_disagree_on_outer_plane(self):
+        plane = self._plane()
+        camera = DummyCamera()
+        left_point = np.array([0.65, -0.1920, 1.3230])
+        right_point = np.array([0.65, -0.1913, 1.3230])
+
+        with patch(
+            "outer_bezel_center.estimate_outer_bezel_plane",
+            return_value=plane,
+        ), patch(
+            "outer_bezel_center.projective_center_pixel",
+            side_effect=(np.array([70.0, 45.0]), np.array([50.0, 45.0])),
+        ), patch(
+            "outer_bezel_center.intersect_pixel_with_plane",
+            side_effect=(left_point, right_point),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "projective centers disagree",
+            ):
+                estimate_outer_bezel_aperture_center(
+                    left_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
+                    right_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
+                    left_mask=np.zeros((120, 160), dtype=np.uint8),
+                    right_mask=np.zeros((120, 160), dtype=np.uint8),
+                    left_bbox_xywh=(40, 30, 40, 30),
+                    right_bbox_xywh=(20, 30, 40, 30),
+                    left_detection_center_uv=(60.0, 45.0),
+                    right_detection_center_uv=(40.0, 45.0),
+                    left_camera=camera,
+                    right_camera=camera,
+                )
+
+    def test_metric_mask_contour_reconstruction_is_not_used(self):
+        source = inspect.getsource(estimate_outer_bezel_aperture_center)
+        self.assertIn("projective_center_pixel", source)
+        self.assertIn("intersect_pixel_with_plane", source)
+        self.assertNotIn("estimate_planar_aperture_center", source)
+        self.assertNotIn("Rectified aperture width", source)
+        self.assertNotIn("latch-notch", source)
 
     def test_public_api_has_no_manual_depth_offset(self):
         parameters = inspect.signature(
