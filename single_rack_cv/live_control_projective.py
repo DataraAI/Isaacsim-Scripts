@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Live-control adapter for the projective RGB front-rim center estimator."""
+"""Live-control adapter for the physical RGB front-rim plane estimator."""
 
 from __future__ import annotations
 
 from live_control import apply_stereo_center_result
-from stereo_center_projective import estimate_stereo_aperture_center
+from stereo_front_rim_plane import estimate_stereo_aperture_center
 
 
 def refine_live_observation(
@@ -15,10 +15,11 @@ def refine_live_observation(
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
 ):
-    """Triangulate the projective physical front-rim center from both RGB eyes."""
+    """Estimate the centered point on the triangulated physical mouth plane."""
 
     # Kept only for API compatibility. No empirical metric or image offset is
-    # applied; the center is the diagonal intersection of the fitted rim.
+    # applied. Four corresponding RGB front-rim corners define the mouth plane,
+    # and each eye's projective center ray is intersected with that plane.
     del aperture_width_m, aperture_height_m
 
     stereo_center = estimate_stereo_aperture_center(
