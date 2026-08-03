@@ -221,6 +221,9 @@ try:
                     flush=True,
                 )
             runtime.observe_visual_servo(observation)
+            frozen_port_point = runtime.frozen_port_point_world_m
+            if frozen_port_point is not None:
+                debug.update_frozen_port_point(frozen_port_point)
             debug.handle(frame, observation, capture_index)
         except Exception as exc:
             # Any rejected detector or front-plane estimate holds the current
