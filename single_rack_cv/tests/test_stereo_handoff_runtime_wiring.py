@@ -22,7 +22,7 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
 
-    def test_runtime_starts_proactively_from_newest_three_goals(self):
+    def test_runtime_freezes_stable_goal_before_continuous_vision_collapses(self):
         source = RUNTIME_PATH.read_text(
             encoding="utf-8"
         )
@@ -32,7 +32,7 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "_MAXIMUM_HANDOFF_DISTANCE_M = 0.035",
+            "_MAXIMUM_HANDOFF_DISTANCE_M = 0.100",
             source,
         )
         self.assertIn(
@@ -43,9 +43,21 @@ class StereoHandoffWiringTests(unittest.TestCase):
             "newest stable stereo goals entered",
             source,
         )
-        self.assertIn(
-            "self._try_start_handoff(",
-            source,
+
+        correction = source.index("correction_world_m = np.asarray(")
+        append = source.index(
+            "self._stereo_goal_candidates.append(",
+            correction,
+        )
+        visual_step = source.index(
+            "super().observe_visual_servo(",
+            correction,
+        )
+        self.assertLess(
+            append,
+            visual_step,
+            "A valid world-goal sample must be recorded before the visual "
+            "controller changes its target or loses the next camera view.",
         )
 
     def test_runtime_keeps_safety_limits(self):
