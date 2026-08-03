@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PATH = ROOT / "stereo_handoff_runtime.py"
+SETTLED_RUNTIME_PATH = ROOT / "settled_stereo_handoff_runtime.py"
 MAIN_PATH = ROOT / "main.py"
 CONFIG_PATH = ROOT / "config.py"
 DEBUG_PATH = ROOT / "debug.py"
@@ -96,6 +97,14 @@ class StereoHandoffWiringTests(unittest.TestCase):
             "        0.025,",
             source,
         )
+
+    def test_live_runtime_uses_tight_quiet_fine_settling(self):
+        source = SETTLED_RUNTIME_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("fine_settle_tolerance_m=0.0001", source)
+        self.assertIn("fine_required_settled_frames=10", source)
+        self.assertIn("fine_max_motion_per_frame_m=0.00003", source)
+        self.assertIn("FINE INSERTION SETTLING", source)
 
 
 if __name__ == "__main__":
