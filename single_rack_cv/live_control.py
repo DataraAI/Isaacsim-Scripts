@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from stereo_center import estimate_stereo_aperture_center
+from stereo_front_rim_plane import estimate_stereo_aperture_center
 
 
 @dataclass(frozen=True)
@@ -191,7 +191,7 @@ def apply_stereo_center_result(
     desired_port_virtual_camera_usd,
     stereo_center_result,
 ):
-    """Replace the control center with direct calibrated stereo triangulation."""
+    """Replace control with the centered point on the physical front-rim plane."""
 
     disparity_px = float(
         stereo_center_result.left_center_uv[0]
@@ -219,9 +219,9 @@ def apply_stereo_center_result(
         valid_disparity_count=0,
         consistent_disparity_count=0,
         ring_candidate_count=0,
-        triangulated_count=1,
+        triangulated_count=4,
         cluster_count=1,
-        side_support_counts=(0, 0, 0, 0),
+        side_support_counts=(1, 1, 1, 1),
         aperture_center_world_m=tuple(
             float(value) for value in refined.center_world_xyz_m
         ),
@@ -240,10 +240,8 @@ def refine_live_observation(
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
 ):
-    """Triangulate the physical RGB front-rim center without a bezel-plane fit."""
+    """Estimate the physical center on the triangulated RGB front-rim plane."""
 
-    # Retained only for call compatibility. The center comes from calibrated
-    # front-rim image features, never from a guessed plane or world offset.
     del aperture_width_m, aperture_height_m
 
     stereo_center = estimate_stereo_aperture_center(
