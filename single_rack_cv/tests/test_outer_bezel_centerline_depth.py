@@ -83,21 +83,10 @@ class OuterBezelCenterlineDepthTests(unittest.TestCase):
         ), patch(
             "outer_bezel_projective_center.estimate_projective_stereo_center",
             return_value=direct_stereo,
-            create=True,
         ) as direct_estimator, patch(
             "outer_bezel_projective_center.intersect_midpoint_ray_with_plane",
             return_value=expected_front_center,
-            create=True,
-        ) as centerline_intersection, patch(
-            "outer_bezel_projective_center.projective_center_pixel",
-            side_effect=(left_uv, right_uv),
-        ), patch(
-            "outer_bezel_projective_center.intersect_pixel_with_plane",
-            side_effect=(
-                np.array([0.65, -0.1937, 1.3230]),
-                np.array([0.65, -0.1913, 1.3230]),
-            ),
-        ):
+        ) as centerline_intersection:
             result = estimate_outer_bezel_projective_center(
                 left_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
                 right_rgb=np.zeros((120, 160, 3), dtype=np.uint8),
