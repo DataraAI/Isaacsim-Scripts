@@ -99,9 +99,20 @@ class FineInsertionSettlingTests(unittest.TestCase):
 
         self.assertEqual(controller.settled_frame_count, 0)
 
-    def test_fine_step_requires_ten_quiet_frames(self):
+    def test_fine_step_requires_ten_quiet_frames_after_arrival(self):
         controller = ConsecutivePoseInsertionController(_limits())
         frame, command = _advance_to_first_fine_command(controller)
+
+        frame += 1
+        arrival = controller.update(
+            _sample(
+                frame_index=frame,
+                position_m=command.target_position_m,
+                target_error_m=0.00008,
+            )
+        )
+        self.assertEqual(arrival.kind, "waiting_for_settle")
+        self.assertEqual(controller.settled_frame_count, 0)
 
         for _ in range(9):
             frame += 1
