@@ -7,14 +7,12 @@ import math
 
 import numpy as np
 
+from front_mouth_projective_center import aperture_center_pixel
 from front_plane import FrontPlaneConfig, intersect_pixel_with_plane
 from outer_bezel_center import (
     OUTER_BEZEL_CONFIG,
     OuterBezelApertureResult,
     estimate_outer_bezel_plane,
-)
-from stereo_center_projective import (
-    aperture_center_pixel as projective_center_pixel,
 )
 
 
@@ -38,12 +36,12 @@ def estimate_outer_bezel_projective_center(
     front_plane_config: FrontPlaneConfig = OUTER_BEZEL_CONFIG,
     max_center_disagreement_m: float = MAX_OUTER_PLANE_CENTER_DISAGREEMENT_M,
 ) -> OuterBezelApertureResult:
-    """Fuse proven per-eye image centers on the measured outer rack-face plane.
+    """Fuse outer-mouth image centers on the measured rack-face plane.
 
-    The semantic masks and RGB gradients determine only the projective center
-    ray in each eye. Dense stereo support outside the opening determines the
-    physical depth plane. The recessed mask contour is never interpreted as a
-    metric 11.4 x 7.0 mm mouth contour.
+    The dark masks localize the port. RGB contrast polarity selects the
+    physical outer left/right mouth edges instead of stronger recessed edges.
+    Dense stereo support outside the opening determines the physical depth
+    plane. No metric contour scaling or world-space correction is used.
     """
 
     # Kept for API compatibility with the existing runtime configuration. The
@@ -73,8 +71,8 @@ def estimate_outer_bezel_projective_center(
         front_plane_config=front_plane_config,
     )
 
-    left_uv = projective_center_pixel(left_rgb, left_mask, left_camera)
-    right_uv = projective_center_pixel(right_rgb, right_mask, right_camera)
+    left_uv = aperture_center_pixel(left_rgb, left_mask, left_camera)
+    right_uv = aperture_center_pixel(right_rgb, right_mask, right_camera)
     left_point = intersect_pixel_with_plane(
         left_camera,
         left_uv,
