@@ -98,13 +98,20 @@ class StereoHandoffWiringTests(unittest.TestCase):
             source,
         )
 
-    def test_live_runtime_uses_tight_quiet_fine_settling(self):
+    def test_live_runtime_uses_proven_main_settling_thresholds(self):
         source = SETTLED_RUNTIME_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("fine_settle_tolerance_m=0.0001", source)
-        self.assertIn("fine_required_settled_frames=10", source)
-        self.assertIn("fine_max_motion_per_frame_m=0.00003", source)
-        self.assertIn("FINE INSERTION SETTLING", source)
+        self.assertIn(
+            "ConsecutivePoseInsertionController(limits)",
+            source,
+        )
+        self.assertNotIn("fine_settle_tolerance_m=", source)
+        self.assertNotIn("fine_required_settled_frames=", source)
+        self.assertNotIn("fine_max_motion_per_frame_m=", source)
+        self.assertIn("PROVEN MAIN INSERTION SETTLING ACTIVE", source)
+        self.assertIn("position tolerance: 0.300 mm", source)
+        self.assertIn("required consecutive frames: 6", source)
+        self.assertIn("fine-stage motion gate: disabled", source)
 
 
 if __name__ == "__main__":
