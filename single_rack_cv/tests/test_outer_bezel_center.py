@@ -192,7 +192,7 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
             "outer_bezel_projective_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_projective_center.projective_center_pixel",
+            "outer_bezel_projective_center.aperture_center_pixel",
             side_effect=(left_uv, right_uv),
         ), patch(
             "outer_bezel_projective_center.intersect_pixel_with_plane",
@@ -237,7 +237,7 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
             "outer_bezel_projective_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_projective_center.projective_center_pixel",
+            "outer_bezel_projective_center.aperture_center_pixel",
             side_effect=(np.array([70.0, 45.0]), np.array([50.0, 45.0])),
         ), patch(
             "outer_bezel_projective_center.intersect_pixel_with_plane",
@@ -262,7 +262,7 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
 
     def test_metric_mask_contour_reconstruction_is_not_used(self):
         source = inspect.getsource(estimate_outer_bezel_projective_center)
-        self.assertIn("projective_center_pixel", source)
+        self.assertIn("aperture_center_pixel", source)
         self.assertIn("intersect_pixel_with_plane", source)
         self.assertNotIn("estimate_planar_aperture_center", source)
         self.assertNotIn("Rectified aperture width", source)
