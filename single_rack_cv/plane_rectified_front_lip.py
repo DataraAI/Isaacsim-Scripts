@@ -40,9 +40,24 @@ def get_latest_plane_rectified_debug() -> PlaneRectifiedFrontLipDebug | None:
     return _LATEST_DEBUG
 
 
-def _save_debug_images(debug: PlaneRectifiedFrontLipDebug) -> None:
+def _write_debug_image(filename: str, image: np.ndarray) -> None:
     output_dir = Path(__file__).resolve().parent / "camera_output"
     output_dir.mkdir(parents=True, exist_ok=True)
+    success = cv2.imwrite(
+        str(output_dir / filename),
+        cv2.cvtColor(
+            np.asarray(image, dtype=np.uint8),
+            cv2.COLOR_RGB2BGR,
+        ),
+    )
+    if not success:
+        print(
+            f"[RGB FRONT LIP] WARNING: could not save debug image {filename}",
+            flush=True,
+        )
+
+
+def _save_debug_images(debug: PlaneRectifiedFrontLipDebug) -> None:
     images = {
         "front_lip_rectified_left.png": debug.left_rectified_rgb,
         "front_lip_rectified_right.png": debug.right_rectified_rgb,
@@ -53,15 +68,7 @@ def _save_debug_images(debug: PlaneRectifiedFrontLipDebug) -> None:
         "front_lip_reprojection_right.png": debug.right_reprojection,
     }
     for filename, image in images.items():
-        success = cv2.imwrite(
-            str(output_dir / filename),
-            cv2.cvtColor(
-                np.asarray(image, dtype=np.uint8),
-                cv2.COLOR_RGB2BGR,
-            ),
-        )
-        if not success:
-            raise RuntimeError(f"Could not save front-lip debug image: {filename}")
+        _write_debug_image(filename, image)
 
 
 def estimate_plane_rectified_front_lip_center(
@@ -122,18 +129,39 @@ def estimate_plane_rectified_front_lip_center(
         bounds,
         resolution_m=resolution_m,
     )
+    _write_debug_image("front_lip_rectified_left.png", left_rectified.rgb)
+    _write_debug_image("front_lip_rectified_right.png", right_rectified.rgb)
+
     left_fit = fit_rectified_front_lip(
         left_rectified,
         aperture_width_m=aperture_width_m,
         aperture_height_m=aperture_height_m,
         max_edge_reprojection_px=max_edge_reprojection_px,
     )
+    _write_debug_image(
+        "front_lip_fit_left.png",
+        _draw_fit(left_rectified, left_fit),
+    )
+    _write_debug_image(
+        "front_lip_reprojection_left_eye_fit.png",
+        _draw_reprojection(left_rgb, left_camera, left_fit, frame),
+    )
+
     right_fit = fit_rectified_front_lip(
         right_rectified,
         aperture_width_m=aperture_width_m,
         aperture_height_m=aperture_height_m,
         max_edge_reprojection_px=max_edge_reprojection_px,
     )
+    _write_debug_image(
+        "front_lip_fit_right.png",
+        _draw_fit(right_rectified, right_fit),
+    )
+    _write_debug_image(
+        "front_lip_reprojection_right_eye_fit.png",
+        _draw_reprojection(right_rgb, right_camera, right_fit, frame),
+    )
+
     disagreement = float(
         np.linalg.norm(left_fit.center_uv_m - right_fit.center_uv_m)
     )
@@ -185,6 +213,20 @@ def estimate_plane_rectified_front_lip_center(
     )
     _LATEST_DEBUG = debug
     _save_debug_images(debug)
+    print(
+        "[RGB FRONT LIP] "
+        f"pair={disagreement * 1000.0:.3f}mm "
+        f"residual={left_fit.residual_px:.3f}/"
+        f"{right_fit.residual_px:.3f}px "
+        f"left_size={left_fit.width_m * 1000.0:.3f}x"
+        f"{left_fit.height_m * 1000.0:.3f}mm "
+        f"right_size={right_fit.width_m * 1000.0:.3f}x"
+        f"{right_fit.height_m * 1000.0:.3f}mm "
+        f"joint_size={joint_fit.width_m * 1000.0:.3f}x"
+        f"{joint_fit.height_m * 1000.0:.3f}mm "
+        f"supports={left_fit.support_counts}/{right_fit.support_counts}",
+        flush=True,
+    )
     return PlaneRectifiedFrontLipResult(
         center_world_m=np.asarray(center_world, dtype=np.float64),
         left_center_world_m=np.asarray(left_center_world, dtype=np.float64),
