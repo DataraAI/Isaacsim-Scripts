@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
+
+import cv2
 import numpy as np
 
 from plane_rectified_types import (
@@ -35,6 +38,30 @@ _LATEST_DEBUG: PlaneRectifiedFrontLipDebug | None = None
 
 def get_latest_plane_rectified_debug() -> PlaneRectifiedFrontLipDebug | None:
     return _LATEST_DEBUG
+
+
+def _save_debug_images(debug: PlaneRectifiedFrontLipDebug) -> None:
+    output_dir = Path(__file__).resolve().parent / "camera_output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    images = {
+        "front_lip_rectified_left.png": debug.left_rectified_rgb,
+        "front_lip_rectified_right.png": debug.right_rectified_rgb,
+        "front_lip_fit_left.png": debug.left_overlay,
+        "front_lip_fit_right.png": debug.right_overlay,
+        "front_lip_fit_joint.png": debug.joint_overlay,
+        "front_lip_reprojection_left.png": debug.left_reprojection,
+        "front_lip_reprojection_right.png": debug.right_reprojection,
+    }
+    for filename, image in images.items():
+        success = cv2.imwrite(
+            str(output_dir / filename),
+            cv2.cvtColor(
+                np.asarray(image, dtype=np.uint8),
+                cv2.COLOR_RGB2BGR,
+            ),
+        )
+        if not success:
+            raise RuntimeError(f"Could not save front-lip debug image: {filename}")
 
 
 def estimate_plane_rectified_front_lip_center(
@@ -157,6 +184,7 @@ def estimate_plane_rectified_front_lip_center(
         ),
     )
     _LATEST_DEBUG = debug
+    _save_debug_images(debug)
     return PlaneRectifiedFrontLipResult(
         center_world_m=np.asarray(center_world, dtype=np.float64),
         left_center_world_m=np.asarray(left_center_world, dtype=np.float64),
