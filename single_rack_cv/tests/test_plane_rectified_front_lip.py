@@ -95,7 +95,7 @@ class PlaneRectifiedFrontLipTests(unittest.TestCase):
     def test_missing_physical_boundary_fails_closed(self):
         rectified = self._rectified()
         damaged = rectified.rgb.copy()
-        damaged[:, 280:, :] = 25
+        damaged[:, 260:, :] = 210
         invalid = RectifiedEye(
             rgb=damaged,
             mask=rectified.mask,
