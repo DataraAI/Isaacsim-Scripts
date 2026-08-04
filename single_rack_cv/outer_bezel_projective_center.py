@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Projective RJ45 image centers reconstructed on the outer-bezel plane."""
+"""Plane-rectified RGB RJ45 center reconstructed on the outer-bezel plane."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import math
 
 import numpy as np
 
-from front_plane import FrontPlaneConfig, intersect_pixel_with_plane
-from lower_mouth_projective_center import aperture_center_pixel
+from front_plane import FrontPlaneConfig
 from outer_bezel_center import (
     OUTER_BEZEL_CONFIG,
     OuterBezelApertureResult,
     estimate_outer_bezel_plane,
+)
+from plane_rectified_front_lip import (
+    estimate_plane_rectified_front_lip_center,
 )
 
 
@@ -36,19 +38,14 @@ def estimate_outer_bezel_projective_center(
     front_plane_config: FrontPlaneConfig = OUTER_BEZEL_CONFIG,
     max_center_disagreement_m: float = MAX_OUTER_PLANE_CENTER_DISAGREEMENT_M,
 ) -> OuterBezelApertureResult:
-    """Fuse lower-mouth projective centers on the measured rack-face plane.
+    """Fuse two independent plane-rectified RGB front-lip centers.
 
-    Each eye independently fits the four projected boundaries of the wide
-    lower insertion mouth. Its diagonal intersection is perspective-correct;
-    the upper latch-notch shape cannot pull that center. Dense stereo support
-    outside the opening determines only the physical front-plane depth. No
-    metric contour scaling or world-space correction is used.
+    Dense stereo support outside the opening determines the physical front
+    plane. Each RGB eye is then rectified onto that plane and independently
+    fits the four physical lower-mouth lip boundaries. The pair must satisfy
+    the unchanged 0.5 mm consistency gate before any joint refit. Semantic
+    masks only localize the search region.
     """
-
-    # Kept for API compatibility with the existing runtime configuration. The
-    # physical dimensions are not used to turn the semantic contour into metric
-    # geometry or to inject an image-space/world-space correction.
-    del aperture_width_m, aperture_height_m
 
     maximum = float(max_center_disagreement_m)
     if (
@@ -72,35 +69,27 @@ def estimate_outer_bezel_projective_center(
         front_plane_config=front_plane_config,
     )
 
-    left_uv = aperture_center_pixel(left_rgb, left_mask, left_camera)
-    right_uv = aperture_center_pixel(right_rgb, right_mask, right_camera)
-    left_point = intersect_pixel_with_plane(
-        left_camera,
-        left_uv,
-        plane.center_world_m,
-        plane.normal_world,
+    front_lip = estimate_plane_rectified_front_lip_center(
+        left_rgb=left_rgb,
+        right_rgb=right_rgb,
+        left_mask=left_mask,
+        right_mask=right_mask,
+        left_camera=left_camera,
+        right_camera=right_camera,
+        plane_origin_world_m=plane.center_world_m,
+        plane_normal_world=plane.normal_world,
+        aperture_width_m=aperture_width_m,
+        aperture_height_m=aperture_height_m,
+        max_center_disagreement_m=maximum,
     )
-    right_point = intersect_pixel_with_plane(
-        right_camera,
-        right_uv,
-        plane.center_world_m,
-        plane.normal_world,
-    )
-    disagreement = float(np.linalg.norm(left_point - right_point))
-    if disagreement > maximum:
-        raise RuntimeError(
-            "Lower-mouth projective centers disagree by "
-            f"{disagreement * 1000.0:.3f} mm; "
-            f"limit is {maximum * 1000.0:.3f} mm."
-        )
 
     return OuterBezelApertureResult(
-        center_world_m=0.5 * (left_point + right_point),
-        left_center_world_m=left_point,
-        right_center_world_m=right_point,
-        left_center_uv=left_uv,
-        right_center_uv=right_uv,
-        eye_disagreement_m=disagreement,
+        center_world_m=front_lip.center_world_m,
+        left_center_world_m=front_lip.left_center_world_m,
+        right_center_world_m=front_lip.right_center_world_m,
+        left_center_uv=front_lip.left_center_uv,
+        right_center_uv=front_lip.right_center_uv,
+        eye_disagreement_m=front_lip.center_disagreement_m,
         plane_origin_world_m=plane.center_world_m,
         plane_normal_world=plane.normal_world,
         corners_world_m=plane.corners_world_m,
