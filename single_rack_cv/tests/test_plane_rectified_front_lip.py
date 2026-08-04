@@ -43,6 +43,11 @@ class PlaneRectifiedFrontLipTests(unittest.TestCase):
             dtype=np.int32,
         )
         cv2.fillPoly(mask, [polygon], 255)
+        return PlaneRectifiedFrontLipTests._with_rgb_and_mask(rgb, mask)
+
+    @staticmethod
+    def _with_rgb_and_mask(rgb: np.ndarray, mask: np.ndarray) -> RectifiedEye:
+        height, width = rgb.shape[:2]
         y, x = np.indices((height, width))
         frame = PlaneFrame(
             origin_world_m=np.zeros(3),
@@ -52,7 +57,7 @@ class PlaneRectifiedFrontLipTests(unittest.TestCase):
         )
         return RectifiedEye(
             rgb=rgb,
-            mask=mask > 0,
+            mask=np.asarray(mask) > 0,
             visible=np.ones((height, width), dtype=bool),
             map_u_px=x.astype(np.float64),
             map_v_px=y.astype(np.float64),
@@ -92,23 +97,88 @@ class PlaneRectifiedFrontLipTests(unittest.TestCase):
             0.0001,
         )
 
+    def test_moderate_brightness_and_contrast_change_preserves_center(self):
+        baseline_input = self._rectified()
+        baseline = fit_rectified_front_lip(baseline_input)
+        changed_rgb = np.clip(
+            baseline_input.rgb.astype(np.float64) * 0.80 + 15.0,
+            0.0,
+            255.0,
+        ).astype(np.uint8)
+        changed = fit_rectified_front_lip(
+            self._with_rgb_and_mask(changed_rgb, baseline_input.mask)
+        )
+        self.assertLess(
+            float(np.linalg.norm(baseline.center_uv_m - changed.center_uv_m)),
+            0.0001,
+        )
+
     def test_missing_physical_boundary_fails_closed(self):
         rectified = self._rectified()
         damaged = rectified.rgb.copy()
         damaged[:, 260:, :] = 210
-        invalid = RectifiedEye(
-            rgb=damaged,
-            mask=rectified.mask,
-            visible=rectified.visible,
-            map_u_px=rectified.map_u_px,
-            map_v_px=rectified.map_v_px,
-            minimum_uv_m=rectified.minimum_uv_m,
-            resolution_m=rectified.resolution_m,
-            plane_frame=rectified.plane_frame,
-            camera=None,
-        )
         with self.assertRaises(RuntimeError):
-            fit_rectified_front_lip(invalid)
+            fit_rectified_front_lip(
+                self._with_rgb_and_mask(damaged, rectified.mask)
+            )
+
+    def test_nonparallel_physical_edges_fail_closed(self):
+        height, width = 280, 360
+        rgb = np.full((height, width, 3), 210, dtype=np.uint8)
+        cv2.fillPoly(
+            rgb,
+            [np.array([[66, 70], [294, 70], [260, 210], [66, 210]])],
+            (25, 25, 25),
+        )
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(
+            mask,
+            [
+                np.array(
+                    [
+                        [66, 90],
+                        [120, 90],
+                        [120, 55],
+                        [220, 55],
+                        [220, 90],
+                        [294, 90],
+                        [260, 210],
+                        [66, 210],
+                    ],
+                    dtype=np.int32,
+                )
+            ],
+            255,
+        )
+        with self.assertRaisesRegex(RuntimeError, "parallel"):
+            fit_rectified_front_lip(self._with_rgb_and_mask(rgb, mask))
+
+    def test_implausibly_narrow_rgb_mouth_fails_closed(self):
+        height, width = 280, 360
+        rgb = np.full((height, width, 3), 210, dtype=np.uint8)
+        cv2.rectangle(rgb, (105, 70), (255, 210), (25, 25, 25), -1)
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(
+            mask,
+            [
+                np.array(
+                    [
+                        [105, 90],
+                        [140, 90],
+                        [140, 55],
+                        [220, 55],
+                        [220, 90],
+                        [255, 90],
+                        [255, 210],
+                        [105, 210],
+                    ],
+                    dtype=np.int32,
+                )
+            ],
+            255,
+        )
+        with self.assertRaisesRegex(RuntimeError, "width"):
+            fit_rectified_front_lip(self._with_rgb_and_mask(rgb, mask))
 
 
 if __name__ == "__main__":
