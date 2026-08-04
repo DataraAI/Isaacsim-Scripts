@@ -33,6 +33,24 @@ class PlaneRectifiedRuntimeWiringTests(unittest.TestCase):
         self.assertIn("MAX_CENTER_DISAGREEMENT_M = 0.0005", source)
         self.assertIn("MAX_EDGE_REPROJECTION_PX = 1.5", source)
 
+    def test_runtime_saves_progressive_and_accepted_fit_diagnostics(self):
+        source = (ROOT / "plane_rectified_front_lip.py").read_text()
+        for filename in (
+            "front_lip_rectified_left.png",
+            "front_lip_rectified_right.png",
+            "front_lip_fit_left.png",
+            "front_lip_fit_right.png",
+            "front_lip_fit_joint.png",
+            "front_lip_reprojection_left_eye_fit.png",
+            "front_lip_reprojection_right_eye_fit.png",
+            "front_lip_reprojection_left.png",
+            "front_lip_reprojection_right.png",
+        ):
+            self.assertIn(filename, source)
+        self.assertIn('"[RGB FRONT LIP] "', source)
+        self.assertIn("supports=", source)
+        self.assertIn("joint_size=", source)
+
     def test_no_runtime_truth_or_correction_source_is_introduced(self):
         sources = "\n".join(
             (ROOT / name).read_text()
