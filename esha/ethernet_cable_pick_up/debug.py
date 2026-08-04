@@ -32,6 +32,17 @@ class DebugOutputs:
             self.output_dir / "rgb_right_latest.png"
         )
 
+    def save_reference_candidate(self, frame: StereoFrame, capture_index: int) -> None:
+        """TEMPORARY: save a numbered frame for building the YOLOE reference
+        prompt, spanning the approach distance range. Remove once the
+        reference image/box is finalized."""
+        Image.fromarray(frame.left.rgb, mode="RGB").save(
+            self.output_dir / f"yoloe_ref_left_{capture_index:04d}.png"
+        )
+        Image.fromarray(frame.right.rgb, mode="RGB").save(
+            self.output_dir / f"yoloe_ref_right_{capture_index:04d}.png"
+        )
+
     def save_failure_snapshot(
         self,
         frame: StereoFrame,

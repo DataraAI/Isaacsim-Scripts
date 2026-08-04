@@ -78,6 +78,8 @@ try:
         try:
             frame = runtime.capture()
             debug.save_raw(frame)
+            if capture_index % 10 == 0:  # tune this — one every 10 captures
+                debug.save_reference_candidate(frame, capture_index)
             previous_left, previous_right = (
                 runtime.visual_servo_references()
             )
