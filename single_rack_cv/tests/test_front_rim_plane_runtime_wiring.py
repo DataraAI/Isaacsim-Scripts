@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
-    def test_runtime_adapter_uses_projective_centers_on_outer_bezel_plane(self):
+    def test_runtime_adapter_uses_projective_center_on_outer_bezel_plane(self):
         source = (ROOT / "live_control_projective.py").read_text(
             encoding="utf-8"
         )
@@ -25,18 +25,21 @@ class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("estimate_outer_bezel_aperture_center(", source)
         self.assertNotIn("estimate_planar_aperture_center", source)
 
-    def test_outer_bezel_center_uses_outer_front_mouth_edges(self):
+    def test_outer_bezel_center_uses_plane_rectified_rgb_front_lip(self):
         source = (ROOT / "outer_bezel_projective_center.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "from front_mouth_projective_center import aperture_center_pixel",
+            "from plane_rectified_front_lip import",
             source,
         )
-        self.assertNotIn(
-            "from stereo_center_projective import",
+        self.assertIn(
+            "estimate_plane_rectified_front_lip_center(",
             source,
         )
+        self.assertNotIn("lower_mouth_projective_center", source)
+        self.assertNotIn("front_mouth_projective_center", source)
+        self.assertIn("estimate_outer_bezel_plane(", source)
 
     def test_main_routes_live_observations_through_corrected_adapter(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
