@@ -30,10 +30,12 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertIn("runtime.step()", source[probe:detector])
         self.assertNotIn("update_partial_insertion", source[probe:detector])
 
-    def test_usd_adapter_uses_mesh_fallback_and_two_markers(self):
+    def test_usd_adapter_uses_rear_profile_donor_and_two_markers(self):
         source = (ROOT / "connector_tcp_usd.py").read_text()
         self.assertIn("connected_component_bounds", source)
         self.assertIn("#whole", source)
+        self.assertIn("maximum_profile_setback_m=0.020", source)
+        self.assertIn("profile setback mm", source)
         self.assertIn("LegacyPlugTipProbe", source)
         self.assertIn("DerivedInsertionTcpProbe", source)
         self.assertIn("TCP_PROBE_ONLY = True", source)
