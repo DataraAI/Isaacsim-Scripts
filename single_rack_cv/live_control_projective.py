@@ -16,6 +16,7 @@ def refine_live_observation(
     *,
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
+    search_width_m: float | None = None,
 ):
     """Intersect proven per-eye front-rim centers with the outer rack plane."""
 
@@ -32,6 +33,7 @@ def refine_live_observation(
         right_camera=frame.right.camera,
         aperture_width_m=aperture_width_m,
         aperture_height_m=aperture_height_m,
+        search_width_m=search_width_m,
     )
     return apply_front_plane_result(
         frame=frame,
