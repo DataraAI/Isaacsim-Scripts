@@ -35,6 +35,7 @@ def estimate_outer_bezel_projective_center(
     right_camera,
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
+    search_width_m: float | None = None,
     front_plane_config: FrontPlaneConfig = OUTER_BEZEL_CONFIG,
     max_center_disagreement_m: float = MAX_OUTER_PLANE_CENTER_DISAGREEMENT_M,
 ) -> OuterBezelApertureResult:
@@ -80,6 +81,7 @@ def estimate_outer_bezel_projective_center(
         plane_normal_world=plane.normal_world,
         aperture_width_m=aperture_width_m,
         aperture_height_m=aperture_height_m,
+        search_width_m=search_width_m,
         max_center_disagreement_m=maximum,
     )
 
