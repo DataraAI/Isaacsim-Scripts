@@ -22,7 +22,7 @@ TCP_PROBE_ONLY = True
 LEGACY_TCP_MARKER_PATH = "LegacyPlugTipProbe"
 DERIVED_TCP_MARKER_PATH = "DerivedInsertionTcpProbe"
 TCP_MARKER_RADIUS_M = 0.00125
-_NOSE_REACH_TOLERANCE_M = 0.0015
+_MAXIMUM_PROFILE_SETBACK_M = 0.020
 
 
 def _transform_points(transform: np.ndarray, points: np.ndarray) -> np.ndarray:
@@ -126,9 +126,12 @@ def _component_rejection_report(
             if nose_sign > 0.0
             else component.local_min[longitudinal]
         )
-        nose_gap_mm = abs(
-            component_nose - legacy_frame.tip_local_m[longitudinal]
-        ) * scale[longitudinal] * 1000.0
+        profile_setback_mm = (
+            nose_sign
+            * (legacy_frame.tip_local_m[longitudinal] - component_nose)
+            * scale[longitudinal]
+            * 1000.0
+        )
         physical_extent_mm = (
             (component.local_max - component.local_min) * scale * 1000.0
         )
@@ -137,27 +140,31 @@ def _component_rejection_report(
         ratios = sorted_cross_mm / target_mm
 
         reasons: list[str] = []
-        if nose_gap_mm > _NOSE_REACH_TOLERANCE_M * 1000.0:
+        if profile_setback_mm < -1.0e-6:
             reasons.append(
-                f"nose gap {nose_gap_mm:.3f} > "
-                f"{_NOSE_REACH_TOLERANCE_M * 1000.0:.3f} mm"
+                f"profile extends {-profile_setback_mm:.3f} mm ahead of nose"
+            )
+        if profile_setback_mm > _MAXIMUM_PROFILE_SETBACK_M * 1000.0:
+            reasons.append(
+                f"profile setback {profile_setback_mm:.3f} > "
+                f"{_MAXIMUM_PROFILE_SETBACK_M * 1000.0:.3f} mm"
             )
         if np.any(ratios < 0.55) or np.any(ratios > 1.25):
-            reasons.append(
-                "cross-section ratios outside [0.55, 1.25]"
-            )
+            reasons.append("cross-section ratios outside [0.55, 1.25]")
         status = "QUALIFIED" if not reasons else "; ".join(reasons)
-        score_hint = float(np.sum(np.abs(np.log(np.maximum(ratios, 1.0e-12)))))
+        score_hint = float(
+            np.sum(np.abs(np.log(np.maximum(ratios, 1.0e-12))))
+        )
         line = (
             f"  {component.label}\n"
             f"    vertices={component.vertex_count} "
             f"physical_extent_mm={np.round(physical_extent_mm, 3).tolist()}\n"
             f"    transverse_mm={np.round(cross_section_mm, 3).tolist()} "
             f"sorted_ratios={np.round(ratios, 3).tolist()} "
-            f"nose_gap_mm={nose_gap_mm:.3f}\n"
+            f"profile_setback_mm={profile_setback_mm:.3f}\n"
             f"    result={status}"
         )
-        records.append((nose_gap_mm, score_hint, line))
+        records.append((abs(profile_setback_mm), score_hint, line))
 
     records.sort(key=lambda item: (item[0], item[1], item[2]))
     displayed = records[:40]
@@ -166,13 +173,17 @@ def _component_rejection_report(
         f"  port target cross-section mm: {np.round(target_mm, 3).tolist()}",
         f"  longitudinal axis: {longitudinal}",
         f"  transverse axes: {transverse}",
+        f"  maximum profile setback mm: "
+        f"{_MAXIMUM_PROFILE_SETBACK_M * 1000.0:.3f}",
         f"  axis scale m/local-unit: {np.round(scale, 9).tolist()}",
         f"  components inspected: {len(records)}",
         f"  components displayed: {len(displayed)}",
     ]
     lines.extend(item[2] for item in displayed)
     if len(records) > len(displayed):
-        lines.append(f"  ... {len(records) - len(displayed)} additional components omitted")
+        lines.append(
+            f"  ... {len(records) - len(displayed)} additional components omitted"
+        )
     return "\n".join(lines)
 
 
@@ -245,6 +256,7 @@ def derive_plug_frame_from_mesh(
             components=components,
             aperture_width_m=aperture_width_m,
             aperture_height_m=aperture_height_m,
+            maximum_profile_setback_m=0.020,
         )
     except RuntimeError as error:
         print(
@@ -391,7 +403,7 @@ def log_tcp_derivation(
         f"  derived tip local: "
         f"{np.round(derivation.tip_local, 6).tolist()}\n"
         f"  physical TCP shift mm: {np.round(shift_mm, 3).tolist()}\n"
-        f"  nose gap mm: {derivation.nose_gap_m * 1000.0:.3f}\n"
+        f"  profile setback mm: {derivation.nose_gap_m * 1000.0:.3f}\n"
         f"  legacy marker: {legacy_marker_path} (red)\n"
         f"  derived marker: {derived_marker_path} (cyan)\n"
         "  port perception and marker positions: unchanged\n"
