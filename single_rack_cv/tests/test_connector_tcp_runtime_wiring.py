@@ -32,7 +32,7 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("update_partial_insertion", main_source[probe:detector])
         self.assertIn("not derivation_accepted", mount_source)
 
-    def test_usd_adapter_uses_rear_profile_donor_and_two_markers(self):
+    def test_usd_adapter_uses_rear_profile_donor_and_full_insertion_mode(self):
         source = (ROOT / "connector_tcp_usd.py").read_text()
         self.assertIn("connected_component_bounds", source)
         self.assertIn("#whole", source)
@@ -41,9 +41,8 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertIn("LegacyPlugTipProbe", source)
         self.assertIn("DerivedInsertionTcpProbe", source)
         self.assertIn("TCP_PROBE_ONLY = False", source)
-        self.assertIn("PRECONTACT_ALIGNMENT_ONLY = True", source)
+        self.assertIn("PRECONTACT_ALIGNMENT_ONLY = False", source)
         self.assertIn("PRECONTACT_HOLD_OFFSET_M = 0.002", source)
-        self.assertIn("penetration commands: disabled", source)
         self.assertNotIn("world_offset", source)
         self.assertNotIn("port_offset", source)
 
