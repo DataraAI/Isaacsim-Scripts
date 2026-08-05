@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from full_insertion_runtime import (
+from full_insertion_base_runtime import (
     AngledHandStereoHandoffRuntime as _BaseAngledHandStereoHandoffRuntime,
 )
 from handoff_position_hold import update_handoff_position_command
