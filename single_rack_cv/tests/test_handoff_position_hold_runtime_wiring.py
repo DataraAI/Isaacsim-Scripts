@@ -10,14 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class HandoffPositionHoldRuntimeWiringTests(unittest.TestCase):
-    def test_main_selects_position_hold_wrapper(self):
-        source = (ROOT / "main.py").read_text()
-        self.assertIn("from handoff_position_hold_runtime import", source)
-        self.assertNotIn("from full_insertion_runtime import", source)
+    def test_production_export_selects_position_hold_wrapper(self):
+        main_source = (ROOT / "main.py").read_text()
+        export_source = (ROOT / "full_insertion_runtime.py").read_text()
+        self.assertIn("from full_insertion_runtime import", main_source)
+        self.assertIn("from handoff_position_hold_runtime import", export_source)
 
-    def test_wrapper_keeps_full_insertion_as_base(self):
+    def test_wrapper_keeps_preserved_full_insertion_as_base(self):
         source = (ROOT / "handoff_position_hold_runtime.py").read_text()
-        self.assertIn("from full_insertion_runtime import", source)
+        self.assertIn("from full_insertion_base_runtime import", source)
         self.assertIn("class AngledHandStereoHandoffRuntime", source)
 
     def test_frozen_physical_goal_not_compensated_command_controls_completion(self):
