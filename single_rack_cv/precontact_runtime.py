@@ -16,6 +16,20 @@ from settled_stereo_handoff_runtime import (
 from sim import log
 
 
+class NonPenetratingConsecutivePoseInsertionController(
+    ConsecutivePoseInsertionController
+):
+    """Reject any command at or beyond the opening before runtime publication."""
+
+    def _issue_next_command(self, frame_index: int):
+        command = super()._issue_next_command(frame_index)
+        if command.commanded_port_depth_m >= 0.0:
+            raise RuntimeError(
+                "Precontact controller attempted a penetrating command."
+            )
+        return command
+
+
 class AngledHandStereoHandoffRuntime(_BaseAngledHandStereoHandoffRuntime):
     """Run the qualified handoff, then stop 2 mm before the opening plane."""
 
@@ -39,8 +53,8 @@ class AngledHandStereoHandoffRuntime(_BaseAngledHandStereoHandoffRuntime):
 
         # Preserve the proven consecutive position-and-orientation settle logic
         # and the live plug-axis adapter. Only the terminal travel is shortened.
-        self.partial_insertion = ConsecutivePoseInsertionController(
-            capped_limits
+        self.partial_insertion = (
+            NonPenetratingConsecutivePoseInsertionController(capped_limits)
         )
         self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(
             self.partial_insertion
@@ -101,10 +115,6 @@ class AngledHandStereoHandoffRuntime(_BaseAngledHandStereoHandoffRuntime):
                 f"{self._insertion_total_steps}"
             )
         if event.command is not None:
-            if event.command.commanded_port_depth_m >= 0.0:
-                raise RuntimeError(
-                    "Precontact runtime attempted a penetrating command."
-                )
             lines.extend(
                 [
                     f"  next command: {event.command.step_index}/"
