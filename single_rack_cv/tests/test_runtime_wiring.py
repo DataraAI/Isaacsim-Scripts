@@ -117,7 +117,7 @@ class RuntimeWiringTests(unittest.TestCase):
         prepare = source.index("runtime.prepare_for_perception()")
         debug = source.index("debug = DebugOutputs")
         yolo = source.index("detector.initialize()")
-        loop = source.index("while runtime.is_running()")
+        loop = source.index("while runtime.is_running()", yolo)
         self.assertLess(prepare, debug)
         self.assertLess(prepare, yolo)
         self.assertLess(yolo, loop)
