@@ -14,6 +14,7 @@ import numpy as np
 from config import CONFIG
 from front_lip_calibration import (
     VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
 )
 
@@ -181,9 +182,11 @@ try:
         print(
             "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
             "no manual depth offset and no RTX/USD ground truth in runtime.\n"
-            f"  visible front-lip calibration: "
+            f"  visible front-lip validation: "
             f"{VISIBLE_FRONT_LIP_WIDTH_M * 1000.0:.3f} x "
-            f"{VISIBLE_FRONT_LIP_HEIGHT_M * 1000.0:.3f} mm",
+            f"{VISIBLE_FRONT_LIP_HEIGHT_M * 1000.0:.3f} mm\n"
+            f"  side-edge localization width: "
+            f"{VISIBLE_FRONT_LIP_SEARCH_WIDTH_M * 1000.0:.3f} mm",
             flush=True,
         )
 
@@ -226,6 +229,7 @@ try:
                     ),
                     aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
                     aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
+                    search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
                 )
                 print(
                     "[LIVE FRONT PLANE] "
