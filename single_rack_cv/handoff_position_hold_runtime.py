@@ -111,18 +111,25 @@ class AngledHandStereoHandoffRuntime(
         )
 
         if state.settled_frame_count >= cfg.required_settled_frames:
+            applied_command_bias_m = update.command_bias_m
+            self.ik.target.set_world_pose(
+                position=goal,
+                orientation=command_orientation,
+            )
+            command_position = goal
             state.complete = True
             log(
                 "RGB QUALIFIED PORT-POSE ALIGNMENT COMPLETE\n"
                 f"  frozen physical ToolCenter goal: "
                 f"{np.round(goal, 6).tolist()}\n"
-                f"  compensated IK command: "
+                f"  insertion-start IK command: "
                 f"{np.round(command_position, 6).tolist()}\n"
                 f"  actual ToolCenter: "
                 f"{np.round(actual_position, 6).tolist()}\n"
                 f"  physical goal error: "
                 f"{position_error_m * 1000.0:.3f} mm\n"
-                f"  command bias: {update.command_bias_m * 1000.0:.3f} mm\n"
+                f"  applied command bias before reset: "
+                f"{applied_command_bias_m * 1000.0:.3f} mm\n"
                 f"  settled frames: {state.settled_frame_count}/"
                 f"{cfg.required_settled_frames}\n"
                 "  next action: begin guarded two-stage port entry"
