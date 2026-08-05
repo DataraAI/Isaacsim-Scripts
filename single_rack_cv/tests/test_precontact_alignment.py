@@ -13,6 +13,7 @@ from insertion import (
 )
 from precontact_alignment import (
     PrecontactAlignmentPolicy,
+    PrecontactInsertionLimits,
     build_precontact_limits,
 )
 
@@ -69,6 +70,8 @@ class PrecontactAlignmentTests(unittest.TestCase):
             if event.command is not None:
                 commands.append(event.command)
 
+        self.assertIsInstance(limits, PrecontactInsertionLimits)
+        self.assertIsInstance(limits, InsertionLimits)
         self.assertEqual(limits.total_step_count, 24)
         self.assertEqual(len(commands), 24)
         self.assertIs(commands[0].stage, InsertionStage.COARSE_APPROACH)
@@ -107,6 +110,26 @@ class PrecontactAlignmentTests(unittest.TestCase):
             capped.max_orientation_error_deg,
             original.max_orientation_error_deg,
         )
+
+    def test_standard_limits_still_reject_terminal_before_opening(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "opening_depth_m cannot exceed total_depth_m",
+        ):
+            InsertionLimits(
+                total_depth_m=0.048,
+                step_size_m=0.0005,
+                coarse_approach_depth_m=0.040,
+                coarse_step_size_m=0.005,
+                opening_depth_m=0.050,
+                settle_tolerance_m=0.0003,
+                required_settled_frames=6,
+                step_timeout_frames=120,
+                max_lateral_drift_m=0.0005,
+                max_orientation_error_deg=1.0,
+                max_mount_tip_error_m=0.0005,
+                max_mount_axis_error_deg=1.0,
+            )
 
     def test_rejects_nonpositive_hold_offset(self):
         for value in (0.0, -0.001):
