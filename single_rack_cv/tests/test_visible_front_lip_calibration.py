@@ -9,6 +9,7 @@ from front_lip_calibration import (
     LIVE_WIDTH_POPULATION_STD_M,
     LIVE_WIDTH_SAMPLE_COUNT,
     VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
 )
 
@@ -17,9 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VisibleFrontLipCalibrationTests(unittest.TestCase):
-    def test_production_uses_live_visible_front_lip_calibration(self):
+    def test_production_uses_separate_validation_and_search_calibrations(self):
         self.assertAlmostEqual(VISIBLE_FRONT_LIP_WIDTH_M, 0.0153, places=12)
         self.assertAlmostEqual(VISIBLE_FRONT_LIP_HEIGHT_M, 0.0070, places=12)
+        self.assertAlmostEqual(
+            VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
+            0.0114,
+            places=12,
+        )
         self.assertEqual(LIVE_WIDTH_SAMPLE_COUNT, 91)
         self.assertAlmostEqual(LIVE_WIDTH_MEDIAN_M, 0.015287, places=12)
         self.assertAlmostEqual(
@@ -36,6 +42,10 @@ class VisibleFrontLipCalibrationTests(unittest.TestCase):
         )
         self.assertIn(
             "aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M",
+            source,
+        )
+        self.assertIn(
+            "search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M",
             source,
         )
         self.assertNotIn(
