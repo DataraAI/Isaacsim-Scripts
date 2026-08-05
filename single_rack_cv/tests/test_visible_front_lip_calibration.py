@@ -4,6 +4,13 @@ import unittest
 from pathlib import Path
 
 from config import CONFIG
+from front_lip_calibration import (
+    LIVE_WIDTH_MEDIAN_M,
+    LIVE_WIDTH_POPULATION_STD_M,
+    LIVE_WIDTH_SAMPLE_COUNT,
+    VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_WIDTH_M,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,28 +18,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class VisibleFrontLipCalibrationTests(unittest.TestCase):
     def test_production_uses_live_visible_front_lip_calibration(self):
+        self.assertAlmostEqual(VISIBLE_FRONT_LIP_WIDTH_M, 0.0153, places=12)
+        self.assertAlmostEqual(VISIBLE_FRONT_LIP_HEIGHT_M, 0.0070, places=12)
+        self.assertEqual(LIVE_WIDTH_SAMPLE_COUNT, 91)
+        self.assertAlmostEqual(LIVE_WIDTH_MEDIAN_M, 0.015287, places=12)
         self.assertAlmostEqual(
-            CONFIG.front_plane.visible_front_lip_width_m,
-            0.0153,
-            places=12,
-        )
-        self.assertAlmostEqual(
-            CONFIG.front_plane.visible_front_lip_height_m,
-            0.0070,
-            places=12,
+            LIVE_WIDTH_POPULATION_STD_M,
+            0.0002513259929648458,
+            places=15,
         )
 
         source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("from front_lip_calibration import (", source)
         self.assertIn(
-            "aperture_width_m=(\n"
-            "                        CONFIG.front_plane.visible_front_lip_width_m\n"
-            "                    )",
+            "aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M",
             source,
         )
         self.assertIn(
-            "aperture_height_m=(\n"
-            "                        CONFIG.front_plane.visible_front_lip_height_m\n"
-            "                    )",
+            "aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M",
             source,
         )
         self.assertNotIn(
