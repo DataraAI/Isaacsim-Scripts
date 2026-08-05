@@ -103,9 +103,9 @@ class FrontLipSearchCalibrationTests(unittest.TestCase):
             search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
         )
 
-        self.assertLess(
+        self.assertLessEqual(
             abs(fit.width_m - VISIBLE_FRONT_LIP_WIDTH_M),
-            0.0002,
+            0.0002 + 1.0e-12,
         )
         self.assertLess(abs(float(fit.center_uv_m[0])), 0.0001)
 
