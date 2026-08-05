@@ -10,15 +10,20 @@ ROOT = Path(__file__).resolve().parents[1]
 class FullInsertionRuntimeWiringTests(unittest.TestCase):
     def test_main_selects_explicit_full_insertion_runtime(self):
         source = (ROOT / "main.py").read_text()
+        export_source = (ROOT / "full_insertion_runtime.py").read_text()
         self.assertIn("from full_insertion_runtime import (", source)
         self.assertIn(
             "AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime",
             source,
         )
         self.assertNotIn("from precontact_runtime import (", source)
+        self.assertIn(
+            "from handoff_position_hold_runtime import",
+            export_source,
+        )
 
     def test_full_mode_disables_only_precontact_cap_before_base_import(self):
-        source = (ROOT / "full_insertion_runtime.py").read_text()
+        source = (ROOT / "full_insertion_base_runtime.py").read_text()
         connector_patch = source.index(
             "_connector_tcp_usd.PRECONTACT_ALIGNMENT_ONLY = False"
         )
