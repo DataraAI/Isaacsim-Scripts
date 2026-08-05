@@ -61,9 +61,49 @@ class ConnectorTcpTests(unittest.TestCase):
             result.cross_section_m,
             [0.0104, 0.0070],
         )
+        self.assertAlmostEqual(result.nose_gap_m, 0.0)
 
-    def test_ignores_plausible_body_that_does_not_reach_nose(self):
-        with self.assertRaisesRegex(RuntimeError, "nose-reaching"):
+    def test_selects_dimension_matching_rear_body_as_profile_donor(self):
+        result = derive_insertion_tcp(
+            legacy_tip_local=np.array([18.076, 0.0, 0.0]),
+            longitudinal_axis_index=0,
+            nose_axis_local=np.array([1.0, 0.0, 0.0]),
+            axis_scale_m_per_local_unit=self.scale,
+            components=(
+                self.component(
+                    "front_with_latch",
+                    [-2.414, -5.246, -5.910],
+                    [18.076, 5.246, 5.910],
+                ),
+                self.component(
+                    "thin_insert",
+                    [5.406, -3.704, -0.450],
+                    [16.957, 3.704, 0.450],
+                ),
+                self.component(
+                    "rear_body",
+                    [-18.076, -5.2475, -4.135],
+                    [5.406, 5.2475, 3.000],
+                ),
+            ),
+            aperture_width_m=0.0114,
+            aperture_height_m=0.0070,
+        )
+        self.assertEqual(result.selected_label, "rear_body")
+        self.assertEqual(result.tip_local[0], 18.076)
+        np.testing.assert_allclose(result.tip_local[1:], [0.0, -0.5675])
+        np.testing.assert_allclose(
+            result.shift_physical_m,
+            [0.0, 0.0, -0.0005675],
+        )
+        np.testing.assert_allclose(
+            result.cross_section_m,
+            [0.010495, 0.007135],
+        )
+        self.assertAlmostEqual(result.nose_gap_m, 0.012670)
+
+    def test_rejects_dimension_matching_profile_beyond_setback_limit(self):
+        with self.assertRaisesRegex(RuntimeError, "setback"):
             derive_insertion_tcp(
                 legacy_tip_local=self.legacy_tip,
                 longitudinal_axis_index=0,
@@ -71,13 +111,14 @@ class ConnectorTcpTests(unittest.TestCase):
                 axis_scale_m_per_local_unit=self.scale,
                 components=(
                     self.component(
-                        "rear_body",
-                        [2.0, -5.2, -4.5],
-                        [10.0, 5.2, 2.5],
+                        "far_body",
+                        [-20.0, -5.2, -4.0],
+                        [-3.0, 5.2, 3.0],
                     ),
                 ),
                 aperture_width_m=0.0114,
                 aperture_height_m=0.0070,
+                maximum_profile_setback_m=0.010,
             )
 
     def test_rejects_two_equally_plausible_components_with_different_centers(self):
@@ -104,7 +145,7 @@ class ConnectorTcpTests(unittest.TestCase):
             )
 
     def test_rejects_full_bounds_that_include_latch(self):
-        with self.assertRaisesRegex(RuntimeError, "nose-reaching"):
+        with self.assertRaisesRegex(RuntimeError, "profile"):
             derive_insertion_tcp(
                 legacy_tip_local=self.legacy_tip,
                 longitudinal_axis_index=0,
