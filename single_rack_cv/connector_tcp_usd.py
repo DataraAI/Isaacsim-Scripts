@@ -22,6 +22,7 @@ TCP_PROBE_ONLY = True
 LEGACY_TCP_MARKER_PATH = "LegacyPlugTipProbe"
 DERIVED_TCP_MARKER_PATH = "DerivedInsertionTcpProbe"
 TCP_MARKER_RADIUS_M = 0.00125
+_NOSE_REACH_TOLERANCE_M = 0.0015
 
 
 def _transform_points(transform: np.ndarray, points: np.ndarray) -> np.ndarray:
@@ -99,6 +100,116 @@ def mesh_components_in_plug_local(
     return tuple(components)
 
 
+def _component_rejection_report(
+    *,
+    components: tuple[MeshComponentBounds, ...],
+    legacy_frame: PlugFrame,
+    axis_scale_m_per_local_unit: np.ndarray,
+    aperture_width_m: float,
+    aperture_height_m: float,
+) -> str:
+    """Explain exactly why each real USD component passed or failed the gate."""
+
+    scale = np.asarray(axis_scale_m_per_local_unit, dtype=np.float64).reshape(3)
+    longitudinal = int(legacy_frame.longitudinal_axis_index)
+    transverse = [axis for axis in range(3) if axis != longitudinal]
+    nose_sign = float(legacy_frame.nose_axis_local[longitudinal])
+    target_mm = np.sort(
+        np.array([aperture_width_m, aperture_height_m], dtype=np.float64)
+        * 1000.0
+    )
+
+    records: list[tuple[float, float, str]] = []
+    for component in components:
+        component_nose = (
+            component.local_max[longitudinal]
+            if nose_sign > 0.0
+            else component.local_min[longitudinal]
+        )
+        nose_gap_mm = abs(
+            component_nose - legacy_frame.tip_local_m[longitudinal]
+        ) * scale[longitudinal] * 1000.0
+        physical_extent_mm = (
+            (component.local_max - component.local_min) * scale * 1000.0
+        )
+        cross_section_mm = physical_extent_mm[transverse]
+        sorted_cross_mm = np.sort(cross_section_mm)
+        ratios = sorted_cross_mm / target_mm
+
+        reasons: list[str] = []
+        if nose_gap_mm > _NOSE_REACH_TOLERANCE_M * 1000.0:
+            reasons.append(
+                f"nose gap {nose_gap_mm:.3f} > "
+                f"{_NOSE_REACH_TOLERANCE_M * 1000.0:.3f} mm"
+            )
+        if np.any(ratios < 0.55) or np.any(ratios > 1.25):
+            reasons.append(
+                "cross-section ratios outside [0.55, 1.25]"
+            )
+        status = "QUALIFIED" if not reasons else "; ".join(reasons)
+        score_hint = float(np.sum(np.abs(np.log(np.maximum(ratios, 1.0e-12)))))
+        line = (
+            f"  {component.label}\n"
+            f"    vertices={component.vertex_count} "
+            f"physical_extent_mm={np.round(physical_extent_mm, 3).tolist()}\n"
+            f"    transverse_mm={np.round(cross_section_mm, 3).tolist()} "
+            f"sorted_ratios={np.round(ratios, 3).tolist()} "
+            f"nose_gap_mm={nose_gap_mm:.3f}\n"
+            f"    result={status}"
+        )
+        records.append((nose_gap_mm, score_hint, line))
+
+    records.sort(key=lambda item: (item[0], item[1], item[2]))
+    displayed = records[:40]
+    lines = [
+        "[CONNECTOR TCP] REAL USD COMPONENT DIAGNOSTICS",
+        f"  port target cross-section mm: {np.round(target_mm, 3).tolist()}",
+        f"  longitudinal axis: {longitudinal}",
+        f"  transverse axes: {transverse}",
+        f"  axis scale m/local-unit: {np.round(scale, 9).tolist()}",
+        f"  components inspected: {len(records)}",
+        f"  components displayed: {len(displayed)}",
+    ]
+    lines.extend(item[2] for item in displayed)
+    if len(records) > len(displayed):
+        lines.append(f"  ... {len(records) - len(displayed)} additional components omitted")
+    return "\n".join(lines)
+
+
+def _legacy_probe_derivation(
+    *,
+    legacy_frame: PlugFrame,
+    axis_scale_m_per_local_unit: np.ndarray,
+) -> InsertionTcpDerivation:
+    """Represent a rejected probe without changing the connector frame."""
+
+    scale = np.asarray(axis_scale_m_per_local_unit, dtype=np.float64).reshape(3)
+    longitudinal = int(legacy_frame.longitudinal_axis_index)
+    transverse = [axis for axis in range(3) if axis != longitudinal]
+    local_extent = legacy_frame.local_max_m - legacy_frame.local_min_m
+    return InsertionTcpDerivation(
+        tip_local=np.asarray(legacy_frame.tip_local_m, dtype=np.float64).copy(),
+        legacy_tip_local=np.asarray(
+            legacy_frame.tip_local_m,
+            dtype=np.float64,
+        ).copy(),
+        shift_physical_m=np.zeros(3, dtype=np.float64),
+        selected_label="UNQUALIFIED_LEGACY_FRAME_RETAINED",
+        selected_local_min=np.asarray(
+            legacy_frame.local_min_m,
+            dtype=np.float64,
+        ).copy(),
+        selected_local_max=np.asarray(
+            legacy_frame.local_max_m,
+            dtype=np.float64,
+        ).copy(),
+        cross_section_m=local_extent[transverse] * scale[transverse],
+        nose_gap_m=0.0,
+        score=float("inf"),
+        candidate_count=0,
+    )
+
+
 def derive_plug_frame_from_mesh(
     *,
     stage: Usd.Stage,
@@ -125,15 +236,38 @@ def derive_plug_frame_from_mesh(
         )
 
     components = mesh_components_in_plug_local(stage, tracked_plug_path)
-    derivation = derive_insertion_tcp(
-        legacy_tip_local=legacy_frame.tip_local_m,
-        longitudinal_axis_index=legacy_frame.longitudinal_axis_index,
-        nose_axis_local=legacy_frame.nose_axis_local,
-        axis_scale_m_per_local_unit=axis_scale_m_per_local_unit,
-        components=components,
-        aperture_width_m=aperture_width_m,
-        aperture_height_m=aperture_height_m,
-    )
+    try:
+        derivation = derive_insertion_tcp(
+            legacy_tip_local=legacy_frame.tip_local_m,
+            longitudinal_axis_index=legacy_frame.longitudinal_axis_index,
+            nose_axis_local=legacy_frame.nose_axis_local,
+            axis_scale_m_per_local_unit=axis_scale_m_per_local_unit,
+            components=components,
+            aperture_width_m=aperture_width_m,
+            aperture_height_m=aperture_height_m,
+        )
+    except RuntimeError as error:
+        print(
+            f"[CONNECTOR TCP] DERIVATION REJECTED\n  reason: {error}\n"
+            + _component_rejection_report(
+                components=components,
+                legacy_frame=legacy_frame,
+                axis_scale_m_per_local_unit=axis_scale_m_per_local_unit,
+                aperture_width_m=aperture_width_m,
+                aperture_height_m=aperture_height_m,
+            )
+            + "\n  action: legacy connector frame retained for probe only\n"
+            "  visual servo and insertion remain locked",
+            flush=True,
+        )
+        return (
+            legacy_frame,
+            _legacy_probe_derivation(
+                legacy_frame=legacy_frame,
+                axis_scale_m_per_local_unit=axis_scale_m_per_local_unit,
+            ),
+            components,
+        )
 
     plug_from_tip = np.asarray(
         legacy_frame.plug_from_tip,
@@ -230,6 +364,21 @@ def log_tcp_derivation(
 ) -> None:
     shift_mm = np.asarray(derivation.shift_physical_m) * 1000.0
     cross_section_mm = np.asarray(derivation.cross_section_m) * 1000.0
+    if derivation.candidate_count == 0:
+        print(
+            "[CONNECTOR TCP] PROBE ACTIVE — NO DERIVED TCP ACCEPTED\n"
+            f"  connected components inspected: {component_count}\n"
+            "  connector frame: legacy full-bounds frame retained\n"
+            f"  legacy marker: {legacy_marker_path} (red)\n"
+            f"  derived marker: {derived_marker_path} (cyan, overlaps red)\n"
+            f"  full-bounds transverse cross-section mm: "
+            f"{np.round(cross_section_mm, 3).tolist()}\n"
+            "  port perception and marker positions: unchanged\n"
+            "  YOLOE, visual servo, handoff, and insertion: locked",
+            flush=True,
+        )
+        return
+
     print(
         "[CONNECTOR TCP] MESH-DERIVED INSERTION CENTER\n"
         f"  selected component: {derivation.selected_label}\n"
