@@ -69,6 +69,17 @@ def mesh_components_in_plug_local(
         world_from_mesh = _world_transform(stage, str(prim.GetPath()))
         plug_from_mesh = plug_from_world @ world_from_mesh
         plug_points = _transform_points(plug_from_mesh, points)
+        whole_minimum = np.min(plug_points, axis=0)
+        whole_maximum = np.max(plug_points, axis=0)
+        if np.all(whole_maximum > whole_minimum):
+            components.append(
+                MeshComponentBounds(
+                    label=f"{prim.GetPath()}#whole",
+                    local_min=whole_minimum,
+                    local_max=whole_maximum,
+                    vertex_count=plug_points.shape[0],
+                )
+            )
         try:
             mesh_components = connected_component_bounds(
                 points=plug_points,
