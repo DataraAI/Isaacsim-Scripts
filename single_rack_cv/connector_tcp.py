@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive a functional connector insertion TCP from nose-reaching mesh bounds."""
+"""Derive a functional connector insertion TCP from mesh body profiles."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ class _Candidate:
     component: MeshComponentBounds
     center_local: np.ndarray
     cross_section_m: np.ndarray
-    nose_gap_m: float
+    profile_setback_m: float
     score: float
 
 
@@ -159,16 +159,18 @@ def derive_insertion_tcp(
     components: Iterable[MeshComponentBounds],
     aperture_width_m: float,
     aperture_height_m: float,
-    nose_reach_tolerance_m: float = 0.0015,
+    maximum_profile_setback_m: float = 0.020,
     ambiguity_score_margin: float = 0.08,
     ambiguity_center_tolerance_m: float = 0.00035,
     maximum_transverse_shift_m: float = 0.0030,
 ) -> InsertionTcpDerivation:
-    """Select the insertable nose body and derive its transverse center.
+    """Select an insertable-body profile and derive its transverse center.
 
-    The longitudinal tip coordinate and orientation are preserved. Only the two
-    transverse coordinates are replaced by the center of a nose-reaching mesh
-    component whose physical cross-section plausibly fits the measured port.
+    A connector asset may model the rectangular housing as a component whose
+    front edge stops behind separate nose/latch geometry. The dimensionally
+    matching housing therefore acts as a transverse profile donor. The legacy
+    longitudinal nose coordinate and orientation are preserved exactly; only
+    the two transverse TCP coordinates are replaced by the donor center.
     """
 
     legacy = _finite_vector(legacy_tip_local, "legacy_tip_local")
@@ -195,9 +197,9 @@ def derive_insertion_tcp(
         ],
         dtype=np.float64,
     )
-    nose_tolerance = _positive(
-        nose_reach_tolerance_m,
-        "nose_reach_tolerance_m",
+    maximum_setback = _positive(
+        maximum_profile_setback_m,
+        "maximum_profile_setback_m",
     )
     score_margin = _positive(ambiguity_score_margin, "ambiguity_score_margin")
     center_tolerance = _positive(
@@ -219,10 +221,12 @@ def derive_insertion_tcp(
             if nose_sign > 0.0
             else component.local_min[longitudinal]
         )
-        nose_gap_m = (
-            abs(component_nose - legacy[longitudinal]) * scale[longitudinal]
+        profile_setback_m = (
+            nose_sign
+            * (legacy[longitudinal] - component_nose)
+            * scale[longitudinal]
         )
-        if nose_gap_m > nose_tolerance:
+        if profile_setback_m < -1.0e-9 or profile_setback_m > maximum_setback:
             continue
 
         local_extent = component.local_max - component.local_min
@@ -234,20 +238,21 @@ def derive_insertion_tcp(
         center_local = legacy.copy()
         component_center = 0.5 * (component.local_min + component.local_max)
         center_local[transverse] = component_center[transverse]
-        score = shape_score + 20.0 * nose_gap_m
+        score = shape_score + 2.0 * profile_setback_m
         candidates.append(
             _Candidate(
                 component=component,
                 center_local=center_local,
                 cross_section_m=cross_section_m,
-                nose_gap_m=float(nose_gap_m),
+                profile_setback_m=float(profile_setback_m),
                 score=float(score),
             )
         )
 
     if not candidates:
         raise RuntimeError(
-            "No qualified nose-reaching connector body matched the port cross-section."
+            "No qualified connector body profile matched the port cross-section "
+            "within the maximum setback."
         )
 
     candidates.sort(
@@ -291,7 +296,7 @@ def derive_insertion_tcp(
         selected_local_min=selected.component.local_min.copy(),
         selected_local_max=selected.component.local_max.copy(),
         cross_section_m=selected.cross_section_m.copy(),
-        nose_gap_m=selected.nose_gap_m,
+        nose_gap_m=selected.profile_setback_m,
         score=selected.score,
         candidate_count=len(candidates),
     )
