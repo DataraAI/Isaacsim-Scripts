@@ -12,6 +12,10 @@ from pathlib import Path
 import numpy as np
 
 from config import CONFIG
+from front_lip_calibration import (
+    VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_WIDTH_M,
+)
 
 
 class RunOutputTee:
@@ -176,7 +180,10 @@ try:
     if CONFIG.front_plane.enabled:
         print(
             "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
-            "no manual depth offset and no RTX/USD ground truth in runtime.",
+            "no manual depth offset and no RTX/USD ground truth in runtime.\n"
+            f"  visible front-lip calibration: "
+            f"{VISIBLE_FRONT_LIP_WIDTH_M * 1000.0:.3f} x "
+            f"{VISIBLE_FRONT_LIP_HEIGHT_M * 1000.0:.3f} mm",
             flush=True,
         )
 
@@ -217,8 +224,8 @@ try:
                     desired_port_virtual_camera_usd=(
                         runtime.desired_port_virtual_camera_usd
                     ),
-                    aperture_width_m=CONFIG.perception.port_width_m,
-                    aperture_height_m=CONFIG.perception.port_height_m,
+                    aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
+                    aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
                 )
                 print(
                     "[LIVE FRONT PLANE] "
