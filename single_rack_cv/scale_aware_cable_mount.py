@@ -22,6 +22,12 @@ from cable_mount import (
     CableMount,
     _world_transform,
 )
+from connector_tcp_usd import (
+    TCP_PROBE_ONLY,
+    author_tcp_probe_markers,
+    derive_plug_frame_from_mesh,
+    log_tcp_derivation,
+)
 from tail_preshape import preshape_free_hanging_tail
 
 
@@ -75,29 +81,67 @@ def _matrix_to_gf_quatf_compatible(rotation: np.ndarray) -> Gf.Quatf:
 class ScaleAwareCableMount(CableMount):
     """CableMount variant that removes scale only from rigid-only values."""
 
+    def __init__(self, cfg) -> None:
+        super().__init__(cfg)
+        self.tcp_probe_only = bool(TCP_PROBE_ONLY)
+        self.insertion_tcp_derivation = None
+        self.tcp_probe_marker_paths: tuple[str, str] | None = None
+
     def author_before_play(
         self,
         stage,
         hand_path: str,
         world_from_toolcenter: np.ndarray,
     ) -> None:
-        """Use affine-safe placement helpers only during pre-play authoring."""
+        """Use affine-safe placement and a mesh-derived insertion TCP."""
 
         original_compute = (
             cable_mount_module.compute_world_from_root_for_tip
         )
         original_converter = cable_mount_module._numpy_to_gf_matrix
+        original_detect = cable_mount_module.detect_plug_frame
+
+        def detect_mesh_derived_frame(*args, **kwargs):
+            legacy_frame = original_detect(*args, **kwargs)
+            frame, derivation, components = derive_plug_frame_from_mesh(
+                stage=stage,
+                tracked_plug_path=self.mount_cfg.tracked_plug_path,
+                legacy_frame=legacy_frame,
+                aperture_width_m=self.cfg.perception.port_width_m,
+                aperture_height_m=self.cfg.perception.port_height_m,
+            )
+            self.insertion_tcp_derivation = derivation
+            self._insertion_tcp_component_count = len(components)
+            return frame
+
         cable_mount_module.compute_world_from_root_for_tip = (
             compute_world_from_root_for_tip_preserving_affine
         )
         cable_mount_module._numpy_to_gf_matrix = (
             _numpy_to_gf_matrix_affine
         )
+        cable_mount_module.detect_plug_frame = detect_mesh_derived_frame
         try:
             super().author_before_play(
                 stage=stage,
                 hand_path=hand_path,
                 world_from_toolcenter=world_from_toolcenter,
+            )
+            if self.insertion_tcp_derivation is None:
+                raise RuntimeError(
+                    "Mesh-derived connector TCP was not produced during mount authoring"
+                )
+            self.tcp_probe_marker_paths = author_tcp_probe_markers(
+                stage=stage,
+                hand_path=hand_path,
+                tracked_plug_path=self.mount_cfg.tracked_plug_path,
+                derivation=self.insertion_tcp_derivation,
+            )
+            log_tcp_derivation(
+                self.insertion_tcp_derivation,
+                self._insertion_tcp_component_count,
+                self.tcp_probe_marker_paths[0],
+                self.tcp_probe_marker_paths[1],
             )
             self._preshape_deformable_tail()
         finally:
@@ -105,6 +149,7 @@ class ScaleAwareCableMount(CableMount):
                 original_compute
             )
             cable_mount_module._numpy_to_gf_matrix = original_converter
+            cable_mount_module.detect_plug_frame = original_detect
 
     def _preshape_deformable_tail(self) -> None:
         """Curve the cable away from the palm while keeping both ends fixed."""
