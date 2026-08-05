@@ -18,7 +18,9 @@ from connector_tcp import (
 )
 
 
-TCP_PROBE_ONLY = True
+TCP_PROBE_ONLY = False
+PRECONTACT_ALIGNMENT_ONLY = True
+PRECONTACT_HOLD_OFFSET_M = 0.002
 LEGACY_TCP_MARKER_PATH = "LegacyPlugTipProbe"
 DERIVED_TCP_MARKER_PATH = "DerivedInsertionTcpProbe"
 TCP_MARKER_RADIUS_M = 0.00125
@@ -407,6 +409,8 @@ def log_tcp_derivation(
         f"  legacy marker: {legacy_marker_path} (red)\n"
         f"  derived marker: {derived_marker_path} (cyan)\n"
         "  port perception and marker positions: unchanged\n"
-        "  insertion motion: locked for this probe run",
+        "  precontact alignment: enabled\n"
+        f"  terminal hold before opening: {PRECONTACT_HOLD_OFFSET_M * 1000.0:.3f} mm\n"
+        "  penetration commands: disabled",
         flush=True,
     )
