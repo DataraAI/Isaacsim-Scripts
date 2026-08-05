@@ -83,6 +83,7 @@ def estimate_plane_rectified_front_lip_center(
     plane_normal_world: np.ndarray,
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
+    search_width_m: float | None = None,
     padding_m: float = DEFAULT_RECTIFIED_PADDING_M,
     resolution_m: float = DEFAULT_RECTIFIED_RESOLUTION_M,
     max_center_disagreement_m: float = MAX_CENTER_DISAGREEMENT_M,
@@ -136,6 +137,7 @@ def estimate_plane_rectified_front_lip_center(
         left_rectified,
         aperture_width_m=aperture_width_m,
         aperture_height_m=aperture_height_m,
+        search_width_m=search_width_m,
         max_edge_reprojection_px=max_edge_reprojection_px,
     )
     _write_debug_image(
@@ -151,6 +153,7 @@ def estimate_plane_rectified_front_lip_center(
         right_rectified,
         aperture_width_m=aperture_width_m,
         aperture_height_m=aperture_height_m,
+        search_width_m=search_width_m,
         max_edge_reprojection_px=max_edge_reprojection_px,
     )
     _write_debug_image(
