@@ -35,6 +35,13 @@ class HandoffPositionHoldRuntimeWiringTests(unittest.TestCase):
         self.assertIn("update_handoff_position_command", source)
         self.assertIn("position=update.command_position_m", source)
 
+    def test_completion_resets_command_to_physical_goal_before_insertion(self):
+        source = (ROOT / "handoff_position_hold_runtime.py").read_text()
+        reset_index = source.index("position=goal")
+        complete_index = source.index("state.complete = True")
+        self.assertLess(reset_index, complete_index)
+        self.assertIn("applied_command_bias_m = update.command_bias_m", source)
+
     def test_deadlock_has_a_hard_fail_closed_timeout(self):
         source = (ROOT / "handoff_position_hold_runtime.py").read_text()
         self.assertIn("_HANDOFF_POSITION_HOLD_HARD_TIMEOUT_S = 10.0", source)
