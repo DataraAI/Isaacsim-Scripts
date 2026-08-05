@@ -31,8 +31,9 @@ class FullInsertionRuntimeWiringTests(unittest.TestCase):
             source,
         )
         self.assertIn("FULL GUARDED INSERTION MODE ACTIVE", source)
-        self.assertIn("total commands: 48", source)
-        self.assertIn("final depth inside opening: +10.000 mm", source)
+        self.assertIn("_EXPECTED_TOTAL_COMMANDS = 48", source)
+        self.assertIn("_EXPECTED_FINAL_PORT_DEPTH_M = 0.010", source)
+        self.assertIn("final depth inside opening", source)
 
     def test_full_runtime_keeps_proven_two_stage_controller(self):
         source = (ROOT / "settled_stereo_handoff_runtime.py").read_text()
