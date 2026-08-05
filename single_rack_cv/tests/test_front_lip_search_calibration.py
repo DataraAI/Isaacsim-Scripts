@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 from front_lip_calibration import (
     VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
 )
 from plane_rectified_fitting import fit_rectified_front_lip
 from plane_rectified_types import PlaneFrame, RectifiedEye
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontLipSearchCalibrationTests(unittest.TestCase):
@@ -95,7 +100,7 @@ class FrontLipSearchCalibrationTests(unittest.TestCase):
             rectified,
             aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
             aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
-            search_width_m=0.0114,
+            search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
         )
 
         self.assertLess(
@@ -103,6 +108,24 @@ class FrontLipSearchCalibrationTests(unittest.TestCase):
             0.0002,
         )
         self.assertLess(abs(float(fit.center_uv_m[0])), 0.0001)
+
+    def test_search_width_reaches_both_eye_fitters_in_production(self):
+        live_source = (ROOT / "live_control_projective.py").read_text(
+            encoding="utf-8"
+        )
+        projective_source = (
+            ROOT / "outer_bezel_projective_center.py"
+        ).read_text(encoding="utf-8")
+        stereo_source = (ROOT / "plane_rectified_front_lip.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("search_width_m=search_width_m", live_source)
+        self.assertIn("search_width_m=search_width_m", projective_source)
+        self.assertGreaterEqual(
+            stereo_source.count("search_width_m=search_width_m"),
+            2,
+        )
 
 
 if __name__ == "__main__":
