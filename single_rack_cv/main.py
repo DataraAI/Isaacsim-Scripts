@@ -147,6 +147,24 @@ try:
         cfg=CONFIG,
     )
     runtime.prepare_for_perception()
+
+    if (
+        runtime.cable_mount is not None
+        and getattr(runtime.cable_mount, "tcp_probe_only", False)
+    ):
+        print(
+            "[CONNECTOR TCP PROBE] MOTION LOCKED\n"
+            "  red marker: legacy full-bounds tip\n"
+            "  cyan marker: mesh-derived insertion TCP\n"
+            "  inspect the markers on the RJ45 nose, then close Isaac Sim\n"
+            "  YOLOE, visual servo, handoff, and insertion are disabled",
+            flush=True,
+        )
+        while runtime.is_running():
+            runtime.step()
+            runtime.update_ik()
+        raise SystemExit(0)
+
     debug = DebugOutputs(CONFIG)
     detector = YOLOEPortDetector(CONFIG.yoloe)
     detector.initialize()
