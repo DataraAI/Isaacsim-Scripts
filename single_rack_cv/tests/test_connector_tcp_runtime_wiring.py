@@ -22,13 +22,15 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("EstimatedPortPoint", source)
         self.assertNotIn("FrozenPortPoint", source)
 
-    def test_probe_locks_motion_before_detector_initialization(self):
-        source = (ROOT / "main.py").read_text()
-        probe = source.index("[CONNECTOR TCP PROBE] MOTION LOCKED")
-        detector = source.index("detector.initialize()")
+    def test_rejected_derivation_still_locks_before_detector_initialization(self):
+        main_source = (ROOT / "main.py").read_text()
+        mount_source = (ROOT / "scale_aware_cable_mount.py").read_text()
+        probe = main_source.index("[CONNECTOR TCP PROBE] MOTION LOCKED")
+        detector = main_source.index("detector.initialize()")
         self.assertLess(probe, detector)
-        self.assertIn("runtime.step()", source[probe:detector])
-        self.assertNotIn("update_partial_insertion", source[probe:detector])
+        self.assertIn("runtime.step()", main_source[probe:detector])
+        self.assertNotIn("update_partial_insertion", main_source[probe:detector])
+        self.assertIn("not derivation_accepted", mount_source)
 
     def test_usd_adapter_uses_rear_profile_donor_and_two_markers(self):
         source = (ROOT / "connector_tcp_usd.py").read_text()
@@ -38,7 +40,10 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertIn("profile setback mm", source)
         self.assertIn("LegacyPlugTipProbe", source)
         self.assertIn("DerivedInsertionTcpProbe", source)
-        self.assertIn("TCP_PROBE_ONLY = True", source)
+        self.assertIn("TCP_PROBE_ONLY = False", source)
+        self.assertIn("PRECONTACT_ALIGNMENT_ONLY = True", source)
+        self.assertIn("PRECONTACT_HOLD_OFFSET_M = 0.002", source)
+        self.assertIn("penetration commands: disabled", source)
         self.assertNotIn("world_offset", source)
         self.assertNotIn("port_offset", source)
 
