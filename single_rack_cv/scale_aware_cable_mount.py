@@ -23,6 +23,8 @@ from cable_mount import (
     _world_transform,
 )
 from connector_tcp_usd import (
+    PRECONTACT_ALIGNMENT_ONLY,
+    PRECONTACT_HOLD_OFFSET_M,
     TCP_PROBE_ONLY,
     author_tcp_probe_markers,
     derive_plug_frame_from_mesh,
@@ -84,6 +86,8 @@ class ScaleAwareCableMount(CableMount):
     def __init__(self, cfg) -> None:
         super().__init__(cfg)
         self.tcp_probe_only = bool(TCP_PROBE_ONLY)
+        self.precontact_alignment_only = bool(PRECONTACT_ALIGNMENT_ONLY)
+        self.precontact_hold_offset_m = float(PRECONTACT_HOLD_OFFSET_M)
         self.insertion_tcp_derivation = None
         self.tcp_probe_marker_paths: tuple[str, str] | None = None
 
@@ -131,6 +135,20 @@ class ScaleAwareCableMount(CableMount):
                 raise RuntimeError(
                     "Mesh-derived connector TCP was not produced during mount authoring"
                 )
+
+            # A rejected geometry derivation must remain motion-locked even if
+            # precontact mode is enabled globally. Only an accepted mesh TCP may
+            # proceed to camera alignment and the nonpenetrating approach.
+            derivation_accepted = (
+                self.insertion_tcp_derivation.candidate_count > 0
+            )
+            self.tcp_probe_only = bool(
+                TCP_PROBE_ONLY or not derivation_accepted
+            )
+            self.precontact_alignment_only = bool(
+                PRECONTACT_ALIGNMENT_ONLY and derivation_accepted
+            )
+
             self.tcp_probe_marker_paths = author_tcp_probe_markers(
                 stage=stage,
                 hand_path=hand_path,
