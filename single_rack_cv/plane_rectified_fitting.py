@@ -31,9 +31,17 @@ def fit_rectified_front_lip(
     *,
     aperture_width_m: float = 0.0114,
     aperture_height_m: float = 0.0070,
+    search_width_m: float | None = None,
     max_edge_reprojection_px: float = MAX_EDGE_REPROJECTION_PX,
 ) -> FrontLipFit:
-    """Fit one independent physical front-lip quadrilateral from RGB."""
+    """Fit one independent physical front-lip quadrilateral from RGB.
+
+    ``search_width_m`` controls only how far outside the semantic mask the
+    side-edge detector searches. ``aperture_width_m`` remains the physical
+    width used to validate the completed fit. Keeping those roles separate
+    prevents a calibrated visible width from widening localization into bezel
+    or recessed-cavity edges.
+    """
 
     resolution = rectified.resolution_m
     broad_start, broad_end, mask_left, mask_right = _mask_lower_mouth_geometry(
@@ -45,7 +53,15 @@ def fit_rectified_front_lip(
     gradient_x = cv2.Sobel(smooth, cv2.CV_64F, 1, 0, ksize=3)
     gradient_y = cv2.Sobel(smooth, cv2.CV_64F, 0, 1, ksize=3)
 
-    exterior_span = int(round(0.45 * float(aperture_width_m) / resolution))
+    localization_width_m = (
+        float(aperture_width_m)
+        if search_width_m is None
+        else float(search_width_m)
+    )
+    if not math.isfinite(localization_width_m) or localization_width_m <= 0.0:
+        raise ValueError("Front-lip search width must be positive and finite.")
+
+    exterior_span = int(round(0.45 * localization_width_m / resolution))
     interior_span = int(round(0.0010 / resolution))
     left_start = max(1, int(round(mask_left)) - exterior_span)
     left_end = min(rectified.rgb.shape[1] - 2, int(round(mask_left)) + interior_span)
