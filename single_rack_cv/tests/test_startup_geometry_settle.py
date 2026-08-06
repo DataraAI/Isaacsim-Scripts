@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN_PATH = ROOT / "main.py"
 RUNTIME_PATH = ROOT / "settled_stereo_handoff_runtime.py"
 FULL_RUNTIME_PATH = ROOT / "full_insertion_runtime.py"
-POSITION_HOLD_RUNTIME_PATH = ROOT / "handoff_position_hold_runtime.py"
 FULL_BASE_RUNTIME_PATH = ROOT / "full_insertion_base_runtime.py"
 ANGLED_CONFIG_PATH = ROOT / "angled_hand_config.py"
 
@@ -18,7 +17,6 @@ class StartupGeometrySettleTests(unittest.TestCase):
     def test_main_selects_full_wrapper_over_settling_runtime(self):
         source = MAIN_PATH.read_text(encoding="utf-8")
         export_source = FULL_RUNTIME_PATH.read_text(encoding="utf-8")
-        hold_source = POSITION_HOLD_RUNTIME_PATH.read_text(encoding="utf-8")
         base_source = FULL_BASE_RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
@@ -26,13 +24,12 @@ class StartupGeometrySettleTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "from handoff_position_hold_runtime import "
-            "AngledHandStereoHandoffRuntime",
+            "from full_insertion_base_runtime import (",
             export_source,
         )
-        self.assertIn(
-            "from full_insertion_base_runtime import (",
-            hold_source,
+        self.assertNotIn(
+            "from handoff_position_hold_runtime import",
+            export_source,
         )
         self.assertIn(
             "from settled_stereo_handoff_runtime import (",
@@ -70,7 +67,6 @@ class StartupGeometrySettleTests(unittest.TestCase):
     def test_runtime_installs_consecutive_pose_insertion_controller(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
         export_source = FULL_RUNTIME_PATH.read_text(encoding="utf-8")
-        hold_source = POSITION_HOLD_RUNTIME_PATH.read_text(encoding="utf-8")
         base_source = FULL_BASE_RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
@@ -85,8 +81,14 @@ class StartupGeometrySettleTests(unittest.TestCase):
             "self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(",
             source,
         )
-        self.assertNotIn("ConsecutivePoseInsertionController(", export_source)
-        self.assertNotIn("ConsecutivePoseInsertionController(", hold_source)
+        self.assertIn(
+            "TrimmedConsecutivePoseInsertionController(",
+            export_source,
+        )
+        self.assertIn(
+            "self._insertion_axis_adapter = ExplicitInsertionAxisAdapter(",
+            export_source,
+        )
         self.assertNotIn("ConsecutivePoseInsertionController(", base_source)
         self.assertIn("self.partial_insertion.limits", base_source)
 
@@ -119,12 +121,12 @@ class StartupGeometrySettleTests(unittest.TestCase):
         source = ANGLED_CONFIG_PATH.read_text(encoding="utf-8")
         self.assertIn("palm_side_tolerance_deg: float = 1.0", source)
         runtime_source = RUNTIME_PATH.read_text(encoding="utf-8")
-        hold_source = POSITION_HOLD_RUNTIME_PATH.read_text(encoding="utf-8")
+        export_source = FULL_RUNTIME_PATH.read_text(encoding="utf-8")
         base_source = FULL_BASE_RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertNotIn("1.01", runtime_source)
         self.assertNotIn("tolerance_deg =", runtime_source)
-        self.assertNotIn("max_orientation_error_deg=", hold_source)
+        self.assertNotIn("max_orientation_error_deg=", export_source)
         self.assertNotIn("max_orientation_error_deg=", base_source)
         self.assertIn("limits.max_orientation_error_deg", base_source)
 
