@@ -36,6 +36,30 @@ class HandoffPositionHoldTests(unittest.TestCase):
         )
         self.assertFalse(update.bias_saturated)
 
+    def test_observed_point_four_zero_seven_mm_deadlock_enters_original_gate(self):
+        goal = np.zeros(3)
+        command = goal.copy()
+        static_bias = np.array([0.000407, 0.0, 0.0])
+        physical_error_m = float("inf")
+
+        for _ in range(20):
+            actual = command - static_bias
+            physical_error_m = float(np.linalg.norm(goal - actual))
+            if physical_error_m <= 0.0003:
+                break
+            update = update_handoff_position_command(
+                goal_position_m=goal,
+                actual_position_m=actual,
+                current_command_position_m=command,
+                gain=0.35,
+                maximum_step_m=0.0001,
+                maximum_bias_m=0.001,
+            )
+            command = update.command_position_m
+
+        self.assertLessEqual(physical_error_m, 0.0003)
+        self.assertLessEqual(float(np.linalg.norm(command - goal)), 0.001)
+
     def test_constant_point_four_five_five_mm_bias_enters_original_gate(self):
         goal = np.zeros(3)
         command = goal.copy()
