@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN_PATH = ROOT / "main.py"
 RUNTIME_PATH = ROOT / "settled_stereo_handoff_runtime.py"
 FULL_RUNTIME_PATH = ROOT / "full_insertion_runtime.py"
+HANDOFF_HOLD_RUNTIME_PATH = ROOT / "handoff_position_hold_runtime.py"
 FULL_BASE_RUNTIME_PATH = ROOT / "full_insertion_base_runtime.py"
 ANGLED_CONFIG_PATH = ROOT / "angled_hand_config.py"
 
@@ -17,6 +18,7 @@ class StartupGeometrySettleTests(unittest.TestCase):
     def test_main_selects_full_wrapper_over_settling_runtime(self):
         source = MAIN_PATH.read_text(encoding="utf-8")
         export_source = FULL_RUNTIME_PATH.read_text(encoding="utf-8")
+        hold_source = HANDOFF_HOLD_RUNTIME_PATH.read_text(encoding="utf-8")
         base_source = FULL_BASE_RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
@@ -24,12 +26,16 @@ class StartupGeometrySettleTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "from full_insertion_base_runtime import (",
+            "from handoff_position_hold_runtime import (",
             export_source,
         )
         self.assertNotIn(
-            "from handoff_position_hold_runtime import",
+            "from full_insertion_base_runtime import (",
             export_source,
+        )
+        self.assertIn(
+            "from full_insertion_base_runtime import (",
+            hold_source,
         )
         self.assertIn(
             "from settled_stereo_handoff_runtime import (",
