@@ -11,6 +11,13 @@ Usage:
 
 import sys
 
+import matplotlib
+
+try:
+    matplotlib.use("TkAgg")
+except Exception:
+    matplotlib.use("Qt5Agg")  # fallback if tkinter / TkAgg isn't available
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import RectangleSelector
