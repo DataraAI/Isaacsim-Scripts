@@ -4,30 +4,28 @@
 from __future__ import annotations
 
 
-# The live August 5 workstation run produced 91 visible front-lip width
-# measurements with a 15.287 mm median and 0.251 mm population standard
-# deviation. Production rounds the center of that cluster to 15.3 mm.
-VISIBLE_FRONT_LIP_WIDTH_M = 0.0153
+# Stable right-eye and non-bezel left-eye overlays from the August 6 failure
+# measure 254-260 pixels at 0.05 mm/pixel, or 12.7-13.0 mm. Production uses
+# the center of that physical-mouth cluster. The earlier 15.3 mm cluster was
+# the farther outer bezel and is retained below only as rejected evidence.
+VISIBLE_FRONT_LIP_WIDTH_M = 0.0129
 VISIBLE_FRONT_LIP_HEIGHT_M = 0.0070
 
-# Side-edge localization must stay close to the semantic lower-mouth wall.
-# The fitter searches 45% of this span outside each mask boundary, so 5.0 mm
-# gives a 2.25 mm exterior search radius. That retains the observed mask-to-lip
-# under-coverage while excluding the farther outer-bezel edge that the left eye
-# selected in the August 6 failed run. This does not change the accepted visible
-# width, the independent-eye fit, or the 0.5 mm stereo disagreement gate.
-VISIBLE_FRONT_LIP_SEARCH_WIDTH_M = 0.0050
+# This is now the maximum side-edge search span, not the selected geometry.
+# The width-prior wrapper evaluates five bounded radii from 5.0 to 11.4 mm and
+# accepts only a fit within 1.0 mm of the 12.9 mm physical-mouth width.
+VISIBLE_FRONT_LIP_SEARCH_WIDTH_M = 0.0114
 
-LIVE_WIDTH_SAMPLE_COUNT = 91
-LIVE_WIDTH_MEDIAN_M = 0.015287
-LIVE_WIDTH_POPULATION_STD_M = 0.0002513259929648458
+REJECTED_OUTER_BEZEL_SAMPLE_COUNT = 91
+REJECTED_OUTER_BEZEL_MEDIAN_M = 0.015287
+REJECTED_OUTER_BEZEL_POPULATION_STD_M = 0.0002513259929648458
 
 
 __all__ = [
     "VISIBLE_FRONT_LIP_WIDTH_M",
     "VISIBLE_FRONT_LIP_HEIGHT_M",
     "VISIBLE_FRONT_LIP_SEARCH_WIDTH_M",
-    "LIVE_WIDTH_SAMPLE_COUNT",
-    "LIVE_WIDTH_MEDIAN_M",
-    "LIVE_WIDTH_POPULATION_STD_M",
+    "REJECTED_OUTER_BEZEL_SAMPLE_COUNT",
+    "REJECTED_OUTER_BEZEL_MEDIAN_M",
+    "REJECTED_OUTER_BEZEL_POPULATION_STD_M",
 ]
