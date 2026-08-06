@@ -44,22 +44,30 @@ def sample(frame: int, position=(0.0, 0.0, 0.0)) -> InsertionSample:
     )
 
 
+def collect_commands(
+    controller: PartialInsertionController,
+) -> list:
+    event = controller.update(sample(0))
+    commands = [event.command]
+    frame = 0
+
+    while event.kind != "complete":
+        command = commands[-1]
+        for _ in range(6):
+            frame += 1
+            event = controller.update(
+                sample(frame, command.target_position_m)
+            )
+        if event.command is not None:
+            commands.append(event.command)
+
+    return commands
+
+
 class TwoStageInsertionTests(unittest.TestCase):
     def test_exact_stage_boundaries_and_final_port_depth(self):
         controller = PartialInsertionController(limits())
-        event = controller.update(sample(0))
-        commands = [event.command]
-        frame = 0
-
-        while event.kind != "complete":
-            command = commands[-1]
-            for _ in range(6):
-                frame += 1
-                event = controller.update(
-                    sample(frame, command.target_position_m)
-                )
-            if event.command is not None:
-                commands.append(event.command)
+        commands = collect_commands(controller)
 
         self.assertEqual(controller.limits.total_step_count, 48)
         self.assertEqual(len(commands), 48)
@@ -80,6 +88,50 @@ class TwoStageInsertionTests(unittest.TestCase):
         self.assertAlmostEqual(commands[47].commanded_depth_m, 0.060)
         self.assertAlmostEqual(commands[47].commanded_port_depth_m, 0.010)
         self.assertIs(controller.phase, InsertionPhase.COMPLETE)
+
+    def test_configured_world_trim_shifts_every_target_without_changing_depths(self):
+        baseline = PartialInsertionController(limits())
+        baseline_commands = collect_commands(baseline)
+
+        trim_world_m = np.array([0.0, -0.00015, -0.00025])
+        trimmed = PartialInsertionController(limits())
+        trimmed.set_target_offset_world_m(trim_world_m)
+        trimmed_commands = collect_commands(trimmed)
+
+        self.assertEqual(len(trimmed_commands), 48)
+        self.assertLess(
+            float(np.linalg.norm(trim_world_m)),
+            trimmed.limits.max_lateral_drift_m,
+        )
+
+        for baseline_command, trimmed_command in zip(
+            baseline_commands,
+            trimmed_commands,
+        ):
+            np.testing.assert_allclose(
+                trimmed_command.target_position_m
+                - baseline_command.target_position_m,
+                trim_world_m,
+                atol=1.0e-12,
+                rtol=0.0,
+            )
+            self.assertEqual(
+                trimmed_command.stage,
+                baseline_command.stage,
+            )
+            self.assertAlmostEqual(
+                trimmed_command.commanded_depth_m,
+                baseline_command.commanded_depth_m,
+            )
+            self.assertAlmostEqual(
+                trimmed_command.commanded_port_depth_m,
+                baseline_command.commanded_port_depth_m,
+            )
+
+        self.assertAlmostEqual(
+            trimmed_commands[-1].commanded_port_depth_m,
+            0.010,
+        )
 
 
 if __name__ == "__main__":
