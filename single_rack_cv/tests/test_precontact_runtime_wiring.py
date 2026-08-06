@@ -18,6 +18,14 @@ class FullInsertionRuntimeWiringTests(unittest.TestCase):
         )
         self.assertNotIn("from precontact_runtime import (", source)
         self.assertIn(
+            "from full_insertion_base_runtime import",
+            export_source,
+        )
+        self.assertIn(
+            "from insertion_target_trim import",
+            export_source,
+        )
+        self.assertNotIn(
             "from handoff_position_hold_runtime import",
             export_source,
         )
@@ -42,6 +50,7 @@ class FullInsertionRuntimeWiringTests(unittest.TestCase):
 
     def test_full_runtime_keeps_proven_two_stage_controller(self):
         source = (ROOT / "settled_stereo_handoff_runtime.py").read_text()
+        trim_source = (ROOT / "insertion_target_trim.py").read_text()
         self.assertIn("ConsecutivePoseInsertionController", source)
         self.assertIn("ExplicitInsertionAxisAdapter", source)
         self.assertIn("PROVEN MAIN INSERTION SETTLING ACTIVE", source)
@@ -49,6 +58,11 @@ class FullInsertionRuntimeWiringTests(unittest.TestCase):
         self.assertIn("required consecutive frames: 6", source)
         self.assertNotIn("max_lateral_drift_m=", source)
         self.assertNotIn("max_orientation_error_deg=", source)
+        self.assertIn(
+            "ConsecutivePoseInsertionController",
+            trim_source,
+        )
+        self.assertIn("command = super()._issue_next_command", trim_source)
 
     def test_rejected_tcp_still_forces_probe_lock(self):
         source = (ROOT / "scale_aware_cable_mount.py").read_text()
