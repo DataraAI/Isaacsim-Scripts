@@ -23,10 +23,10 @@ class InsertionOnlyRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("apply_tool_goal_trim", export_source)
         self.assertNotIn("_handoff_goal_world_m", export_source)
 
-    def test_exact_trim_is_installed_on_insertion_controller(self):
+    def test_exact_calibrated_offset_is_installed_on_insertion_controller(self):
         source = (ROOT / "full_insertion_runtime.py").read_text()
 
-        self.assertIn("[0.0, -0.00015, -0.00025]", source)
+        self.assertIn("[0.0, -0.00030, -0.00045]", source)
         self.assertIn(
             "TrimmedConsecutivePoseInsertionController(",
             source,
@@ -40,14 +40,31 @@ class InsertionOnlyRuntimeWiringTests(unittest.TestCase):
             source,
         )
 
-    def test_log_states_perception_and_handoff_are_unchanged(self):
+    def test_log_states_perception_handoff_and_depth_are_unchanged(self):
         source = (ROOT / "full_insertion_runtime.py").read_text()
 
-        self.assertIn("INSERTION TARGET TRIM ACTIVE", source)
+        self.assertIn("INSERTION TARGET CALIBRATION ACTIVE", source)
         self.assertIn("perception-derived port point: unchanged", source)
         self.assertIn("50 mm handoff goal: unchanged", source)
         self.assertIn("insertion depth schedule: unchanged at 48 commands", source)
-        self.assertIn("trim remains visible to the existing drift guard", source)
+        self.assertIn(
+            "lateral drift reference: calibrated insertion line",
+            source,
+        )
+        self.assertIn(
+            "lateral deviation abort limit:",
+            source,
+        )
+        self.assertNotIn("remaining lateral budget", source)
+
+    def test_calibration_controller_references_calibrated_line_for_drift(self):
+        source = (ROOT / "insertion_target_trim.py").read_text()
+
+        self.assertIn("_MAXIMUM_INSERTION_CALIBRATION_M = 0.001", source)
+        self.assertIn("def _calibrated_lateral_drift_m", source)
+        self.assertIn("calibrated_origin", source)
+        self.assertIn("def _metrics(self, sample)", source)
+        self.assertIn("lateral_drift_m=", source)
 
     def test_old_handoff_experiment_is_not_the_production_export(self):
         export_source = (ROOT / "full_insertion_runtime.py").read_text()
