@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Production full insertion with a calibrated insertion-only centerline."""
+"""Production full insertion with bounded handoff hold and calibrated centerline."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from full_insertion_base_runtime import (
+from handoff_position_hold_runtime import (
     AngledHandStereoHandoffRuntime as _BaseAngledHandStereoHandoffRuntime,
 )
 from insertion_target_trim import TrimmedConsecutivePoseInsertionController
@@ -22,7 +22,7 @@ _INSERTION_TARGET_OFFSET_WORLD_M = np.array(
 class AngledHandStereoHandoffRuntime(
     _BaseAngledHandStereoHandoffRuntime
 ):
-    """Calibrate only the guarded insertion line; preserve perception/handoff."""
+    """Settle the frozen handoff, then calibrate only the insertion line."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -47,6 +47,7 @@ class AngledHandStereoHandoffRuntime(
             "INSERTION TARGET CALIBRATION ACTIVE\n"
             "  perception-derived port point: unchanged\n"
             "  50 mm handoff goal: unchanged\n"
+            "  bounded handoff position hold: active before insertion\n"
             "  insertion depth schedule: unchanged at 48 commands\n"
             "  insertion target line world Y: -0.300 mm\n"
             "  insertion target line world Z: -0.450 mm\n"
