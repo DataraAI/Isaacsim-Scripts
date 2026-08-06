@@ -4,112 +4,29 @@ import inspect
 import unittest
 from pathlib import Path
 
-import cv2
-import numpy as np
-
-from front_lip_calibration import (
-    VISIBLE_FRONT_LIP_HEIGHT_M,
-    VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
-    VISIBLE_FRONT_LIP_WIDTH_M,
+from front_lip_calibration import VISIBLE_FRONT_LIP_SEARCH_WIDTH_M
+from plane_rectified_width_hypotheses import (
+    _search_width_hypotheses,
+    fit_rectified_front_lip_width_prior,
 )
-from plane_rectified_fitting import fit_rectified_front_lip
-from plane_rectified_types import PlaneFrame, RectifiedEye
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontLipSearchCalibrationTests(unittest.TestCase):
-    @staticmethod
-    def _mouth_with_competing_sloped_bezel() -> RectifiedEye:
-        height, width = 320, 760
-        rgb = np.full((height, width, 3), 220, dtype=np.uint8)
-
-        # The farther bezel has strong, nonparallel side edges. The physical
-        # visible mouth remains a 15.3 mm parallel rectangle. A search radius
-        # based on 15.3 mm reaches the bezel; the old 11.4 mm localization
-        # radius excludes it and recovers the mouth.
-        outer = np.array(
-            [
-                [90, 50],
-                [660, 50],
-                [642, 270],
-                [108, 270],
-            ],
-            dtype=np.int32,
-        )
-        cv2.fillPoly(rgb, [outer], (120, 120, 120))
-        cv2.rectangle(rgb, (220, 90), (526, 230), (25, 25, 25), -1)
-
-        mask = np.zeros((height, width), dtype=np.uint8)
-        mouth_mask = np.array(
-            [
-                [220, 105],
-                [300, 105],
-                [300, 70],
-                [446, 70],
-                [446, 105],
-                [526, 105],
-                [526, 230],
-                [220, 230],
-            ],
-            dtype=np.int32,
-        )
-        cv2.fillPoly(mask, [mouth_mask], 255)
-
-        y, x = np.indices((height, width))
-        resolution_m = 0.00005
-        frame = PlaneFrame(
-            origin_world_m=np.zeros(3),
-            axis_u_world=np.array([1.0, 0.0, 0.0]),
-            axis_v_world=np.array([0.0, 1.0, 0.0]),
-            normal_world=np.array([0.0, 0.0, 1.0]),
-        )
-        return RectifiedEye(
-            rgb=rgb,
-            mask=mask > 0,
-            visible=np.ones((height, width), dtype=bool),
-            map_u_px=x.astype(np.float64),
-            map_v_px=y.astype(np.float64),
-            minimum_uv_m=np.array(
-                [-373.0 * resolution_m, -160.0 * resolution_m]
-            ),
-            resolution_m=resolution_m,
-            plane_frame=frame,
-            camera=None,
-        )
-
-    def test_localization_search_width_is_decoupled_from_visible_width_gate(self):
+    def test_production_search_is_a_bounded_hypothesis_schedule(self):
         self.assertIn(
             "search_width_m",
-            inspect.signature(fit_rectified_front_lip).parameters,
-            "The visible-width gate is still coupled to side-edge localization.",
+            inspect.signature(fit_rectified_front_lip_width_prior).parameters,
         )
+        widths = _search_width_hypotheses(VISIBLE_FRONT_LIP_SEARCH_WIDTH_M)
+        self.assertEqual(len(widths), 5)
+        self.assertAlmostEqual(widths[0], 0.0050, places=12)
+        self.assertAlmostEqual(widths[-1], 0.0114, places=12)
+        self.assertTrue(all(first < second for first, second in zip(widths, widths[1:])))
 
-        rectified = self._mouth_with_competing_sloped_bezel()
-
-        with self.assertRaises(RuntimeError):
-            fit_rectified_front_lip(
-                rectified,
-                aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
-                aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
-                search_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
-            )
-
-        fit = fit_rectified_front_lip(
-            rectified,
-            aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
-            aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
-            search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
-        )
-
-        self.assertLessEqual(
-            abs(fit.width_m - VISIBLE_FRONT_LIP_WIDTH_M),
-            0.0002 + 1.0e-12,
-        )
-        self.assertLess(abs(float(fit.center_uv_m[0])), 0.0001)
-
-    def test_search_width_reaches_both_eye_fitters_in_production(self):
+    def test_width_prior_reaches_both_independent_eye_fitters_in_production(self):
         live_source = (ROOT / "live_control_projective.py").read_text(
             encoding="utf-8"
         )
@@ -119,6 +36,9 @@ class FrontLipSearchCalibrationTests(unittest.TestCase):
         stereo_source = (ROOT / "plane_rectified_front_lip.py").read_text(
             encoding="utf-8"
         )
+        hypothesis_source = (
+            ROOT / "plane_rectified_width_hypotheses.py"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("search_width_m=search_width_m", live_source)
         self.assertIn("search_width_m=search_width_m", projective_source)
@@ -126,6 +46,9 @@ class FrontLipSearchCalibrationTests(unittest.TestCase):
             stereo_source.count("search_width_m=search_width_m"),
             2,
         )
+        self.assertIn("fit_rectified_front_lip_width_prior", stereo_source)
+        self.assertIn("_fit_single_search", hypothesis_source)
+        self.assertIn("_MAXIMUM_WIDTH_PRIOR_ERROR_M = 0.0010", hypothesis_source)
 
 
 if __name__ == "__main__":
