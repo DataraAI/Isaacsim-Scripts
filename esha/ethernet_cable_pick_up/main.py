@@ -17,6 +17,7 @@ from __future__ import annotations
 import traceback
 
 from config import CONFIG
+from head_detector import YOLOEHeadDetector
 from logging_tee import RunOutputTee
 from perception import process_stereo_cable
 
@@ -53,6 +54,9 @@ try:
         cfg=CONFIG,
     )
     debug = DebugOutputs(CONFIG)
+
+    head_detector = YOLOEHeadDetector(CONFIG.cable_head_yoloe)
+    head_detector.initialize()
 
     capture_index = 0
 
@@ -91,6 +95,7 @@ try:
                 ),
                 previous_left=previous_left,
                 previous_right=previous_right,
+                head_detector=head_detector,
             )
             runtime.observe_visual_servo(observation)
             debug.handle(

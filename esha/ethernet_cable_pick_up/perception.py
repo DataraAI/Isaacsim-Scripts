@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -1501,12 +1502,23 @@ def process_stereo_cable(
     desired_cable_virtual_camera_usd: np.ndarray,
     previous_left: CableDetection | None,
     previous_right: CableDetection | None,
+    head_detector: "YOLOEHeadDetector | None" = None,
 ) -> StereoCableObservation:
     """Require both eyes, triangulate the matched cable center, and compute one correction."""
-    left_candidates = detect_cable_candidates(frame.left.rgb, cfg)
+    left_roi, right_roi = (None, None)
+    if head_detector is not None:
+        left_roi, right_roi = head_detector.coarse_roi_stereo(
+            frame.left.rgb, frame.right.rgb
+    )
+    print(f"[SIM] YOLOE rois: left={left_roi} right={right_roi}", flush=True)
+
+    left_cfg = dataclasses.replace(cfg, roi_uv=left_roi) if left_roi else cfg
+    right_cfg = dataclasses.replace(cfg, roi_uv=right_roi) if right_roi else cfg
+
+    left_candidates = detect_cable_candidates(frame.left.rgb, left_cfg)
     if not left_candidates:
         raise RuntimeError("left eye did not detect a valid RGB cable")
-    right_candidates = detect_cable_candidates(frame.right.rgb, cfg)
+    right_candidates = detect_cable_candidates(frame.right.rgb, right_cfg)
     if not right_candidates:
         raise RuntimeError("right eye did not detect a valid RGB cable")
 

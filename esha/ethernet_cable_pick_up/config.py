@@ -10,6 +10,38 @@ from perception import PerceptionConfig
 
 
 @dataclass(frozen=True)
+class CableHeadYOLOEConfig:
+    """Visual-prompt YOLOE detector for coarse cable-head localization,
+    mirrors single_rack_cv/config.py's YOLOEConfig but for the connector
+    head instead of the port, and with widened size bounds since the
+    head's apparent size varies far more across the approach distance
+    than the port's does."""
+
+    model_name: str = "yoloe-11l-seg.pt"
+    reference_image_path: str = "yoloe_prompts/yoloe_reference_head_atlas.png"
+    reference_boxes_xyxy: tuple[tuple[float, float, float, float], ...] = (
+        (20.0, 20.0, 81.0, 114.0),
+        (124.0, 20.0, 188.0, 121.0),
+        (20.0, 178.0, 84.0, 289.0),
+        (124.0, 178.0, 184.0, 296.0),
+    )
+    reference_class_ids: tuple[int, ...] = (0, 0, 0, 0)
+
+    imgsz: int = 1280
+    confidence: float = 0.005
+    iou: float = 0.80
+    quantize: int = 32
+    device: int = 0
+
+    # Widened vs. the port's 6-180/6-150px — the head spans a much
+    # bigger apparent-size range across a full approach.
+    min_proposal_width_px: int = 20
+    max_proposal_width_px: int = 400
+    min_proposal_height_px: int = 20
+    max_proposal_height_px: int = 400
+
+
+@dataclass(frozen=True)
 class AppConfig:
     headless: bool = False
     width: int = 1600
@@ -387,6 +419,9 @@ class Config:
     scene: SceneConfig = field(default_factory=SceneConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
+    cable_head_yoloe: CableHeadYOLOEConfig = field(
+        default_factory=CableHeadYOLOEConfig
+    )
     ik: IKConfig = field(default_factory=IKConfig)
     drive_tuning: DriveTuningConfig = field(
         default_factory=DriveTuningConfig

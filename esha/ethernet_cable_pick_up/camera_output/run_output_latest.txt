@@ -1,463 +1,26 @@
 [LOG] Saving complete run output to: /home/advaith/Isaacsim-Scripts/esha/ethernet_cable_pick_up/camera_output/run_output_latest.txt
 Starting kit application with the following args:  ['/home/advaith/isaacsim/exts/isaacsim.simulation_app/isaacsim/simulation_app/simulation_app.py', '/home/advaith/isaacsim/apps/isaacsim.exp.base.python.kit', '--/app/tokens/exe-path=/home/advaith/isaacsim/kit', '--/persistent/app/viewport/displayOptions=3094', '--/rtx/materialDb/syncLoads=True', '--/rtx/hydra/materialSyncLoads=True', '--/omni.kit.plugin/syncUsdLoads=True', '--/app/renderer/resolution/width=1600', '--/app/renderer/resolution/height=900', '--/app/window/width=1440', '--/app/window/height=900', '--/renderer/multiGpu/enabled=True', '--/app/fastShutdown=True', '--/app/installSignalHandlers=0', '--ext-folder', '/home/advaith/isaacsim/exts', '--ext-folder', '/home/advaith/isaacsim/apps', '--/physics/cudaDevice=0', '--/plugins/carb.tasking.plugin/threadCount=32', '--/plugins/omni.tbb.globalcontrol/maxThreadCount=32', '--portable']
 Passing the following args to the base kit application:  []
-2026-08-06T16:24:36Z [Info] [carb] Logging to file: /home/advaith/isaacsim/kit/logs/Kit/Isaac-Sim Python/6.0/kit_20260806_092436.log
-2026-08-06T16:24:36Z [1ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash] Uploading minidump: file:'/home/advaith/isaacsim/kit/data/Kit/Isaac-Sim Python/6.0/7f5ed072-571c-4f41-d30928b0-f4508fc9.dmp.zip' svr:'https://services.nvidia.com/submit'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash] Crash metadata for upload:
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'BuildGitlabJobID' = '309921131'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'CarbSdkVersion' = '210.1.5+release.12978.b22b555f.gl'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'CrashTime' = 'Thu Aug  6 16:14:15 2026 GMT'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'DriverShaderCacheWrapper' = 'disabled'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'DumpId' = '7f5ed072-571c-4f41-d30928b0-f4508fc9'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'GlibcVersion' = '2.39'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'LastUploadStatus' = ''
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'ProductName' = 'OmniverseKit'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'PythonTracebackStatus' = ''py-spy' successfully wrote info to '/home/advaith/isaacsim/kit/data/Kit/Isaac-Sim Python/6.0/7f5ed072-571c-4f41-d30928b0-f4508fc9.py.txt''
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'RetryCount' = '0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'SentOnLaterRun' = 'true'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'StartupTime' = '1786032832'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'UploadSuccessful' = '0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'UptimeSeconds' = '23'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'UserEmail' = ''
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'UserStory' = ''
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'UserStoryStatus' = ''crashreport.gui' exited with code 2'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'Version' = '110.1.1+production.305458.6312fa25.gl'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'aftermath_enabled' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'aftermath_flags' = '3'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'aftermath_status' = 'auto-enabled'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'aftermath_version' = '2025.5'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'appName' = 'Isaac-Sim Python'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'appState' = 'started'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'appVersion' = '6.0.0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildBranch' = 'production'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildCi' = 'gl'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildConfig' = 'release'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildGitlabJobName' = 'kit-build-release-linux-x86_64'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildGitlabJobStage' = 'kit-build'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildGitlabPipelineID' = '50093810'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildHash' = '6312fa25'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildMajor' = '110'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildMinor' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildNumber' = '305458'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildPatch' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'buildVersion' = '110.1.1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'carboniteFrameworkVersion' = '210.1.5+release.12978.b22b555f.gl'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'carboniteSdkVersion' = '210.1.5+release.12978.b22b555f.gl'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'commandLine' = '/home/<username>/isaacsim/kit/python/bin/python3 main.py'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuCoreLimited' = '32'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuId' = 'Intel64 Family 6 Model 183 Stepping 1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuLogicalCoresBareMetal' = '48'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuName' = 'Intel(R) Core(TM) i9-14900HX'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuPhysicalCoresBareMetal' = '24'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuUsageQuota' = '-1.000000'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cpuVendor' = 'GenuineIntel'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'cuda_core_dumps_enabled' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'desktopOrigin' = '(0, 0)'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'desktopSize' = '1920x1080'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'displayCount' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'displayRes_0' = '1920x1080x32bit@60Hz'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'environmentName' = 'Individual'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'externalBuild' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'gpuDriver_0' = '580.173.2'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'gpuOutOfMemory' = 'oom'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'gpuVRAM_0' = '8585740288'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'gpu_0' = 'NVIDIA GeForce RTX 4070 Laptop GPU'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'graphicsApi' = 'vulkan'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'kitRendererDriverVersion' = '580.173.2'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lastCommand' = 'AddReference(stage=?,prim_path=/World/DataHall,reference=?)'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lastCommands' = 'SetLightingMenuModeCommand(lighting_mode=stage,usd_context_name=),AddReference(stage=?,prim_path=/World/DataHall,reference=?)'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_isaacSim_buildBranch' = 'release'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_isaacSim_buildDate' = 'Sat May 30 13:00:32 2026 +0000'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_isaacSim_buildHash' = '5f2772b'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_isaacSim_buildRepo' = 'https://gitlab-master.nvidia.com/omniverse/isaac/omni_isaac_sim.git'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_isaacSim_buildVersion' = '6.0.0-rc.59'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_physx_buildBranch' = 'HEAD'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_physx_buildDate' = 'May-26-2026'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_physx_buildHash' = '943e727'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_physx_buildRepo' = 'omniverse/physics'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'lib_physx_buildVersion' = '110.1.11'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'memoryStats' = '(avail/total) RAM: 5.29815/31.1104GB, Swap: 5.27075/8GB, VM: 1.71799e+10/1.71799e+10GB'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'nvidia-smi' = '
-==============NVSMI LOG==============
-
-Timestamp                                              : Thu Aug  6 09:13:53 2026
-Driver Version                                         : 580.173.02
-CUDA Version                                           : 13.0
-
-Attached GPUs                                          : 1
-GPU 00000000:01:00.0
-    Product Name                                       : NVIDIA GeForce RTX 4070 Laptop GPU
-    Product Brand                                      : GeForce
-    Product Architecture                               : Ada Lovelace
-    Display Mode                                       : Requested functionality has been deprecated
-    Display Attached                                   : Yes
-    Display Active                                     : Enabled
-    Persistence Mode                                   : Enabled
-    Addressing Mode                                    : None
-    MIG Mode
-        Current                                        : N/A
-        Pending                                        : N/A
-    Accounting Mode                                    : Disabled
-    Accounting Mode Buffer Size                        : 4000
-    Driver Model
-        Current                                        : N/A
-        Pending                                        : N/A
-    Serial Number                                      : N/A
-    GPU UUID                                           : GPU-3c141277-3e69-1b0d-8047-f339a6acaf45
-    GPU PDI                                            : 0xc83b38fa31365914
-    Minor Number                                       : 0
-    VBIOS Version                                      : 95.06.37.00.27
-    MultiGPU Board                                     : No
-    Board ID                                           : 0x100
-    Board Part Number                                  : N/A
-    GPU Part Number                                    : 2820-775-A1
-    FRU Part Number                                    : N/A
-    Platform Info
-        Chassis Serial Number                          : N/A
-        Slot Number                                    : N/A
-        Tray Index                                     : N/A
-        Host ID                                        : N/A
-        Peer Type                                      : N/A
-        Module Id                                      : 1
-        GPU Fabric GUID                                : N/A
-    Inforom Version
-        Image Version                                  : G002.0000.00.03
-        OEM Object                                     : 2.0
-        ECC Object                                     : N/A
-        Power Management Object                        : N/A
-    Inforom BBX Object Flush
-        Latest Timestamp                               : N/A
-        Latest Duration                                : N/A
-    GPU Operation Mode
-        Current                                        : N/A
-        Pending                                        : N/A
-    GPU C2C Mode                                       : N/A
-    GPU Virtualization Mode
-        Virtualization Mode                            : None
-        Host VGPU Mode                                 : N/A
-        vGPU Heterogeneous Mode                        : N/A
-    GPU Recovery Action                                : None
-    GSP Firmware Version                               : 580.173.02
-    IBMNPU
-        Relaxed Ordering Mode                          : N/A
-    PCI
-        Bus                                            : 0x01
-        Device                                         : 0x00
-        Domain                                         : 0x0000
-        Base Classcode                                 : 0x3
-        Sub Classcode                                  : 0x0
-        Device Id                                      : 0x282010DE
-        Bus Id                                         : 00000000:01:00.0
-        Sub System Id                                  : 0x80081B61
-        GPU Link Info
-            PCIe Generation
-                Max                                    : 4
-                Current                                : 4
-                Device Current                         : 4
-                Device Max                             : 4
-                Host Max                               : 5
-            Link Width
-                Max                                    : 8x
-                Current                                : 8x
-        Bridge Chip
-            Type                                       : N/A
-            Firmware                                   : N/A
-        Replays Since Reset                            : 0
-        Replay Number Rollovers                        : 0
-        Tx Throughput                                  : 70605 KB/s
-        Rx Throughput                                  : 138574 KB/s
-        Atomic Caps Outbound                           : N/A
-        Atomic Caps Inbound                            : N/A
-    Fan Speed                                          : N/A
-    Performance State                                  : P0
-    Clocks Event Reasons
-        Idle                                           : Not Active
-        Applications Clocks Setting                    : Not Active
-        SW Power Cap                                   : Active
-        HW Slowdown                                    : Not Active
-            HW Thermal Slowdown                        : Not Active
-            HW Power Brake Slowdown                    : Not Active
-        Sync Boost                                     : Not Active
-        SW Thermal Slowdown                            : Not Active
-        Display Clock Setting                          : Not Active
-    Clocks Event Reasons Counters
-        SW Power Capping                               : 153773501 us
-        Sync Boost                                     : 0 us
-        SW Thermal Slowdown                            : 0 us
-        HW Thermal Slowdown                            : 0 us
-        HW Power Braking                               : 0 us
-    Sparse Operation Mode                              : N/A
-    FB Memory Usage
-        Total                                          : 8188 MiB
-        Reserved                                       : 391 MiB
-        Used                                           : 5239 MiB
-        Free                                           : 2559 MiB
-    BAR1 Memory Usage
-        Total                                          : 8192 MiB
-        Used                                           : 189 MiB
-        Free                                           : 8003 MiB
-    Conf Compute Protected Memory Usage
-        Total                                          : 0 MiB
-        Used                                           : 0 MiB
-        Free                                           : 0 MiB
-    Compute Mode                                       : Default
-    Utilization
-        GPU                                            : 100 %
-        Memory                                         : 70 %
-        Encoder                                        : 0 %
-        Decoder                                        : 0 %
-        JPEG                                           : 0 %
-        OFA                                            : 0 %
-    Encoder Stats
-        Active Sessions                                : 1
-        Average FPS                                    : 5
-        Average Latency                                : 2239
-    FBC Stats
-        Active Sessions                                : 0
-        Average FPS                                    : 0
-        Average Latency                                : 0
-    DRAM Encryption Mode
-        Current                                        : N/A
-        Pending                                        : N/A
-    ECC Mode
-        Current                                        : N/A
-        Pending                                        : N/A
-    ECC Errors
-        Volatile
-            SRAM Correctable                           : N/A
-            SRAM Uncorrectable Parity                  : N/A
-            SRAM Uncorrectable SEC-DED                 : N/A
-            DRAM Correctable                           : N/A
-            DRAM Uncorrectable                         : N/A
-        Aggregate
-            SRAM Correctable                           : N/A
-            SRAM Uncorrectable Parity                  : N/A
-            SRAM Uncorrectable SEC-DED                 : N/A
-            DRAM Correctable                           : N/A
-            DRAM Uncorrectable                         : N/A
-            SRAM Threshold Exceeded                    : N/A
-        Aggregate Uncorrectable SRAM Sources
-            SRAM L2                                    : N/A
-            SRAM SM                                    : N/A
-            SRAM Microcontroller                       : N/A
-            SRAM PCIE                                  : N/A
-            SRAM Other                                 : N/A
-        Channel Repair Pending                         : No
-        TPC Repair Pending                             : No
-        Unrepairable Memory                            : N/A
-    Retired Pages
-        Single Bit ECC                                 : N/A
-        Double Bit ECC                                 : N/A
-        Pending Page Blacklist                         : N/A
-    Remapped Rows
-        Correctable Error                              : 0
-        Inactive Correctable Error                     : 0
-        Uncorrectable Error                            : 0
-        Inactive Uncorrectable Error                   : 0
-        Pending                                        : No
-        Remapping Failure Occurred                     : No
-        Bank Remap Availability Histogram
-            Max                                        : 64 bank(s)
-            High                                       : 0 bank(s)
-            Partial                                    : 0 bank(s)
-            Low                                        : 0 bank(s)
-            None                                       : 0 bank(s)
-    Temperature
-        GPU Current Temp                               : 77 C
-        GPU T.Limit Temp                               : 11 C
-        GPU Shutdown T.Limit Temp                      : -12 C
-        GPU Slowdown T.Limit Temp                      : -2 C
-        GPU Max Operating T.Limit Temp                 : 0 C
-        GPU Target Temperature                         : 87 C
-        Memory Current Temp                            : N/A
-        Memory Max Operating T.Limit Temp              : N/A
-    GPU Power Readings
-        Average Power Draw                             : 80.88 W
-        Instantaneous Power Draw                       : 83.22 W
-        Current Power Limit                            : 80.00 W
-        Requested Power Limit                          : 80.00 W
-        Default Power Limit                            : 80.00 W
-        Min Power Limit                                : 5.00 W
-        Max Power Limit                                : 140.00 W
-    GPU Memory Power Readings 
-        Average Power Draw                             : N/A
-        Instantaneous Power Draw                       : N/A
-    Module Power Readings
-        Average Power Draw                             : N/A
-        Instantaneous Power Draw                       : N/A
-        Current Power Limit                            : N/A
-        Requested Power Limit                          : N/A
-        Default Power Limit                            : N/A
-        Min Power Limit                                : N/A
-        Max Power Limit                                : N/A
-    Power Smoothing                                    : N/A
-    Workload Power Profiles
-        Requested Profiles                             : N/A
-        Enforced Profiles                              : N/A
-    Clocks
-        Graphics                                       : 2235 MHz
-        SM                                             : 2235 MHz
-        Memory                                         : 8001 MHz
-        Video                                          : 1980 MHz
-    Applications Clocks
-        Graphics                                       : N/A
-        Memory                                         : N/A
-    Default Applications Clocks
-        Graphics                                       : N/A
-        Memory                                         : N/A
-    Deferred Clocks
-        Memory                                         : N/A
-    Max Clocks
-        Graphics                                       : 3105 MHz
-        SM                                             : 3105 MHz
-        Memory                                         : 8001 MHz
-        Video                                          : 2415 MHz
-    Max Customer Boost Clocks
-        Graphics                                       : N/A
-    Clock Policy
-        Auto Boost                                     : N/A
-        Auto Boost Default                             : N/A
-    Fabric
-        State                                          : N/A
-        Status                                         : N/A
-        CliqueId                                       : N/A
-        ClusterUUID                                    : N/A
-        Health
-            Summary                                    : N/A
-            Bandwidth                                  : N/A
-            Route Recovery in progress                 : N/A
-            Route Unhealthy                            : N/A
-            Access Timeout Recovery                    : N/A
-            Incorrect Configuration                    : N/A
-            Partition Assigned                         : N/A
-    Processes
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 1917
-            Type                          : G
-            Name                          : ............./Xorg
-            Used GPU Memory               : 259 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 3041
-            Type                          : C+G
-            Name                          : ............/gnome-remote-desktop-daemon
-            Used GPU Memory               : 251 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 3093
-            Type                          : G
-            Name                          : ......../gnome-shell
-            Used GPU Memory               : 35 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 3680
-            Type                          : G
-            Name                          : ............/xdg-desktop-portal-gnome
-            Used GPU Memory               : 32 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 5934
-            Type                          : G
-            Name                          : ................./cursor
-            Used GPU Memory               : 82 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 32038
-            Type                          : G
-            Name                          : ................../chrome
-            Used GPU Memory               : 50 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 3388351
-            Type                          : G
-            Name                          : ......../nautilus
-            Used GPU Memory               : 12 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 3547154
-            Type                          : C+G
-            Name                          : ........................../kit
-            Used GPU Memory               : 4382 MiB
-        GPU instance ID                   : N/A
-        Compute instance ID               : N/A
-        Process ID                        : 3562658
-            Type                          : C
-            Name                          : ...................................../python3
-            Used GPU Memory               : 10 MiB
-    Capabilities
-        EGM                                            : disabled
-
-'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'osDistro' = 'ubuntu'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'osName' = '24.04.2 LTS (Noble Numbat)'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'osVersion' = '24.04.2'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'portableMode' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'primaryDisplayRes' = '1920x1080x32bit@60Hz'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'profilerCpuTscFrequency' = '2419156950'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'runEnvironment' = 'Individual'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'runningInContainer' = '0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'shaderdb_debugSymbols' = '0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'shaderdb_dumpIncludeOverrides' = '0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'shaderdb_dumpIntermediates' = '0'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'shaderdb_obfuscateCode' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'shaderdb_optimizationLevel' = '1'
-2026-08-06T16:24:36Z [2ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'shaderdb_separateDebugSymbols' = '0'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'systemInfo' = '
-|---------------------------------------------------------------------------------------------|
-| Driver Version: 580.173.02    | Graphics API: Vulkan
-|=============================================================================================|
-| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
-|     |                                  |        |     |            | Device-ID | UUID       |
-|     |                                  |        |     |            | Bus-ID    |            |
-|---------------------------------------------------------------------------------------------|
-| 0   | NVIDIA GeForce RTX 4070 Laptop.. | Yes: 0 |     | 8188    MB | 10de      | 0          |
-|     |                                  |        |     |            | 2820      | 3c141277.. |
-|     |                                  |        |     |            | 1         |            |
-|=============================================================================================|
-| OS: 24.04.2 LTS (Noble Numbat) ubuntu, Version: 24.04.2, Kernel: 6.11.0-26-generic
-| XServer Vendor: The X.Org Foundation, XServer Version: 12101011 (1.21.1.11)
-| Processor: Intel(R) Core(TM) i9-14900HX
-| Bare Metal Cores: 24 | Bare Metal Logical Cores: 48
-| Available Cores:  32 
-|---------------------------------------------------------------------------------------------|
-| Total Memory (MB): 31857 | Free Memory: 11675
-| Total Page/Swap (MB): 8191 | Free Page/Swap: 5575
-|---------------------------------------------------------------------------------------------|
-'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'telemetrySessionId' = '10926817415009483557'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'terminatedByAbort' = '0'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'totalRamBareMetalMB' = '31857'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'totalRamLimitedMB' = '31857'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'totalSwapBareMetalMB' = '8191'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'totalSwapLimitedMB' = '8191'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'userId' = 'default'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'workingDirectory' = '/home/<username>/Isaacsim-Scripts/esha/ethernet_cable_pick_up'
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash] Crash report files for upload:
-2026-08-06T16:24:36Z [3ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]   'upload_file_minidump' = '/home/advaith/isaacsim/kit/data/Kit/Isaac-Sim Python/6.0/7f5ed072-571c-4f41-d30928b0-f4508fc9.dmp.zip'
-[0.066s] [ext: omni.assets.plugins-0.0.0] startup
-[0.066s] [ext: omni.blobkey-1.1.2] startup
-[0.066s] [ext: omni.kit.async_engine-0.0.3] startup
-2026-08-06T16:24:36Z [180ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash] uploaded minidump: file: '/home/advaith/isaacsim/kit/data/Kit/Isaac-Sim Python/6.0/7f5ed072-571c-4f41-d30928b0-f4508fc9.dmp.zip', code:200, response:
-2026-08-06T16:24:36Z [180ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash]     1102a333-6d92-4401-b8fb-ae98600a8fb2
-2026-08-06T16:24:36Z [180ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash] Deleting file: '/home/advaith/isaacsim/kit/data/Kit/Isaac-Sim Python/6.0/7f5ed072-571c-4f41-d30928b0-f4508fc9.dmp.zip' (use setting "/crashreporter/preserveDump=true" to save)
-2026-08-06T16:24:36Z [180ms] [Warning] [carb.crashreporter-breakpad.plugin] [previous crash] Deleting file: '/home/advaith/isaacsim/kit/data/Kit/Isaac-Sim Python/6.0/7f5ed072-571c-4f41-d30928b0-f4508fc9.dmp.zip.toml'
 WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-E0000 00:00:1786033476.999662 3565483 descriptor_database.cc:633] File already exists in database: grpc/health/v1/health.proto
-W0000 00:00:1786033476.999686 3565483 message.cc:301] Protobuf GeneratedMessageFactory: File is already registered: grpc/health/v1/health.proto
-[0.424s] [ext: omni.client.lib-1.1.1] startup
-[0.436s] [ext: omni.client-1.3.0] startup
-[0.439s] [ext: omni.protobuf.lib-1.0.0] startup
-[0.440s] [ext: omni.grpc.lib-1.0.0] startup
-[0.444s] [ext: omni.metrics.core-0.0.3] startup
-[0.444s] [ext: omni.datastore-0.0.0] startup
-[0.444s] [ext: omni.gpu_foundation.shadercache.vulkan-1.0.0] startup
-[0.449s] [ext: omni.hsscclient-1.1.4] startup
-[0.449s] [ext: omni.stats-1.0.1] startup
-[0.450s] [ext: omni.ujitso.default-1.0.0] startup
-[0.456s] [ext: omni.gpu_foundation-0.0.0] startup
-[0.692s] [ext: carb.windowing.plugins-1.0.1] startup
-[0.698s] [ext: omni.kit.renderer.init-1.0.1] startup
+E0000 00:00:1786039693.467866 3585000 descriptor_database.cc:633] File already exists in database: grpc/health/v1/health.proto
+W0000 00:00:1786039693.467890 3585000 message.cc:301] Protobuf GeneratedMessageFactory: File is already registered: grpc/health/v1/health.proto
+2026-08-06T18:08:13Z [Info] [carb] Logging to file: /home/advaith/isaacsim/kit/logs/Kit/Isaac-Sim Python/6.0/kit_20260806_110813.log
+[0.069s] [ext: omni.assets.plugins-0.0.0] startup
+[0.069s] [ext: omni.blobkey-1.1.2] startup
+[0.069s] [ext: omni.kit.async_engine-0.0.3] startup
+[0.374s] [ext: omni.client.lib-1.1.1] startup
+[0.384s] [ext: omni.client-1.3.0] startup
+[0.388s] [ext: omni.protobuf.lib-1.0.0] startup
+[0.389s] [ext: omni.grpc.lib-1.0.0] startup
+[0.391s] [ext: omni.metrics.core-0.0.3] startup
+[0.391s] [ext: omni.datastore-0.0.0] startup
+[0.392s] [ext: omni.gpu_foundation.shadercache.vulkan-1.0.0] startup
+[0.395s] [ext: omni.hsscclient-1.1.4] startup
+[0.396s] [ext: omni.stats-1.0.1] startup
+[0.396s] [ext: omni.ujitso.default-1.0.0] startup
+[0.400s] [ext: omni.gpu_foundation-0.0.0] startup
+[0.597s] [ext: carb.windowing.plugins-1.0.1] startup
+[0.602s] [ext: omni.kit.renderer.init-1.0.1] startup
 
 |---------------------------------------------------------------------------------------------|
 | Driver Version: 580.173.02    | Graphics API: Vulkan
@@ -476,314 +39,314 @@ W0000 00:00:1786033476.999686 3565483 message.cc:301] Protobuf GeneratedMessageF
 | Bare Metal Cores: 24 | Bare Metal Logical Cores: 48
 | Available Cores:  32 
 |---------------------------------------------------------------------------------------------|
-| Total Memory (MB): 31857 | Free Memory: 19860
-| Total Page/Swap (MB): 8191 | Free Page/Swap: 5757
+| Total Memory (MB): 31857 | Free Memory: 24424
+| Total Page/Swap (MB): 8191 | Free Page/Swap: 5860
 |---------------------------------------------------------------------------------------------|
-2026-08-06T16:24:37Z [1,281ms] [Warning] [omni.rtx] CPU performance profile is set to powersave. This profile sets the CPU to the lowest frequency reducing performance.
-[1.469s] [ext: omni.kit.pipapi-0.0.0] startup
-[1.471s] [ext: omni.kit.pip_archive-0.0.0] startup
-[1.471s] [ext: isaacsim.pip.newton-0.6.0] startup
-[1.471s] [ext: omni.pip.compute-1.9.0] startup
-[1.471s] [ext: omni.isaac.core_archive-5.3.0] startup
-[1.472s] [ext: omni.kit.telemetry-0.5.2] startup
-[1.499s] [ext: omni.kit.loop-isaac-1.6.0] startup
-[1.501s] [ext: omni.kit.test-2.0.7] startup
-[1.572s] [ext: omni.materialx.libs-1.0.9] startup
-[1.580s] [ext: omni.gpucompute.plugins-0.0.0] startup
-[1.580s] [ext: omni.usd.config-1.0.7] startup
-[1.584s] [ext: omni.usd.libs-1.0.3] startup
-[1.675s] [ext: omni.iray.libs-0.0.1] startup
-[1.679s] [ext: omni.mdl-57.0.3] startup
-[1.700s] [ext: omni.mdl.neuraylib-0.2.20] startup
-[1.702s] [ext: omni.kit.usd.mdl-1.1.9] startup
-[1.810s] [ext: omni.appwindow-1.2.2] startup
-[2.097s] [ext: omni.kit.renderer.core-1.2.2] startup
-[3.133s] [ext: omni.kit.renderer.capture-2.0.1] startup
-[3.136s] [ext: omni.kit.renderer.imgui-2.0.6] startup
-[3.189s] [ext: omni.ui-3.1.3] startup
-[3.199s] [ext: omni.kit.mainwindow-1.0.3] startup
-[3.200s] [ext: carb.audio-0.1.0] startup
-[3.203s] [ext: omni.uiaudio-1.0.0] startup
-[3.204s] [ext: omni.kit.uiapp-0.0.0] startup
-[3.204s] [ext: omni.usd.schema.metrics.assembler-110.1.0] startup
-[3.207s] [ext: omni.usd.schema.audio-0.0.1] startup
-[3.210s] [ext: omni.usd_resolver-1.0.0] startup
-[3.214s] [ext: omni.usd.core-1.8.3] startup
-[3.220s] [ext: omni.metropolis.schema-0.0.3] startup
-[3.220s] [ext: isaacsim.anim.robot.schema-0.1.1] startup
-[3.221s] [ext: omni.usd.schema.anim-0.0.1] startup
-[3.246s] [ext: omni.usd.schema.geospatial-0.0.1] startup
-[3.249s] [ext: omni.usd.schema.omnigraph-1.0.1] startup
-[3.255s] [ext: omni.usd.schema.semantics-0.0.0] startup
-[3.257s] [ext: omni.activity.core-1.0.3] startup
-[3.258s] [ext: omni.cubric-0.1.0] startup
-[3.259s] [ext: omni.graph.exec-0.9.6] startup
-[3.259s] [ext: omni.hydra.scene_delegate-0.3.5] startup
-[3.263s] [ext: usdrt.scenegraph-7.6.3] startup
-[3.292s] [ext: omni.hydra.usdrt_delegate-7.5.2] startup
-[3.298s] [ext: omni.inspect-1.0.2] startup
-[3.301s] [ext: omni.kit.actions.core-1.0.0] startup
-[3.303s] [ext: omni.kit.audiodeviceenum-1.0.2] startup
-[3.304s] [ext: omni.kit.commands-1.5.0] startup
-[3.307s] [ext: omni.kit.exec.core-0.13.5] startup
-[3.309s] [ext: omni.kit.usd_undo-0.1.8] startup
-[3.309s] [ext: omni.kit.window.popup_dialog-2.0.25] startup
-[3.313s] [ext: omni.kit.widget.nucleus_connector-2.3.1] startup
-[3.316s] [ext: omni.timeline-1.1.0] startup
-[3.318s] [ext: omni.usd-1.15.2] startup
-[3.364s] [ext: omni.graph.core-3.1.2] startup
-[3.367s] [ext: omni.kit.notification_manager-1.0.11] startup
-[3.369s] [ext: isaacsim.core.deprecation_manager-0.4.2] startup
-[3.370s] [ext: isaacsim.replicator.agent.schema-0.1.1] startup
-[3.371s] [ext: isaacsim.robot.schema-6.3.6] startup
-[3.375s] [ext: isaacsim.robot_motion.schema-0.2.0] startup
-[3.375s] [ext: omni.anim.behavior.schema-110.1.0] startup
-[3.380s] [ext: omni.anim.graph.schema-110.1.1] startup
-[3.386s] [ext: omni.anim.navigation.schema-110.1.0] startup
-[3.389s] [ext: omni.behavior.tree.schema-110.1.0] startup
-[3.389s] [ext: omni.isaac.ml_archive-3.3.0] startup
-[3.389s] [ext: omni.kit.asset_converter-5.1.4] startup
-[3.400s] [ext: omni.pip.cloud-1.5.3] startup
-[3.403s] [ext: omni.usd.schema.flow-110.0.0] startup
-[3.403s] [ext: omni.usd.schema.mujoco-1.1.0] startup
-[3.403s] [ext: omni.usd.schema.newton-1.2.0] startup
-[3.404s] [ext: omni.usd.schema.omni_lens_distortion-1.0.0] startup
-[3.405s] [ext: omni.usd.schema.omni_projectors-1.0.0] startup
-[3.405s] [ext: omni.usd.schema.omni_sensors-0.0.0] startup
-[3.413s] [ext: omni.usd.schema.omniscripting-1.0.1] startup
-[3.418s] [ext: omni.usd.schema.physical_lighting-0.1.0] startup
-[3.421s] [ext: omni.usd.schema.physx-110.1.11] startup
-[3.452s] [ext: omni.usd.schema.render_settings.rtx-1.0.2] startup
-[3.456s] [ext: omni.usd.schema.usd_particle_field-1.0.0] startup
-[3.456s] [ext: isaacsim.core.version-2.1.0] startup
-[3.457s] [ext: omni.kit.menu.core-1.2.0] startup
-[3.458s] [ext: omni.kit.menu.utils-2.2.3] startup
-[3.466s] [ext: isaacsim.app.about-2.3.0] startup
-[3.471s] [ext: isaacsim.asset.transformer-1.2.3] startup
-[3.474s] [ext: omni.scene.optimizer.core-110.1.0] startup
-[3.536s] [ext: isaacsim.asset.importer.utils-1.8.0] startup
-[3.539s] [ext: omni.convexdecomposition-110.1.11] startup
-[3.541s] [ext: omni.physics-110.1.11] startup
-[3.545s] [ext: omni.physx.gpu-110.1.11] startup
-[3.545s] [ext: omni.physx.foundation-110.1.11] startup
-[3.547s] [ext: omni.usdphysics-110.1.11] startup
-[3.548s] [ext: omni.physx.cooking-110.1.11] startup
-[3.551s] [ext: omni.physx-110.1.11] startup
-[3.561s] [ext: omni.physics.physx-110.1.11] startup
-[3.564s] [ext: isaacsim.asset.exporter.urdf-2.0.3] startup
-[3.572s] [ext: omni.kit.clipboard-1.1.1] startup
-[3.573s] [ext: omni.kit.usd.layers-2.6.1] startup
-[3.582s] [ext: omni.kit.widget.context_menu-1.4.0] startup
-[3.583s] [ext: omni.kit.context_menu-1.9.0] startup
-[3.585s] [ext: omni.kit.helper.file_utils-0.1.10] startup
-[3.586s] [ext: omni.kit.widget.nucleus_info-2.0.2] startup
-[3.587s] [ext: omni.kit.search_core-1.0.8] startup
-[3.588s] [ext: omni.kit.widget.path_field-2.0.13] startup
-[3.588s] [ext: omni.kit.widget.browser_bar-2.0.10] startup
-[3.589s] [ext: omni.kit.widget.filebrowser-2.13.4] startup
-[3.594s] [ext: omni.kit.widget.options_menu-1.1.6] startup
-[3.597s] [ext: omni.kit.widget.options_button-1.0.3] startup
-[3.598s] [ext: omni.kit.widget.search_delegate-1.0.9] startup
-[3.599s] [ext: omni.ui.scene-2.0.1] startup
-[3.604s] [ext: omni.kit.window.filepicker-2.15.5] startup
-[3.618s] [ext: omni.kit.window.file_importer-1.1.21] startup
-[3.620s] [ext: omni.kit.material.library-3.1.2] startup
-[3.625s] [ext: isaacsim.asset.transformer.rules-1.7.8] startup
-[3.637s] [ext: omni.usdex.libs-2.2.2] startup
-[3.646s] [ext: isaacsim.asset.importer.mjcf-3.10.0] startup
-[3.649s] [ext: isaacsim.asset.importer.urdf-3.11.0] startup
-[3.653s] [ext: omni.kit.primitive.mesh-1.1.0] startup
-[3.656s] [ext: omni.kit.stage_template.core-1.1.22] startup
-[3.656s] [ext: omni.kit.stage_templates-2.0.2] startup
-[3.658s] [ext: omni.usd.metrics.assembler-110.1.2] startup
-[3.661s] [ext: omni.warp.core-1.13.0] startup
-[3.907s] [ext: isaacsim.core.experimental.utils-0.17.1] startup
-[3.908s] [ext: omni.physics.stageupdate-110.1.11] startup
-[3.910s] [ext: omni.physics.tensors-110.1.11] startup
-[3.915s] [ext: omni.physx.tensors-110.1.11] startup
-[3.918s] [ext: isaacsim.core.simulation_manager-1.15.4] startup
-2026-08-06T16:24:40Z [3,904ms] [Warning] [isaacsim.core.simulation_manager.plugin] USD stage is not available; stage-opened subscription is deferred
-2026-08-06T16:24:40Z [3,904ms] [Warning] [isaacsim.core.simulation_manager.plugin] USD stage is not available; stage-opened subscription is deferred
-[3.935s] [ext: isaacsim.storage.native-1.9.2] startup
-[3.937s] [ext: omni.usd.metrics.assembler.physics-110.1.11] startup
-[3.939s] [ext: isaacsim.core.utils-4.1.6] startup
-[3.942s] [ext: isaacsim.core.prims-0.11.6] startup
-[5.231s] [ext: isaacsim.core.api-5.2.12] startup
-[5.239s] [ext: isaacsim.core.cloner-1.7.2] startup
-[5.241s] [ext: isaacsim.test.docstring-1.3.1] startup
-[5.246s] [ext: isaacsim.core.experimental.prims-1.8.8] startup
-[5.274s] [ext: isaacsim.core.experimental.primdata-0.3.2] startup
-[5.277s] [ext: omni.graph.tools-1.81.0] startup
-[5.303s] [ext: omni.graph-1.142.5] startup
-[5.347s] [ext: isaacsim.core.experimental.actuators-0.1.0] startup
-[7.971s] [ext: isaacsim.core.experimental.materials-0.7.0] startup
-[7.975s] [ext: isaacsim.core.experimental.objects-0.8.0] startup
-[8.050s] [ext: omni.hydra.engine.stats-1.0.5] startup
-[8.054s] [ext: omni.hydra.rtx.shadercache.vulkan-1.0.0] startup
-[8.055s] [ext: omni.index.libs-387500.3473.0] startup
-[8.055s] [ext: omni.index-1.0.1] startup
-[8.055s] [ext: omni.ujitso.client-0.0.0] startup
-[8.056s] [ext: omni.usd.schema.playback-1.0.0] startup
-[8.060s] [ext: omni.volume-0.5.2] startup
-[8.064s] [ext: omni.hydra.rtx-1.0.3] startup
-2026-08-06T16:24:44Z [8,049ms] [Warning] [omni.log] Source: omni.hydra was already registered.
-[8.100s] [ext: omni.kit.hydra_texture-1.6.0] startup
-[8.104s] [ext: omni.kit.raycast.query-1.2.0] startup
-[8.110s] [ext: omni.kit.viewport.legacy_gizmos-1.0.24] startup
-[8.113s] [ext: omni.kit.viewport.registry-104.0.6] startup
-[8.114s] [ext: omni.kit.viewport.scene_camera_model-1.0.7] startup
-[8.120s] [ext: omni.kit.widget.viewport-109.2.0] startup
-[8.124s] [ext: omni.kit.window.drop_support-1.0.8] startup
-[8.125s] [ext: omni.kit.viewport.window-109.0.2] startup
-[8.146s] [ext: omni.kit.viewport.utility-2.0.1] startup
-[8.147s] [ext: isaacsim.core.rendering_manager-0.4.2] startup
-[8.173s] [ext: omni.graph.action_core-1.1.9] startup
-[8.176s] [ext: omni.graph.action_nodes_core-2.10.2] startup
-[8.179s] [ext: omni.graph.action_nodes-2.10.3] startup
-[8.239s] [ext: omni.graph.action-2.10.2] startup
-[8.241s] [ext: omni.graph.image.core-0.6.1] startup
-[8.242s] [ext: omni.graph.image.nodes-1.3.1] startup
-[8.244s] [ext: omni.graph.nodes_core-2.10.3] startup
-[8.250s] [ext: omni.graph.nodes-2.11.1] startup
-[8.257s] [ext: omni.kit.hotkeys.core-1.3.12] startup
-[8.258s] [ext: omni.kit.property.adapter.core-1.1.1] startup
-[8.261s] [ext: omni.kit.property.adapter.usd-1.0.5] startup
-[8.263s] [ext: omni.kit.widget.filter-1.1.5] startup
-[8.264s] [ext: omni.kit.widget.highlight_label-1.0.3] startup
-[8.265s] [ext: omni.kit.widget.searchfield-1.1.8] startup
-[8.267s] [ext: omni.kit.window.file_exporter-1.0.36] startup
-[8.268s] [ext: omni.kit.widget.stage-4.3.0] startup
-[8.278s] [ext: omni.kit.window.content_browser_registry-0.0.6] startup
-[8.280s] [ext: omni.kit.window.file-2.0.10] startup
-[8.283s] [ext: omni.kit.window.content_browser-3.1.8] startup
-[8.296s] [ext: omni.kit.window.property-1.15.1] startup
-[8.313s] [ext: omni.kit.property.usd-4.8.1] startup
-[8.325s] [ext: omni.graph.scriptnWarp 1.13.0 initialized:
+2026-08-06T18:08:14Z [1,010ms] [Warning] [omni.rtx] CPU performance profile is set to powersave. This profile sets the CPU to the lowest frequency reducing performance.
+[1.183s] [ext: omni.kit.pipapi-0.0.0] startup
+[1.184s] [ext: omni.kit.pip_archive-0.0.0] startup
+[1.184s] [ext: isaacsim.pip.newton-0.6.0] startup
+[1.184s] [ext: omni.pip.compute-1.9.0] startup
+[1.184s] [ext: omni.isaac.core_archive-5.3.0] startup
+[1.185s] [ext: omni.kit.telemetry-0.5.2] startup
+[1.208s] [ext: omni.kit.loop-isaac-1.6.0] startup
+[1.210s] [ext: omni.kit.test-2.0.7] startup
+[1.261s] [ext: omni.materialx.libs-1.0.9] startup
+[1.267s] [ext: omni.gpucompute.plugins-0.0.0] startup
+[1.268s] [ext: omni.usd.config-1.0.7] startup
+[1.271s] [ext: omni.usd.libs-1.0.3] startup
+[1.344s] [ext: omni.iray.libs-0.0.1] startup
+[1.348s] [ext: omni.mdl-57.0.3] startup
+[1.366s] [ext: omni.mdl.neuraylib-0.2.20] startup
+[1.368s] [ext: omni.kit.usd.mdl-1.1.9] startup
+[1.453s] [ext: omni.appwindow-1.2.2] startup
+[1.767s] [ext: omni.kit.renderer.core-1.2.2] startup
+[2.772s] [ext: omni.kit.renderer.capture-2.0.1] startup
+[2.774s] [ext: omni.kit.renderer.imgui-2.0.6] startup
+[2.821s] [ext: omni.ui-3.1.3] startup
+[2.829s] [ext: omni.kit.mainwindow-1.0.3] startup
+[2.830s] [ext: carb.audio-0.1.0] startup
+[2.832s] [ext: omni.uiaudio-1.0.0] startup
+[2.833s] [ext: omni.kit.uiapp-0.0.0] startup
+[2.833s] [ext: omni.usd.schema.metrics.assembler-110.1.0] startup
+[2.835s] [ext: omni.usd.schema.audio-0.0.1] startup
+[2.838s] [ext: omni.usd_resolver-1.0.0] startup
+[2.840s] [ext: omni.usd.core-1.8.3] startup
+[2.845s] [ext: omni.metropolis.schema-0.0.3] startup
+[2.846s] [ext: isaacsim.anim.robot.schema-0.1.1] startup
+[2.847s] [ext: omni.usd.schema.anim-0.0.1] startup
+[2.863s] [ext: omni.usd.schema.geospatial-0.0.1] startup
+[2.866s] [ext: omni.usd.schema.omnigraph-1.0.1] startup
+[2.871s] [ext: omni.usd.schema.semantics-0.0.0] startup
+[2.873s] [ext: omni.activity.core-1.0.3] startup
+[2.874s] [ext: omni.cubric-0.1.0] startup
+[2.874s] [ext: omni.graph.exec-0.9.6] startup
+[2.874s] [ext: omni.hydra.scene_delegate-0.3.5] startup
+[2.878s] [ext: usdrt.scenegraph-7.6.3] startup
+[2.900s] [ext: omni.hydra.usdrt_delegate-7.5.2] startup
+[2.906s] [ext: omni.inspect-1.0.2] startup
+[2.907s] [ext: omni.kit.actions.core-1.0.0] startup
+[2.909s] [ext: omni.kit.audiodeviceenum-1.0.2] startup
+[2.910s] [ext: omni.kit.commands-1.5.0] startup
+[2.912s] [ext: omni.kit.exec.core-0.13.5] startup
+[2.913s] [ext: omni.kit.usd_undo-0.1.8] startup
+[2.914s] [ext: omni.kit.window.popup_dialog-2.0.25] startup
+[2.917s] [ext: omni.kit.widget.nucleus_connector-2.3.1] startup
+[2.919s] [ext: omni.timeline-1.1.0] startup
+[2.921s] [ext: omni.usd-1.15.2] startup
+[2.966s] [ext: omni.graph.core-3.1.2] startup
+[2.968s] [ext: omni.kit.notification_manager-1.0.11] startup
+[2.970s] [ext: isaacsim.core.deprecation_manager-0.4.2] startup
+[2.971s] [ext: isaacsim.replicator.agent.schema-0.1.1] startup
+[2.972s] [ext: isaacsim.robot.schema-6.3.6] startup
+[2.976s] [ext: isaacsim.robot_motion.schema-0.2.0] startup
+[2.977s] [ext: omni.anim.behavior.schema-110.1.0] startup
+[2.980s] [ext: omni.anim.graph.schema-110.1.1] startup
+[2.985s] [ext: omni.anim.navigation.schema-110.1.0] startup
+[2.988s] [ext: omni.behavior.tree.schema-110.1.0] startup
+[2.989s] [ext: omni.isaac.ml_archive-3.3.0] startup
+[2.989s] [ext: omni.kit.asset_converter-5.1.4] startup
+[2.999s] [ext: omni.pip.cloud-1.5.3] startup
+[3.001s] [ext: omni.usd.schema.flow-110.0.0] startup
+[3.001s] [ext: omni.usd.schema.mujoco-1.1.0] startup
+[3.002s] [ext: omni.usd.schema.newton-1.2.0] startup
+[3.002s] [ext: omni.usd.schema.omni_lens_distortion-1.0.0] startup
+[3.002s] [ext: omni.usd.schema.omni_projectors-1.0.0] startup
+[3.003s] [ext: omni.usd.schema.omni_sensors-0.0.0] startup
+[3.009s] [ext: omni.usd.schema.omniscripting-1.0.1] startup
+[3.013s] [ext: omni.usd.schema.physical_lighting-0.1.0] startup
+[3.016s] [ext: omni.usd.schema.physx-110.1.11] startup
+[3.042s] [ext: omni.usd.schema.render_settings.rtx-1.0.2] startup
+[3.045s] [ext: omni.usd.schema.usd_particle_field-1.0.0] startup
+[3.045s] [ext: isaacsim.core.version-2.1.0] startup
+[3.045s] [ext: omni.kit.menu.core-1.2.0] startup
+[3.046s] [ext: omni.kit.menu.utils-2.2.3] startup
+[3.052s] [ext: isaacsim.app.about-2.3.0] startup
+[3.056s] [ext: isaacsim.asset.transformer-1.2.3] startup
+[3.059s] [ext: omni.scene.optimizer.core-110.1.0] startup
+[3.116s] [ext: isaacsim.asset.importer.utils-1.8.0] startup
+[3.118s] [ext: omni.convexdecomposition-110.1.11] startup
+[3.120s] [ext: omni.physics-110.1.11] startup
+[3.123s] [ext: omni.physx.gpu-110.1.11] startup
+[3.123s] [ext: omni.physx.foundation-110.1.11] startup
+[3.124s] [ext: omni.usdphysics-110.1.11] startup
+[3.126s] [ext: omni.physx.cooking-110.1.11] startup
+[3.128s] [ext: omni.physx-110.1.11] startup
+[3.136s] [ext: omni.physics.physx-110.1.11] startup
+[3.138s] [ext: isaacsim.asset.exporter.urdf-2.0.3] startup
+[3.145s] [ext: omni.kit.clipboard-1.1.1] startup
+[3.146s] [ext: omni.kit.usd.layers-2.6.1] startup
+[3.153s] [ext: omni.kit.widget.context_menu-1.4.0] startup
+[3.154s] [ext: omni.kit.context_menu-1.9.0] startup
+[3.155s] [ext: omni.kit.helper.file_utils-0.1.10] startup
+[3.156s] [ext: omni.kit.widget.nucleus_info-2.0.2] startup
+[3.157s] [ext: omni.kit.search_core-1.0.8] startup
+[3.158s] [ext: omni.kit.widget.path_field-2.0.13] startup
+[3.158s] [ext: omni.kit.widget.browser_bar-2.0.10] startup
+[3.159s] [ext: omni.kit.widget.filebrowser-2.13.4] startup
+[3.163s] [ext: omni.kit.widget.options_menu-1.1.6] startup
+[3.165s] [ext: omni.kit.widget.options_button-1.0.3] startup
+[3.166s] [ext: omni.kit.widget.search_delegate-1.0.9] startup
+[3.166s] [ext: omni.ui.scene-2.0.1] startup
+[3.170s] [ext: omni.kit.window.filepicker-2.15.5] startup
+[3.182s] [ext: omni.kit.window.file_importer-1.1.21] startup
+[3.183s] [ext: omni.kit.material.library-3.1.2] startup
+[3.188s] [ext: isaacsim.asset.transformer.rules-1.7.8] startup
+[3.198s] [ext: omni.usdex.libs-2.2.2] startup
+[3.206s] [ext: isaacsim.asset.importer.mjcf-3.10.0] startup
+[3.207s] [ext: isaacsim.asset.importer.urdf-3.11.0] startup
+[3.211s] [ext: omni.kit.primitive.mesh-1.1.0] startup
+[3.213s] [ext: omni.kit.stage_template.core-1.1.22] startup
+[3.214s] [ext: omni.kit.stage_templates-2.0.2] startup
+[3.215s] [ext: omni.usd.metrics.assembler-110.1.2] startup
+[3.218s] [ext: omni.warp.core-1.13.0] startup
+[3.431s] [ext: isaacsim.core.experimental.utils-0.17.1] startup
+[3.432s] [ext: omni.physics.stageupdate-110.1.11] startup
+[3.434s] [ext: omni.physics.tensors-110.1.11] startup
+[3.437s] [ext: omni.physx.tensors-110.1.11] startup
+[3.441s] [ext: isaacsim.core.simulation_manager-1.15.4] startup
+2026-08-06T18:08:16Z [3,423ms] [Warning] [isaacsim.core.simulation_manager.plugin] USD stage is not available; stage-opened subscription is deferred
+2026-08-06T18:08:16Z [3,423ms] [Warning] [isaacsim.core.simulation_manager.plugin] USD stage is not available; stage-opened subscription is deferred
+[3.455s] [ext: isaacsim.storage.native-1.9.2] startup
+[3.456s] [ext: omni.usd.metrics.assembler.physics-110.1.11] startup
+[3.457s] [ext: isaacsim.core.utils-4.1.6] startup
+[3.460s] [ext: isaacsim.core.prims-0.11.6] startup
+[4.525s] [ext: isaacsim.core.api-5.2.12] startup
+[4.532s] [ext: isaacsim.core.cloner-1.7.2] startup
+[4.533s] [ext: isaacsim.test.docstring-1.3.1] startup
+[4.537s] [ext: isaacsim.core.experimental.prims-1.8.8] startup
+[4.561s] [ext: isaacsim.core.experimental.primdata-0.3.2] startup
+[4.563s] [ext: omni.graph.tools-1.81.0] startup
+[4.584s] [ext: omni.graph-1.142.5] startup
+[4.622s] [ext: isaacsim.core.experimental.actuators-0.1.0] startup
+[6.835s] [ext: isaacsim.core.experimental.materials-0.7.0] startup
+[6.838s] [ext: isaacsim.core.experimental.objects-0.8.0] startup
+[6.898s] [ext: omni.hydra.engine.stats-1.0.5] startup
+[6.901s] [ext: omni.hydra.rtx.shadercache.vulkan-1.0.0] startup
+[6.902s] [ext: omni.index.libs-387500.3473.0] startup
+[6.902s] [ext: omni.index-1.0.1] startup
+[6.903s] [ext: omni.ujitso.client-0.0.0] startup
+[6.903s] [ext: omni.usd.schema.playback-1.0.0] startup
+[6.906s] [ext: omni.volume-0.5.2] startup
+[6.910s] [ext: omni.hydra.rtx-1.0.3] startup
+2026-08-06T18:08:19Z [6,891ms] [Warning] [omni.log] Source: omni.hydra was already registered.
+[6.938s] [ext: omni.kit.hydra_texture-1.6.0] startup
+[6.942s] [ext: omni.kit.raycast.query-1.2.0] startup
+[6.946s] [ext: omni.kit.viewport.legacy_gizmos-1.0.24] startup
+[6.949s] [ext: omni.kit.viewport.registry-104.0.6] startup
+[6.949s] [ext: omni.kit.viewport.scene_camera_model-1.0.7] startup
+[6.954s] [ext: omni.kit.widget.viewport-109.2.0] startup
+[6.957s] [ext: omni.kit.window.drop_support-1.0.8] startup
+[6.958s] [ext: omni.kit.viewport.window-109.0.2] startup
+[6.974s] [ext: omni.kit.viewport.utility-2.0.1] startup
+[6.975s] [ext: isaacsim.core.rendering_manager-0.4.2] startup
+[6.996s] [ext: omni.graph.action_core-1.1.9] startup
+[6.998s] [ext: omni.graph.action_nodes_core-2.10.2] startup
+[7.001s] [ext: omni.graph.action_nodes-2.10.3] startup
+[7.049s] [ext: omni.graph.action-2.10.2] startup
+[7.052s] [ext: omni.graph.image.core-0.6.1] startup
+[7.054s] [ext: omni.graph.image.nodes-1.3.1] startup
+[7.055s] [ext: omni.graph.nodes_core-2.10.3] startup
+[7.063s] [ext: omni.graph.nodes-2.11.1] startup
+[7.068s] [ext: omni.kit.hotkeys.core-1.3.12] startup
+[7.069s] [ext: omni.kit.property.adapter.core-1.1.1] startup
+[7.071s] [ext: omni.kit.property.adapter.usd-1.0.5] startup
+[7.072s] [ext: omni.kit.widget.filter-1.1.5] startup
+[7.073s] [ext: omni.kit.widget.highlight_label-1.0.3] startup
+[7.074s] [ext: omni.kit.widget.searchfield-1.1.8] startup
+[7.076s] [ext: omni.kit.window.file_exporter-1.0.36] startup
+[7.077s] [ext: omni.kit.widget.stage-4.3.0] startup
+[7.084s] [ext: omni.kit.window.content_browser_rWarp 1.13.0 initialized:
    CUDA Toolkit 12.9, Driver 13.0
    Devices:
      "cpu"      : "x86_64"
      "cuda:0"   : "NVIDIA GeForce RTX 4070 Laptop GPU" (8 GiB, sm_89, mempool enabled)
    Kernel cache:
      /home/advaith/.cache/warp/1.13.0
-ode-2.10.2] startup
-[8.339s] [ext: omni.kit.widget.searchable_combobox-1.0.7] startup
-[8.340s] [ext: omni.kit.widget.settings-2.0.0] startup
-[8.343s] [ext: omni.kit.window.preferences-1.8.3] startup
-[8.349s] [ext: omni.kit.viewport.menubar.core-107.2.2] startup
-[8.364s] [ext: omni.syntheticdata-0.6.15] startup
-[8.402s] [ext: omni.replicator.nv-1.1.1] startup
-[8.411s] [ext: omni.videoencoding-0.2.1] startup
-[8.414s] [ext: omni.replicator.core-1.13.25] startup
-2026-08-06T16:24:44Z [8,395ms] [Warning] [pxr.Semantics] pxr.Semantics is deprecated - please use Semantics instead
-2026-08-06T16:24:45Z [8,488ms] [Warning] [omni.replicator.core.scripts.extension] No material configuration file, adding configuration to material settings directly.
-[8.709s] [ext: isaacsim.core.nodes-5.10.4] startup
-[8.753s] [ext: isaacsim.core.throttling-2.3.3] startup
-[8.756s] [ext: omni.kit.manipulator.viewport-107.0.1] startup
-[8.758s] [ext: omni.graph.visualization.nodes-2.1.4] startup
-[8.787s] [ext: omni.kit.window.extensions-1.5.7] startup
-[8.794s] [ext: isaacsim.gui.components-1.8.4] startup
-[8.801s] [ext: isaacsim.robot.surface_gripper-3.6.1] startup
-[8.817s] [ext: isaacsim.robot.manipulators-3.4.4] startup
-[8.831s] [ext: isaacsim.robot_motion.lula-4.1.2] startup
-[8.839s] [ext: isaacsim.robot_motion.motion_generation-8.2.8] startup
-[8.846s] [ext: isaacsim.cortex.framework-1.0.17] startup
-[8.849s] [ext: isaacsim.cortex.behaviors-2.0.16] startup
-[8.852s] [ext: isaacsim.examples.base-1.3.1] startup
-[8.855s] [ext: omni.kit.widget.zoombar-1.0.7] startup
-[8.856s] [ext: omni.kit.browser.core-2.3.18] startup
-[8.861s] [ext: omni.kit.browser.folder.core-2.0.2] startup
-[8.866s] [ext: omni.kit.widget.stage_icons-1.0.8] startup
-[8.868s] [ext: omni.kit.window.stage-2.6.1] startup
-[8.872s] [ext: omni.kit.menu.stage-1.2.7] startup
-[8.874s] [ext: omni.kit.usd.collect-3.0.5] startup
-[8.878s] [ext: omni.kit.widget.prompt-1.0.7] startup
-[8.879s] [ext: omni.kit.tool.collect-2.2.19] startup
-[8.882s] [ext: isaacsim.examples.browser-0.3.1] startup
-[8.885s] [ext: omni.kit.search.files-1.0.4] startup
-[8.886s] [ext: omni.kit.widget.calendar-1.0.9] startup
-[8.888s] [ext: omni.kit.widget.extended_searchfield-1.0.31] startup
-[8.898s] [ext: omni.simready.content.browser-0.3.7] startup
-[9.046s] [ext: isaacsim.gui.content_browser-0.4.2] startup
-[9.049s] [ext: omni.kit.selection-0.1.6] startup
-[9.050s] [ext: isaacsim.gui.menu-2.10.5] startup
-[9.060s] [ext: isaacsim.gui.property-1.6.2] startup
-[9.069s] [ext: omni.kit.viewport.actions-107.0.2] startup
-[9.074s] [ext: omni.kit.viewport.menubar.display-107.1.3] startup
-[9.076s] [ext: isaacsim.gui.sensors.icon-2.2.0] startup
-[9.080s] [ext: omni.behavior.scripting.core-110.1.0] startup
-[9.083s] [ext: isaacsim.replicator.behavior-1.5.3] startup
-[9.084s] [ext: isaacsim.replicator.experimental.domain_randomization-1.2.4] startup
-[9.106s] [ext: isaacsim.replicator.domain_randomization-1.2.1] startup
-[9.196s] [ext: isaacsim.replicator.writers-1.5.3] startup
-[9.225s] [ext: isaacsim.robot.experimental.wheeled_robots-0.2.9] startup
-[9.251s] [ext: isaacsim.robot.policy.examples-5.2.11] startup
-[9.276s] [ext: isaacsim.robot.wheeled_robots-5.2.3] startup
-[9.282s] [ext: isaacsim.robot.wheeled_robots.nodes-0.1.2] startup
-[9.310s] [ext: isaacsim.robot_motion.experimental.motion_generation-6.1.2] startup
-[9.324s] [ext: isaacsim.robot_motion.cumotion-1.3.0] startup
-[9.340s] [ext: omni.kit.numpy.common-0.1.3] startup
-[9.342s] [ext: isaacsim.sensors.camera-1.7.8] startup
-[9.377s] [ext: isaacsim.sensors.experimental.physics-3.0.1] startup
-[9.387s] [ext: omni.sensors.net-1.0.1] startup
-[9.390s] [ext: omni.sensors.nv.common-3.0.0] startup
-[9.402s] [ext: omni.sensors.nv.materials-2.0.0] startup
-[9.406s] [ext: omni.sensors.nv.acoustic-3.0.0] startup
-[9.409s] [ext: omni.sensors.nv.ids-2.0.1] startup
-[9.411s] [ext: omni.sensors.nv.lidar-3.0.0] startup
-[9.416s] [ext: omni.sensors.nv.radar-3.0.0] startup
-[9.419s] [ext: isaacsim.sensors.experimental.rtx-1.4.3] startup
-[9.711s] [ext: isaacsim.sensors.physics.nodes-1.5.2] startup
-[9.719s] [ext: isaacsim.util.debug_draw-3.2.2] startup
-[9.726s] [ext: isaacsim.sensors.physx-2.5.4] startup
-[9.737s] [ext: isaacsim.sensors.rtx-15.17.0] startup
-[9.754s] [ext: isaacsim.simulation_app-2.18.3] startup
-[9.754s] [ext: omni.anim.curve.core-1.6.0] startup
-[9.768s] [ext: omni.graph.ui_nodes-2.10.5] startup
-[9.812s] [ext: omni.hydra.scene_api-0.1.3] startup
-[9.818s] [ext: omni.kit.manipulator.camera-110.0.0] startup
-[9.822s] [ext: omni.kit.manipulator.selector-1.1.4] startup
-[9.824s] [ext: omni.kit.manipulator.transform-107.0.0] startup
-[9.829s] [ext: omni.kit.widget.toolbar-2.1.0] startup
-[9.837s] [ext: omni.kit.manipulator.tool.snap-1.5.14] startup
-[9.842s] [ext: omni.kit.viewport.manipulator.transform-107.0.4] startup
-[9.844s] [ext: omni.kit.manipulator.prim.core-108.0.2] startup
-[9.851s] [ext: omni.kit.manipulator.prim.usd-107.0.3] startup
-[9.853s] [ext: omni.kit.manipulator.prim-108.0.0] startup
-[9.854s] [ext: omni.kit.manipulator.selection-109.0.1] startup
-[9.855s] [ext: omni.kit.menu.create-2.0.2] startup
-[9.857s] [ext: omni.kit.property.audio-1.0.16] startup
-[9.861s] [ext: omni.kit.property.camera-1.0.14] startup
-[9.863s] [ext: omni.kit.property.geometry-2.1.2] startup
-[9.867s] [ext: omni.kit.property.light-1.0.14] startup
-2026-08-06T16:24:46Z [9,875ms] [Warning] [omni.usd] Encountered USD Warnings but USD Diagnostics are currently muted. To view USD Warnings, please set the '/persistent/app/usd/muteUsdDiagnostics' setting to false in Preferences page.
-[9.914s] [ext: omni.kit.property.material-1.14.2] startup
-[9.921s] [ext: omni.kit.property.render-1.2.2] startup
-[9.922s] [ext: omni.kit.property.transform-1.6.9] startup
-[9.927s] [ext: omni.kit.property.bundle-1.5.1] startup
-[9.929s] [ext: omni.kit.usdz_export-1.1.0] startup
-[9.931s] [ext: omni.kit.tool.asset_importer-5.2.0] startup
-[9.938s] [ext: omni.kit.ui.actions-1.0.5] startup
-[9.940s] [ext: omni.kit.viewport.menubar.camera-107.0.10] startup
-[9.947s] [ext: omni.kit.viewport.menubar.lighting-107.3.2] startup
-[9.952s] [ext: omni.kit.viewport.menubar.render-107.0.10] startup
-[9.955s] [ext: omni.kit.viewport.menubar.settings-110.0.1] startup
-[9.958s] [ext: omni.kit.window.console-1.1.8] startup
-[9.963s] [ext: omni.kit.window.status_bar-0.1.11] startup
-[9.966s] [ext: omni.kit.window.toolbar-3.0.3] startup
-[9.968s] [ext: omni.ocio-0.1.1] startup
-[9.970s] [ext: omni.physx.commands-110.1.11] startup
-[9.974s] [ext: omni.replicator.replicator_yaml-2.0.12] startup
-[9.988s] [ext: omni.rtx.window.settings-0.8.0] startup
-[9.994s] [ext: omni.rtx.settings.core-0.7.0] startup
-[9.998s] [ext: omni.usd.metrics.assembler.ui-110.1.1] startup
-[10.006s] [ext: semantics.schema.editor-2.0.2] startup
-[10.010s] [ext: semantics.schema.property-2.0.1] startup
-[10.012s] [ext: omni.kit.menu.common-2.0.2] startup
-[10.013s] [ext: isaacsim.exp.base-6.0.0] startup
-[10.014s] [ext: isaacsim.exp.base.python-6.0.0] startup
-[10.016s] Simulation App Starting
-[11.506s] Simulation App Startup Complete
-[11.520s] app ready
+egistry-0.0.6] startup
+[7.085s] [ext: omni.kit.window.file-2.0.10] startup
+[7.088s] [ext: omni.kit.window.content_browser-3.1.8] startup
+[7.098s] [ext: omni.kit.window.property-1.15.1] startup
+[7.108s] [ext: omni.kit.property.usd-4.8.1] startup
+[7.118s] [ext: omni.graph.scriptnode-2.10.2] startup
+[7.129s] [ext: omni.kit.widget.searchable_combobox-1.0.7] startup
+[7.130s] [ext: omni.kit.widget.settings-2.0.0] startup
+[7.132s] [ext: omni.kit.window.preferences-1.8.3] startup
+[7.136s] [ext: omni.kit.viewport.menubar.core-107.2.2] startup
+[7.148s] [ext: omni.syntheticdata-0.6.15] startup
+[7.179s] [ext: omni.replicator.nv-1.1.1] startup
+[7.185s] [ext: omni.videoencoding-0.2.1] startup
+[7.186s] [ext: omni.replicator.core-1.13.25] startup
+2026-08-06T18:08:20Z [7,163ms] [Warning] [pxr.Semantics] pxr.Semantics is deprecated - please use Semantics instead
+2026-08-06T18:08:20Z [7,242ms] [Warning] [omni.replicator.core.scripts.extension] No material configuration file, adding configuration to material settings directly.
+[7.447s] [ext: isaacsim.core.nodes-5.10.4] startup
+[7.482s] [ext: isaacsim.core.throttling-2.3.3] startup
+[7.483s] [ext: omni.kit.manipulator.viewport-107.0.1] startup
+[7.484s] [ext: omni.graph.visualization.nodes-2.1.4] startup
+[7.499s] [ext: omni.kit.window.extensions-1.5.7] startup
+[7.504s] [ext: isaacsim.gui.components-1.8.4] startup
+[7.509s] [ext: isaacsim.robot.surface_gripper-3.6.1] startup
+[7.521s] [ext: isaacsim.robot.manipulators-3.4.4] startup
+[7.532s] [ext: isaacsim.robot_motion.lula-4.1.2] startup
+[7.537s] [ext: isaacsim.robot_motion.motion_generation-8.2.8] startup
+[7.543s] [ext: isaacsim.cortex.framework-1.0.17] startup
+[7.545s] [ext: isaacsim.cortex.behaviors-2.0.16] startup
+[7.547s] [ext: isaacsim.examples.base-1.3.1] startup
+[7.549s] [ext: omni.kit.widget.zoombar-1.0.7] startup
+[7.549s] [ext: omni.kit.browser.core-2.3.18] startup
+[7.553s] [ext: omni.kit.browser.folder.core-2.0.2] startup
+[7.558s] [ext: omni.kit.widget.stage_icons-1.0.8] startup
+[7.559s] [ext: omni.kit.window.stage-2.6.1] startup
+[7.562s] [ext: omni.kit.menu.stage-1.2.7] startup
+[7.564s] [ext: omni.kit.usd.collect-3.0.5] startup
+[7.566s] [ext: omni.kit.widget.prompt-1.0.7] startup
+[7.567s] [ext: omni.kit.tool.collect-2.2.19] startup
+[7.569s] [ext: isaacsim.examples.browser-0.3.1] startup
+[7.572s] [ext: omni.kit.search.files-1.0.4] startup
+[7.573s] [ext: omni.kit.widget.calendar-1.0.9] startup
+[7.574s] [ext: omni.kit.widget.extended_searchfield-1.0.31] startup
+[7.582s] [ext: omni.simready.content.browser-0.3.7] startup
+[7.687s] [ext: isaacsim.gui.content_browser-0.4.2] startup
+[7.690s] [ext: omni.kit.selection-0.1.6] startup
+[7.691s] [ext: isaacsim.gui.menu-2.10.5] startup
+[7.699s] [ext: isaacsim.gui.property-1.6.2] startup
+[7.706s] [ext: omni.kit.viewport.actions-107.0.2] startup
+[7.710s] [ext: omni.kit.viewport.menubar.display-107.1.3] startup
+[7.712s] [ext: isaacsim.gui.sensors.icon-2.2.0] startup
+[7.715s] [ext: omni.behavior.scripting.core-110.1.0] startup
+[7.718s] [ext: isaacsim.replicator.behavior-1.5.3] startup
+[7.718s] [ext: isaacsim.replicator.experimental.domain_randomization-1.2.4] startup
+[7.736s] [ext: isaacsim.replicator.domain_randomization-1.2.1] startup
+[7.815s] [ext: isaacsim.replicator.writers-1.5.3] startup
+[7.840s] [ext: isaacsim.robot.experimental.wheeled_robots-0.2.9] startup
+[7.862s] [ext: isaacsim.robot.policy.examples-5.2.11] startup
+[7.884s] [ext: isaacsim.robot.wheeled_robots-5.2.3] startup
+[7.888s] [ext: isaacsim.robot.wheeled_robots.nodes-0.1.2] startup
+[7.910s] [ext: isaacsim.robot_motion.experimental.motion_generation-6.1.2] startup
+[7.921s] [ext: isaacsim.robot_motion.cumotion-1.3.0] startup
+[7.933s] [ext: omni.kit.numpy.common-0.1.3] startup
+[7.934s] [ext: isaacsim.sensors.camera-1.7.8] startup
+[7.963s] [ext: isaacsim.sensors.experimental.physics-3.0.1] startup
+[7.972s] [ext: omni.sensors.net-1.0.1] startup
+[7.974s] [ext: omni.sensors.nv.common-3.0.0] startup
+[7.985s] [ext: omni.sensors.nv.materials-2.0.0] startup
+[7.988s] [ext: omni.sensors.nv.acoustic-3.0.0] startup
+[7.990s] [ext: omni.sensors.nv.ids-2.0.1] startup
+[7.992s] [ext: omni.sensors.nv.lidar-3.0.0] startup
+[7.996s] [ext: omni.sensors.nv.radar-3.0.0] startup
+[7.999s] [ext: isaacsim.sensors.experimental.rtx-1.4.3] startup
+[8.253s] [ext: isaacsim.sensors.physics.nodes-1.5.2] startup
+[8.260s] [ext: isaacsim.util.debug_draw-3.2.2] startup
+[8.265s] [ext: isaacsim.sensors.physx-2.5.4] startup
+[8.273s] [ext: isaacsim.sensors.rtx-15.17.0] startup
+[8.284s] [ext: isaacsim.simulation_app-2.18.3] startup
+[8.284s] [ext: omni.anim.curve.core-1.6.0] startup
+[8.295s] [ext: omni.graph.ui_nodes-2.10.5] startup
+[8.334s] [ext: omni.hydra.scene_api-0.1.3] startup
+[8.342s] [ext: omni.kit.manipulator.camera-110.0.0] startup
+[8.346s] [ext: omni.kit.manipulator.selector-1.1.4] startup
+[8.347s] [ext: omni.kit.manipulator.transform-107.0.0] startup
+[8.351s] [ext: omni.kit.widget.toolbar-2.1.0] startup
+[8.356s] [ext: omni.kit.manipulator.tool.snap-1.5.14] startup
+[8.360s] [ext: omni.kit.viewport.manipulator.transform-107.0.4] startup
+[8.362s] [ext: omni.kit.manipulator.prim.core-108.0.2] startup
+[8.367s] [ext: omni.kit.manipulator.prim.usd-107.0.3] startup
+[8.368s] [ext: omni.kit.manipulator.prim-108.0.0] startup
+[8.368s] [ext: omni.kit.manipulator.selection-109.0.1] startup
+[8.370s] [ext: omni.kit.menu.create-2.0.2] startup
+[8.371s] [ext: omni.kit.property.audio-1.0.16] startup
+[8.374s] [ext: omni.kit.property.camera-1.0.14] startup
+[8.376s] [ext: omni.kit.property.geometry-2.1.2] startup
+[8.383s] [ext: omni.kit.property.light-1.0.14] startup
+2026-08-06T18:08:21Z [8,377ms] [Warning] [omni.usd] Encountered USD Warnings but USD Diagnostics are currently muted. To view USD Warnings, please set the '/persistent/app/usd/muteUsdDiagnostics' setting to false in Preferences page.
+[8.420s] [ext: omni.kit.property.material-1.14.2] startup
+[8.425s] [ext: omni.kit.property.render-1.2.2] startup
+[8.427s] [ext: omni.kit.property.transform-1.6.9] startup
+[8.430s] [ext: omni.kit.property.bundle-1.5.1] startup
+[8.431s] [ext: omni.kit.usdz_export-1.1.0] startup
+[8.433s] [ext: omni.kit.tool.asset_importer-5.2.0] startup
+[8.438s] [ext: omni.kit.ui.actions-1.0.5] startup
+[8.440s] [ext: omni.kit.viewport.menubar.camera-107.0.10] startup
+[8.444s] [ext: omni.kit.viewport.menubar.lighting-107.3.2] startup
+[8.446s] [ext: omni.kit.viewport.menubar.render-107.0.10] startup
+[8.448s] [ext: omni.kit.viewport.menubar.settings-110.0.1] startup
+[8.452s] [ext: omni.kit.window.console-1.1.8] startup
+[8.455s] [ext: omni.kit.window.status_bar-0.1.11] startup
+[8.458s] [ext: omni.kit.window.toolbar-3.0.3] startup
+[8.460s] [ext: omni.ocio-0.1.1] startup
+[8.461s] [ext: omni.physx.commands-110.1.11] startup
+[8.464s] [ext: omni.replicator.replicator_yaml-2.0.12] startup
+[8.475s] [ext: omni.rtx.window.settings-0.8.0] startup
+[8.479s] [ext: omni.rtx.settings.core-0.7.0] startup
+[8.482s] [ext: omni.usd.metrics.assembler.ui-110.1.1] startup
+[8.488s] [ext: semantics.schema.editor-2.0.2] startup
+[8.491s] [ext: semantics.schema.property-2.0.1] startup
+[8.492s] [ext: omni.kit.menu.common-2.0.2] startup
+[8.494s] [ext: isaacsim.exp.base-6.0.0] startup
+[8.494s] [ext: isaacsim.exp.base.python-6.0.0] startup
+[8.495s] Simulation App Starting
+[9.745s] Simulation App Startup Complete
+[9.770s] app ready
 [SIM] Creating stage
 [SIM] Plain ground plane created at /World/GroundPlane: color=(0.6, 0.6, 0.6), half_extent=25.0 m
 [SIM] Cable support block created at /World/CableSupportBlock: xy=(0.7400, 0.0000), size_mm=(80.0, 18.0, 40.0), top_z=0.0400 m
@@ -792,89 +355,89 @@ ode-2.10.2] startup
   plug_min_z=0.0440 (block_top=0.0400)
   root_min_z=0.0440
   translation=[0.4404, 0.0, 0.0552]
-2026-08-06T16:24:50Z [13,899ms] [Warning] [omni.fabric.plugin] Warning: attribute material:binding not found for path /__Prototype_567136137618212291/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01
+2026-08-06T18:08:25Z [12,278ms] [Warning] [omni.fabric.plugin] Warning: attribute material:binding not found for path /__Prototype_567136137618212291/SN4600C_A_01/msn4600_cs2fc_base/SM4600_CS2FC_01/NetworkConnectors/pcb003636_idf_01/Connector_Quad_01/Connector_Pair_01/QSFP_DD_Connector_A_01
 
-2026-08-06T16:24:51Z [14,549ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Brass_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [14,550ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Brass_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [14,661ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_D.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [14,661ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_D.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [14,697ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/Metal_Aluminum.mdl(59,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:51Z [14,760ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Dark_Metal_Rusty_A.mdl(18,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [14,760ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Dark_Metal_Rusty_A.mdl(18,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [14,850ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Chrome_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [14,850ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Chrome_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [14,910ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/DGX_Gold_Matte_A.mdl(59,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:51Z [14,953ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/DGX_Gold_Mesh_A.mdl(59,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:51Z [14,961ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_B.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [14,962ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_B.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [14,975ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/DGX_Gold_Shiny_A.mdl(58,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:51Z [14,985ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [14,985ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,002ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,002ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,044ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_D.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,044ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_D.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,156ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,156ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,210ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Rough_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,210ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Rough_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,224ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_Brushed_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,224ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_Brushed_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,272ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Cast_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,272ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Cast_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,317ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,318ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:51Z [15,364ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Seamed_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:51Z [15,364ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Seamed_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,438ms] [Warning] [rtx.neuraylib.plugin] [EntityResolver] FAILED  .::OmniPBR  <--->  ::Z73file_3A::home::advaith::Z92Isaacsim_2Dassets::DigitalTwin::Materials::Datacenter::OmniPBR  (NULL)
-2026-08-06T16:24:52Z [15,545ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,545ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,569ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Cast_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,569ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Cast_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,626ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Copper.mdl(59,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:52Z [15,627ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_D.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,627ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_D.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,649ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Aluminum.mdl(60,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:52Z [15,652ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Sheet_Metal_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,652ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Sheet_Metal_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,732ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Red_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,732ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Red_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,763ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,763ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,871ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,871ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,889ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Chassis_Front_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [15,889ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Chassis_Front_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [15,950ms] [Warning] [rtx.neuraylib.plugin] [EntityResolver] FAILED  ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A  <--->  ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A  (NULL)
-2026-08-06T16:24:52Z [15,950ms] [Error] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp error: C120 could not find module '::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A' in module path
-2026-08-06T16:24:52Z [15,950ms] [Warning] [rtx.neuraylib.plugin] Loading MdlModule to DB (rtx_scope0) failed: ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A
-2026-08-06T16:24:52Z [15,950ms] [Warning] [rtx.neuraylib.plugin] Loading transaction committed (this thread). MdlModule is NOT in the DB (rtx_scope0): ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A
-2026-08-06T16:24:52Z [15,950ms] [Error] [omni.usd] USD_MDL: in LoadModule at line 316 of ../../source/plugins/omni.usdMdl/neuray.cpp -- 'rtx::neuraylib::MdlModuleId' for '../../../../../Materials/Base/Plastics/FRP_FiberGlass_Orange_Glossy_A.mdl' is Invalid
+2026-08-06T18:08:26Z [13,006ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Brass_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,006ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Brass_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,015ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/DGX_Gold_Matte_A.mdl(59,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:26Z [13,033ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_B.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,033ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_B.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,048ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,048ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,061ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_D.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,061ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_D.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,077ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/DGX_Gold_Shiny_A.mdl(58,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:26Z [13,121ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,121ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Silver_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,135ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/DGX_Gold_Mesh_A.mdl(59,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:26Z [13,205ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Platinum.mdl(59,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:26Z [13,207ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Platinum_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,207ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Platinum_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,299ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Chrome_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,300ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Chrome_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,357ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Datacenter/Metal_Aluminum.mdl(59,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:26Z [13,489ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,489ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,500ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_Brushed_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,500ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_Brushed_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,519ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Rough_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,519ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Rough_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,657ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,657ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,679ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,679ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Stainless_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,740ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Seamed_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,740ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Seamed_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:26Z [13,772ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Dark_Metal_Rusty_A.mdl(18,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:26Z [13,772ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Dark_Metal_Rusty_A.mdl(18,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [13,909ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Chassis_Front_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [13,910ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Chassis_Front_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [13,984ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Nickel_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [13,984ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Nickel_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,170ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_D.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,170ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Gold_D.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,217ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Copper.mdl(59,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:27Z [14,218ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_D.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,218ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_D.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,240ms] [Warning] [rtx.neuraylib.plugin] [EntityResolver] FAILED  .::OmniPBR  <--->  ::Z73file_3A::home::advaith::Z92Isaacsim_2Dassets::DigitalTwin::Materials::Datacenter::OmniPBR  (NULL)
+2026-08-06T18:08:27Z [14,295ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Charcoal_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,295ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Charcoal_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,342ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Red_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,342ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Red_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,360ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Aluminum.mdl(60,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:27Z [14,362ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Sheet_Metal_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,362ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Sheet_Metal_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,413ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_White_Glossy_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,413ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_White_Glossy_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,442ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Bright_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,442ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Bright_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,465ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Plastics/Plastic_Flakes_A.mdl(65,15): C183 unused parameter 'is_objectspace'
+2026-08-06T18:08:27Z [14,507ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_Black_Glossy_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,507ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_Black_Glossy_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,557ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,557ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,609ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Cast_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:27Z [14,609ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Cast_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:27Z [14,671ms] [Warning] [rtx.neuraylib.plugin] [EntityResolver] FAILED  ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A  <--->  ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A  (NULL)
+2026-08-06T18:08:27Z [14,671ms] [Error] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp error: C120 could not find module '::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A' in module path
+2026-08-06T18:08:27Z [14,671ms] [Warning] [rtx.neuraylib.plugin] Loading MdlModule to DB (rtx_scope0) failed: ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A
+2026-08-06T18:08:27Z [14,671ms] [Warning] [rtx.neuraylib.plugin] Loading transaction committed (this thread). MdlModule is NOT in the DB (rtx_scope0): ::..::..::..::..::..::Materials::Base::Plastics::FRP_FiberGlass_Orange_Glossy_A
+2026-08-06T18:08:27Z [14,671ms] [Error] [omni.usd] USD_MDL: in LoadModule at line 316 of ../../source/plugins/omni.usdMdl/neuray.cpp -- 'rtx::neuraylib::MdlModuleId' for '../../../../../Materials/Base/Plastics/FRP_FiberGlass_Orange_Glossy_A.mdl' is Invalid
 
-2026-08-06T16:24:52Z [15,951ms] [Warning] [omni.usdMdl] Neuray::LoadModule(../../../../../Materials/Base/Plastics/FRP_FiberGlass_Orange_Glossy_A.mdl, ../../../../../Materials/Base/Plastics/FRP_FiberGlass_Orange_Glossy_A.mdl, 0) Done, success: 0
-2026-08-06T16:24:52Z [15,951ms] [Error] [omni.rtx.materials] Unable to find SdrShaderNode for prim: '/World/DataHall/CPU_Servers/Server_2U_B_02/Server_2U_C_inst/Looks/Plastic_Tab/Shader' with identifier: '9304724026189958819<FRP_FiberGlass_Orange_Glossy_A><mdl>'.
-2026-08-06T16:24:52Z [15,957ms] [Error] [omni.rtx.materials] Unable to find SdrShaderNode for prim: '/World/DataHall/CPU_Servers/Server_2U_B_03/Server_2U_B_inst/Looks/Plastic_Tab/Shader' with identifier: '9304724026189958819<FRP_FiberGlass_Orange_Glossy_A><mdl>'.
-2026-08-06T16:24:52Z [16,092ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_White_Glossy_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [16,092ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_White_Glossy_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:52Z [16,255ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Nickel_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:52Z [16,255ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Nickel_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [16,454ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Platinum.mdl(59,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:53Z [16,456ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Platinum_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [16,456ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Platinum_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [16,476ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Orange_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [16,476ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Orange_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [16,493ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_Black_Glossy_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [16,493ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Metal_Painted_Black_Glossy_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [16,660ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Plastics/Plastic_Flakes_A.mdl(65,15): C183 unused parameter 'is_objectspace'
-2026-08-06T16:24:53Z [16,691ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Charcoal_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [16,691ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Charcoal_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [16,742ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Bright_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [16,742ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Steel_Bright_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [16,827ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_B.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [16,827ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_B.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [17,266ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Blue_B.mdl(17,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
-2026-08-06T16:24:53Z [17,266ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Blue_B.mdl(17,5): C188 annotation '::anno::physical_name' will be ignored
-2026-08-06T16:24:53Z [17,303ms] [Error] [omni.rtx.materials] Unable to find SdrShaderNode for prim: '/World/DataHall/CPU_Servers/Server_2U_B_01/Server_2U_B_inst/Looks/Plastic_Tab/Shader' with identifier: '9304724026189958819<FRP_FiberGlass_Orange_Glossy_A><mdl>'.
+2026-08-06T18:08:27Z [14,671ms] [Warning] [omni.usdMdl] Neuray::LoadModule(../../../../../Materials/Base/Plastics/FRP_FiberGlass_Orange_Glossy_A.mdl, ../../../../../Materials/Base/Plastics/FRP_FiberGlass_Orange_Glossy_A.mdl, 0) Done, success: 0
+2026-08-06T18:08:27Z [14,671ms] [Error] [omni.rtx.materials] Unable to find SdrShaderNode for prim: '/World/DataHall/CPU_Servers/Server_2U_B_01/Server_2U_B_inst/Looks/Plastic_Tab/Shader' with identifier: '9304724026189958819<FRP_FiberGlass_Orange_Glossy_A><mdl>'.
+2026-08-06T18:08:28Z [14,914ms] [Error] [omni.rtx.materials] Unable to find SdrShaderNode for prim: '/World/DataHall/CPU_Servers/Server_2U_B_03/Server_2U_B_inst/Looks/Plastic_Tab/Shader' with identifier: '9304724026189958819<FRP_FiberGlass_Orange_Glossy_A><mdl>'.
+2026-08-06T18:08:28Z [15,143ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:28Z [15,143ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Copper_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:28Z [15,220ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Blue_B.mdl(17,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:28Z [15,220ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Anodized_Blue_B.mdl(17,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:28Z [15,414ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_B.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:28Z [15,414ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Polished_B.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:28Z [15,437ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Cast_A.mdl(15,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:28Z [15,438ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Metals/Aluminum_Cast_A.mdl(15,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:28Z [15,798ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Orange_A.mdl(16,5): C109 'physical_name' has not been declared; did you mean 'display_name'?
+2026-08-06T18:08:28Z [15,799ms] [Warning] [rtx.neuraylib.plugin] [MDLC:COMPILER]   1.0   MDLC   comp warn : file:/home/advaith/Isaacsim-assets/DigitalTwin/Materials/Base/Paint/Painted_Metal_Orange_A.mdl(16,5): C188 annotation '::anno::physical_name' will be ignored
+2026-08-06T18:08:28Z [15,833ms] [Error] [omni.rtx.materials] Unable to find SdrShaderNode for prim: '/World/DataHall/CPU_Servers/Server_2U_B_02/Server_2U_C_inst/Looks/Plastic_Tab/Shader' with identifier: '9304724026189958819<FRP_FiberGlass_Orange_Glossy_A><mdl>'.
 [SIM] Data Hall loaded at (-0.76, 0.0, 0.0)
 [SIM] FRANKA SIM ACCURACY MODE
   gravity disabled on: 11 rigid links
@@ -899,16 +462,16 @@ ode-2.10.2] startup
   plug_min_z=0.0440 (block_top=0.0400)
   root_min_z=0.0440
   translation=[0.4404, 0.0, 0.0552]
-2026-08-06T16:24:57Z [21,120ms] [Warning] [omni.rtx] DLSS increasing input dimensions: Render resolution of (320, 240) is below minimal input resolution of 300.
-2026-08-06T16:25:01Z [25,051ms] [Warning] [carb] Plugin interface for a client: omni.hydratexture.plugin was already released.
-2026-08-06T16:25:01Z [25,053ms] [Warning] [carb] Plugin interface for a client: omni.hydratexture.plugin was already released.
-2026-08-06T16:25:01Z [25,095ms] [Warning] [omni.hydra] Mesh '/World/NetworkCable/E_line_35/P_b65b6bbca5667a6f' update topology/point without updating normal, fallback to smooth normal.
-2026-08-06T16:25:04Z [28,321ms] [Error] [omni.physx.plugin] Collision contact offset must be positive and greater then restOffset, prim: /World/NetworkCable/E_crystal_head1_45/E_part004_42/P_a5e98c15ec9d2a94
-2026-08-06T16:25:04Z [28,321ms] [Error] [omni.physx.plugin] Collision rest offset must be lesser then contact offset, prim: /World/NetworkCable/E_crystal_head1_45/E_part004_42/P_a5e98c15ec9d2a94
-2026-08-06T16:25:04Z [28,322ms] [Error] [omni.physx.plugin] Collision contact offset must be positive and greater then restOffset, prim: /World/NetworkCable/E_crystal_head1_45/E_part005_43/P_8c2977c1fa075223
-2026-08-06T16:25:04Z [28,322ms] [Error] [omni.physx.plugin] Collision rest offset must be lesser then contact offset, prim: /World/NetworkCable/E_crystal_head1_45/E_part005_43/P_8c2977c1fa075223
-2026-08-06T16:25:04Z [28,323ms] [Error] [omni.physx.plugin] Collision contact offset must be positive and greater then restOffset, prim: /World/NetworkCable/E_crystal_head1_45/E_part006_44/P_68a1d929b133b6ba
-2026-08-06T16:25:04Z [28,323ms] [Error] [omni.physx.plugin] Collision rest offset must be lesser then contact offset, prim: /World/NetworkCable/E_crystal_head1_45/E_part006_44/P_68a1d929b133b6ba
+2026-08-06T18:08:32Z [19,361ms] [Warning] [omni.rtx] DLSS increasing input dimensions: Render resolution of (320, 240) is below minimal input resolution of 300.
+2026-08-06T18:08:35Z [22,632ms] [Warning] [carb] Plugin interface for a client: omni.hydratexture.plugin was already released.
+2026-08-06T18:08:35Z [22,633ms] [Warning] [carb] Plugin interface for a client: omni.hydratexture.plugin was already released.
+2026-08-06T18:08:35Z [22,670ms] [Warning] [omni.hydra] Mesh '/World/NetworkCable/E_line_35/P_b65b6bbca5667a6f' update topology/point without updating normal, fallback to smooth normal.
+2026-08-06T18:08:38Z [25,763ms] [Error] [omni.physx.plugin] Collision contact offset must be positive and greater then restOffset, prim: /World/NetworkCable/E_crystal_head1_45/E_part004_42/P_a5e98c15ec9d2a94
+2026-08-06T18:08:38Z [25,763ms] [Error] [omni.physx.plugin] Collision rest offset must be lesser then contact offset, prim: /World/NetworkCable/E_crystal_head1_45/E_part004_42/P_a5e98c15ec9d2a94
+2026-08-06T18:08:38Z [25,764ms] [Error] [omni.physx.plugin] Collision contact offset must be positive and greater then restOffset, prim: /World/NetworkCable/E_crystal_head1_45/E_part005_43/P_8c2977c1fa075223
+2026-08-06T18:08:38Z [25,764ms] [Error] [omni.physx.plugin] Collision rest offset must be lesser then contact offset, prim: /World/NetworkCable/E_crystal_head1_45/E_part005_43/P_8c2977c1fa075223
+2026-08-06T18:08:38Z [25,765ms] [Error] [omni.physx.plugin] Collision contact offset must be positive and greater then restOffset, prim: /World/NetworkCable/E_crystal_head1_45/E_part006_44/P_68a1d929b133b6ba
+2026-08-06T18:08:38Z [25,765ms] [Error] [omni.physx.plugin] Collision rest offset must be lesser then contact offset, prim: /World/NetworkCable/E_crystal_head1_45/E_part006_44/P_68a1d929b133b6ba
 [SIM] GRASP PHYSICS MATERIALS
   fingers: μ_s=0.85, μ_d=0.65 (rubber pad)
   plug:    μ_s=0.45, μ_d=0.35 (hard plastic)
@@ -939,6 +502,9 @@ ode-2.10.2] startup
   actual tool:/World/ToolCenter
   visual servo: 3.0 mm max step, 100 mm pre-insert standoff
   desired cable in virtual center eye: [0.0, -0.04, -0.1784]
+
+image 1/1 /home/advaith/Isaacsim-Scripts/esha/ethernet_cable_pick_up/yoloe_prompts/yoloe_reference_head_atlas.png: 1280x864 46 object0s, 45.9ms
+Speed: 5.0ms preprocess, 45.9ms inference, 9.0ms postprocess per image at shape (1, 3, 1280, 864)
 [SIM] WARNING: Waiting for startup settle before stereo capture:
   ToolCenter error: 585.603 mm (need <= 2.000 mm)
   target=[0.72, 0.1, 0.1966]
@@ -956,75 +522,147 @@ ode-2.10.2] startup
   settle tolerance: 2.000 mm
   stable frames: 300/300
   next action: begin synchronized stereo acquisition
-[SIM] RGB stereo acquisition 1/3: virtual_pixel=(561.7, 235.2), range=229.0 mm
-[RGB STEREO SERVO] capture=1 left=(609.8,235.1) right=(513.7,235.2) disparity=96.03px range=228.99mm center_error=273.80px range_error=+50.59mm size=24.99x24.48mm reproj=0.019px ray_gap=0.016mm raw_correction=120.37mm
-[SIM] RGB stereo acquisition 2/3: virtual_pixel=(561.9, 235.2), range=229.4 mm
-[RGB STEREO SERVO] capture=2 left=(609.8,235.2) right=(513.9,235.3) disparity=95.84px range=229.44mm center_error=273.88px range_error=+51.04mm size=25.04x24.47mm reproj=0.050px ray_gap=0.042mm raw_correction=120.77mm
+[SIM] YOLOE rois: left=(537, 166, 640, 480) right=(443, 164, 582, 480)
+[SIM] RGB stereo acquisition 1/3: virtual_pixel=(561.8, 235.2), range=229.1 mm
+[RGB STEREO SERVO] capture=1 left=(609.8,235.2) right=(513.8,235.2) disparity=95.98px range=229.11mm center_error=273.83px range_error=+50.71mm size=25.01x24.49mm reproj=0.029px ray_gap=0.024mm raw_correction=120.48mm
+[SIM] YOLOE rois: left=(537, 166, 640, 480) right=(443, 164, 582, 480)
+[SIM] RGB stereo acquisition 2/3: virtual_pixel=(561.9, 235.2), range=229.3 mm
+[RGB STEREO SERVO] capture=2 left=(609.8,235.2) right=(513.9,235.3) disparity=95.90px range=229.29mm center_error=273.86px range_error=+50.89mm size=25.03x24.51mm reproj=0.032px ray_gap=0.027mm raw_correction=120.64mm
+[SIM] YOLOE rois: left=(537, 166, 640, 480) right=(443, 164, 582, 480)
 [SIM] RGB STEREO TRACK ACQUIRED
-  virtual-center spread: 0.120 px
-  stereo range spread: 0.452 mm
+  virtual-center spread: 0.058 px
+  stereo range spread: 0.185 mm
   controller: virtual-center translation-only feedback
-[RGB STEREO SERVO] capture=3 left=(609.8,235.1) right=(513.9,235.3) disparity=95.83px range=229.47mm center_error=273.88px range_error=+51.07mm size=25.04x24.48mm reproj=0.053px ray_gap=0.044mm raw_correction=120.78mm
-[RGB STEREO SERVO] capture=4 left=(609.8,235.2) right=(513.9,235.2) disparity=95.87px range=229.37mm center_error=273.88px range_error=+50.97mm size=25.03x24.52mm reproj=0.034px ray_gap=0.029mm raw_correction=120.70mm
-[RGB STEREO SERVO] capture=5 left=(605.8,238.4) right=(507.7,238.3) disparity=98.10px range=224.17mm center_error=267.89px range_error=+45.77mm size=25.22x23.95mm reproj=0.010px ray_gap=0.008mm raw_correction=114.41mm
-[RGB STEREO SERVO] capture=6 left=(600.8,241.4) right=(502.4,241.4) disparity=98.41px range=223.46mm center_error=261.90px range_error=+45.06mm size=25.15x24.08mm reproj=0.023px ray_gap=0.018mm raw_correction=111.66mm
-[RGB STEREO SERVO] capture=7 left=(595.8,244.3) right=(496.7,244.3) disparity=99.11px range=221.88mm center_error=255.83px range_error=+43.48mm size=24.95x23.70mm reproj=0.003px ray_gap=0.003mm raw_correction=108.23mm
-[RGB STEREO SERVO] capture=8 left=(590.8,249.5) right=(491.7,249.4) disparity=99.19px range=221.69mm center_error=249.01px range_error=+43.29mm size=26.61x24.82mm reproj=0.057px ray_gap=0.046mm raw_correction=105.66mm
-[RGB STEREO SERVO] capture=9 left=(585.8,252.4) right=(486.2,252.4) disparity=99.67px range=220.63mm center_error=242.99px range_error=+42.23mm size=26.49x24.90mm reproj=0.018px ray_gap=0.014mm raw_correction=102.69mm
-[RGB STEREO SERVO] capture=10 left=(584.4,252.8) right=(484.2,252.8) disparity=100.19px range=219.49mm center_error=241.29px range_error=+41.09mm size=26.35x24.96mm reproj=0.028px ray_gap=0.022mm raw_correction=101.21mm
-[RGB STEREO SERVO] capture=11 left=(576.4,257.4) right=(475.5,257.5) disparity=100.90px range=217.93mm center_error=231.79px range_error=+39.53mm size=26.16x24.42mm reproj=0.011px ray_gap=0.009mm raw_correction=96.67mm
-[RGB STEREO SERVO] capture=12 left=(571.2,259.6) right=(470.1,259.5) disparity=101.11px range=217.50mm center_error=226.10px range_error=+39.10mm size=26.11x24.54mm reproj=0.041px ray_gap=0.032mm raw_correction=94.29mm
-[RGB STEREO SERVO] capture=13 left=(566.6,262.5) right=(464.2,262.5) disparity=102.32px range=214.91mm center_error=220.07px range_error=+36.51mm size=25.80x24.25mm reproj=0.013px ray_gap=0.010mm raw_correction=90.33mm
-[RGB STEREO SERVO] capture=14 left=(561.0,265.4) right=(458.3,265.3) disparity=102.69px range=214.13mm center_error=213.66px range_error=+35.73mm size=25.71x24.22mm reproj=0.033px ray_gap=0.025mm raw_correction=87.52mm
-[RGB STEREO SERVO] capture=15 left=(559.6,265.7) right=(456.3,266.3) disparity=103.30px range=212.85mm center_error=211.88px range_error=+34.45mm size=25.55x23.88mm reproj=0.308px ray_gap=0.238mm raw_correction=86.01mm
-[RGB STEREO SERVO] capture=16 left=(550.7,270.5) right=(447.1,270.5) disparity=103.52px range=212.42mm center_error=201.73px range_error=+34.02mm size=25.50x23.96mm reproj=0.015px ray_gap=0.012mm raw_correction=82.14mm
-[RGB STEREO SERVO] capture=17 left=(545.6,273.2) right=(441.2,273.2) disparity=104.42px range=210.60mm center_error=195.57px range_error=+32.20mm size=25.28x23.63mm reproj=0.033px ray_gap=0.025mm raw_correction=78.78mm
-[RGB STEREO SERVO] capture=18 left=(540.6,276.2) right=(435.4,276.2) disparity=105.12px range=209.19mm center_error=189.44px range_error=+30.79mm size=25.11x23.43mm reproj=0.029px ray_gap=0.022mm raw_correction=75.75mm
-[RGB STEREO SERVO] capture=19 left=(535.3,279.2) right=(429.3,279.2) disparity=105.98px range=207.48mm center_error=182.98px range_error=+29.08mm size=24.91x23.27mm reproj=0.024px ray_gap=0.018mm raw_correction=72.43mm
-[RGB STEREO SERVO] capture=20 left=(533.1,279.8) right=(427.2,279.6) disparity=105.96px range=207.53mm center_error=180.87px range_error=+29.13mm size=24.91x23.28mm reproj=0.069px ray_gap=0.052mm raw_correction=71.72mm
-[RGB STEREO SERVO] capture=21 left=(524.1,284.8) right=(417.1,284.7) disparity=106.90px range=205.71mm center_error=170.06px range_error=+27.31mm size=24.70x23.08mm reproj=0.075px ray_gap=0.056mm raw_correction=66.90mm
-[RGB STEREO SERVO] capture=22 left=(518.6,287.3) right=(411.3,287.5) disparity=107.30px range=204.93mm center_error=163.82px range_error=+26.53mm size=24.60x23.00mm reproj=0.076px ray_gap=0.057mm raw_correction=64.30mm
-[RGB STEREO SERVO] capture=23 left=(516.5,288.2) right=(409.0,288.3) disparity=107.51px range=204.54mm center_error=161.50px range_error=+26.14mm size=24.56x23.07mm reproj=0.040px ray_gap=0.030mm raw_correction=63.27mm
-[RGB STEREO SERVO] capture=24 left=(507.0,296.3) right=(398.5,293.3) disparity=108.54px range=202.58mm center_error=149.57px range_error=+24.18mm size=25.42x22.90mm reproj=1.468px ray_gap=1.077mm raw_correction=58.14mm
-[RGB STEREO SERVO] capture=25 left=(505.1,297.2) right=(396.2,294.2) disparity=108.82px range=202.06mm center_error=147.29px range_error=+23.66mm size=25.36x22.66mm reproj=1.471px ray_gap=1.076mm raw_correction=57.07mm
-[RGB STEREO SERVO] capture=26 left=(495.9,302.3) right=(385.8,299.2) disparity=110.10px range=199.70mm center_error=136.26px range_error=+21.30mm size=25.06x22.54mm reproj=1.563px ray_gap=1.129mm raw_correction=52.07mm
-[RGB STEREO SERVO] capture=27 left=(489.6,305.3) right=(378.7,302.1) disparity=110.91px range=198.23mm center_error=128.97px range_error=+19.83mm size=24.88x22.19mm reproj=1.589px ray_gap=1.139mm raw_correction=48.85mm
-[RGB STEREO SERVO] capture=28 left=(487.2,306.4) right=(376.6,303.2) disparity=110.65px range=198.70mm center_error=126.46px range_error=+20.30mm size=24.94x22.24mm reproj=1.564px ray_gap=1.123mm raw_correction=48.28mm
-[RGB STEREO SERVO] capture=29 left=(477.7,312.3) right=(365.6,308.6) disparity=112.06px range=196.16mm center_error=114.75px range_error=+17.76mm size=24.62x22.16mm reproj=1.861px ray_gap=1.318mm raw_correction=43.12mm
-[RGB STEREO SERVO] capture=30 left=(471.5,315.1) right=(358.9,312.1) disparity=112.59px range=195.30mm center_error=107.60px range_error=+16.90mm size=24.51x22.26mm reproj=1.501px ray_gap=1.057mm raw_correction=40.36mm
-[RGB STEREO SERVO] capture=31 left=(465.1,318.0) right=(352.1,315.1) disparity=113.03px range=194.54mm center_error=100.30px range_error=+16.14mm size=24.42x21.87mm reproj=1.451px ray_gap=1.017mm raw_correction=37.62mm
-[RGB STEREO SERVO] capture=32 left=(459.1,321.1) right=(344.4,318.2) disparity=114.64px range=191.79mm center_error=92.84px range_error=+13.39mm size=24.07x21.50mm reproj=1.475px ray_gap=1.018mm raw_correction=33.87mm
-[RGB STEREO SERVO] capture=33 left=(457.0,322.2) right=(342.1,322.4) disparity=114.98px range=191.25mm center_error=89.71px range_error=+12.85mm size=25.05x21.49mm reproj=0.113px ray_gap=0.077mm raw_correction=32.65mm
-[RGB STEREO SERVO] capture=34 left=(446.1,328.2) right=(329.6,328.2) disparity=116.46px range=188.81mm center_error=76.57px range_error=+10.41mm size=24.73x21.34mm reproj=0.039px ray_gap=0.026mm raw_correction=27.39mm
-[RGB STEREO SERVO] capture=35 left=(439.4,332.0) right=(321.7,332.0) disparity=117.67px range=186.87mm center_error=68.36px range_error=+8.47mm size=24.47x21.10mm reproj=0.002px ray_gap=0.001mm raw_correction=23.99mm
-[RGB STEREO SERVO] capture=36 left=(433.0,335.2) right=(314.5,335.1) disparity=118.45px range=185.64mm center_error=60.87px range_error=+7.24mm size=24.31x21.15mm reproj=0.032px ray_gap=0.021mm raw_correction=21.15mm
-[RGB STEREO SERVO] capture=37 left=(425.5,339.1) right=(306.2,338.9) disparity=119.22px range=184.45mm center_error=52.10px range_error=+6.05mm size=24.16x21.15mm reproj=0.069px ray_gap=0.046mm raw_correction=17.95mm
-[RGB STEREO SERVO] capture=38 left=(418.6,342.4) right=(297.9,342.2) disparity=120.73px range=182.15mm center_error=43.82px range_error=+3.75mm size=23.85x21.27mm reproj=0.078px ray_gap=0.051mm raw_correction=14.63mm
-[RGB STEREO SERVO] capture=39 left=(411.2,346.3) right=(290.1,345.9) disparity=121.06px range=181.65mm center_error=35.33px range_error=+3.25mm size=23.79x21.40mm reproj=0.180px ray_gap=0.117mm raw_correction=11.81mm
-[RGB STEREO SERVO] capture=40 left=(404.3,350.3) right=(281.2,350.0) disparity=123.10px range=178.64mm center_error=26.42px range_error=+0.24mm size=23.40x21.42mm reproj=0.154px ray_gap=0.098mm raw_correction=8.56mm
-[RGB STEREO SERVO] capture=41 left=(396.7,354.7) right=(273.1,354.0) disparity=123.64px range=177.86mm center_error=17.56px range_error=-0.54mm size=23.29x21.44mm reproj=0.383px ray_gap=0.243mm raw_correction=5.77mm
-[RGB STEREO SERVO] capture=42 left=(394.4,355.8) right=(270.9,355.6) disparity=123.46px range=178.12mm center_error=14.90px range_error=-0.28mm size=23.32x21.14mm reproj=0.139px ray_gap=0.088mm raw_correction=4.87mm
-[RGB STEREO SERVO] capture=43 left=(386.6,360.5) right=(262.7,360.0) disparity=123.85px range=177.56mm center_error=5.75px range_error=-0.84mm size=23.25x21.37mm reproj=0.227px ray_gap=0.143mm raw_correction=2.12mm
-[RGB STEREO SERVO] capture=44 left=(384.1,361.6) right=(260.8,361.3) disparity=123.36px range=178.26mm center_error=3.21px range_error=-0.14mm size=23.34x21.29mm reproj=0.178px ray_gap=0.113mm raw_correction=1.06mm
-[RGB STEREO SERVO] capture=45 left=(381.8,362.6) right=(258.7,362.4) disparity=123.08px range=178.66mm center_error=0.76px range_error=+0.26mm size=23.40x21.25mm reproj=0.116px ray_gap=0.074mm raw_correction=0.35mm
+[RGB STEREO SERVO] capture=3 left=(609.8,235.2) right=(513.9,235.2) disparity=95.90px range=229.31mm center_error=273.87px range_error=+50.91mm size=25.03x24.51mm reproj=0.023px ray_gap=0.019mm raw_correction=120.65mm
+[SIM] YOLOE rois: left=(537, 166, 640, 480) right=(443, 164, 582, 480)
+[RGB STEREO SERVO] capture=4 left=(609.8,235.2) right=(513.9,235.3) disparity=95.89px range=229.32mm center_error=273.87px range_error=+50.92mm size=25.03x24.51mm reproj=0.032px ray_gap=0.027mm raw_correction=120.66mm
+[SIM] YOLOE rois: left=(532, 169, 640, 480) right=(438, 169, 576, 344)
+[RGB STEREO SERVO] capture=5 left=(605.8,238.5) right=(507.7,238.6) disparity=98.12px range=224.12mm center_error=267.79px range_error=+45.72mm size=25.21x24.00mm reproj=0.025px ray_gap=0.020mm raw_correction=114.35mm
+[SIM] YOLOE rois: left=(529, 170, 640, 480) right=(435, 161, 574, 480)
+[RGB STEREO SERVO] capture=6 left=(603.4,239.5) right=(505.7,239.3) disparity=97.71px range=225.06mm center_error=265.45px range_error=+46.66mm size=25.27x24.05mm reproj=0.059px ray_gap=0.048mm raw_correction=114.19mm
+[SIM] YOLOE rois: left=(521, 173, 640, 480) right=(426, 170, 566, 480)
+[RGB STEREO SERVO] capture=7 left=(596.2,244.4) right=(496.7,244.3) disparity=99.49px range=221.02mm center_error=256.00px range_error=+42.62mm size=24.74x23.60mm reproj=0.021px ray_gap=0.017mm raw_correction=107.66mm
+[SIM] YOLOE rois: left=(517, 175, 640, 480) right=(421, 168, 560, 480)
+[RGB STEREO SERVO] capture=8 left=(591.1,249.5) right=(491.7,249.4) disparity=99.47px range=221.08mm center_error=249.13px range_error=+42.68mm size=26.54x24.75mm reproj=0.055px ray_gap=0.044mm raw_correction=105.26mm
+[SIM] YOLOE rois: left=(512, 179, 640, 480) right=(416, 178, 555, 480)
+[RGB STEREO SERVO] capture=9 left=(586.1,252.4) right=(486.5,252.5) disparity=99.60px range=220.78mm center_error=243.26px range_error=+42.38mm size=26.50x24.91mm reproj=0.007px ray_gap=0.005mm raw_correction=102.90mm
+[SIM] YOLOE rois: left=(511, 179, 640, 480) right=(414, 178, 553, 480)
+[RGB STEREO SERVO] capture=10 left=(584.2,253.1) right=(484.3,253.0) disparity=99.90px range=220.12mm center_error=241.17px range_error=+41.72mm size=26.42x24.52mm reproj=0.034px ray_gap=0.027mm raw_correction=101.64mm
+[SIM] YOLOE rois: left=(502, 183, 640, 480) right=(396, 170, 544, 480)
+[RGB STEREO SERVO] capture=11 left=(576.1,257.4) right=(475.2,257.4) disparity=100.94px range=217.85mm center_error=231.49px range_error=+39.45mm size=26.15x24.57mm reproj=0.028px ray_gap=0.022mm raw_correction=96.49mm
+[SIM] YOLOE rois: left=(501, 183, 640, 480) right=(400, 170, 542, 480)
+[RGB STEREO SERVO] capture=12 left=(574.6,258.4) right=(473.2,258.2) disparity=101.37px range=216.92mm center_error=229.54px range_error=+38.52mm size=26.04x24.47mm reproj=0.062px ray_gap=0.049mm raw_correction=95.13mm
+[SIM] YOLOE rois: left=(492, 187, 638, 480) right=(393, 181, 533, 480)
+[RGB STEREO SERVO] capture=13 left=(566.6,262.5) right=(464.3,262.4) disparity=102.31px range=214.94mm center_error=220.14px range_error=+36.54mm size=25.80x24.14mm reproj=0.035px ray_gap=0.027mm raw_correction=90.37mm
+[SIM] YOLOE rois: left=(487, 189, 633, 480) right=(374, 177, 528, 480)
+[RGB STEREO SERVO] capture=14 left=(561.6,265.4) right=(458.6,265.3) disparity=102.99px range=213.51mm center_error=214.09px range_error=+35.11mm size=25.63x23.90mm reproj=0.053px ray_gap=0.041mm raw_correction=87.25mm
+[SIM] YOLOE rois: left=(482, 193, 628, 480) right=(370, 180, 521, 480)
+[RGB STEREO SERVO] capture=15 left=(555.7,267.6) right=(452.6,268.2) disparity=103.04px range=213.39mm center_error=207.60px range_error=+34.99mm size=25.62x23.88mm reproj=0.295px ray_gap=0.228mm raw_correction=84.86mm
+[SIM] YOLOE rois: left=(477, 195, 622, 480) right=(365, 182, 516, 480)
+[RGB STEREO SERVO] capture=16 left=(550.6,270.7) right=(447.1,270.6) disparity=103.53px range=212.41mm center_error=201.64px range_error=+34.01mm size=25.50x23.96mm reproj=0.035px ray_gap=0.027mm raw_correction=82.11mm
+[SIM] YOLOE rois: left=(471, 199, 617, 480) right=(360, 184, 510, 480)
+[RGB STEREO SERVO] capture=17 left=(545.6,273.2) right=(441.2,273.2) disparity=104.41px range=210.61mm center_error=195.58px range_error=+32.21mm size=25.28x23.64mm reproj=0.019px ray_gap=0.014mm raw_correction=78.79mm
+[SIM] YOLOE rois: left=(467, 203, 613, 480) right=(354, 187, 504, 480)
+[RGB STEREO SERVO] capture=18 left=(540.6,276.2) right=(435.5,276.2) disparity=105.02px range=209.38mm center_error=189.50px range_error=+30.98mm size=25.14x23.44mm reproj=0.005px ray_gap=0.004mm raw_correction=75.89mm
+[SIM] YOLOE rois: left=(461, 206, 607, 480) right=(349, 190, 499, 480)
+[RGB STEREO SERVO] capture=19 left=(535.3,279.2) right=(429.3,279.2) disparity=105.94px range=207.57mm center_error=183.00px range_error=+29.17mm size=24.92x23.26mm reproj=0.020px ray_gap=0.015mm raw_correction=72.49mm
+[SIM] YOLOE rois: left=(460, 206, 604, 480) right=(347, 191, 496, 480)
+[RGB STEREO SERVO] capture=20 left=(533.0,280.2) right=(427.2,280.2) disparity=105.75px range=207.95mm center_error=180.58px range_error=+29.55mm size=24.97x23.34mm reproj=0.012px ray_gap=0.009mm raw_correction=71.90mm
+[SIM] YOLOE rois: left=(451, 210, 596, 480) right=(338, 195, 486, 480)
+[RGB STEREO SERVO] capture=21 left=(523.6,285.1) right=(417.1,284.6) disparity=106.52px range=206.46mm center_error=169.80px range_error=+28.06mm size=24.79x23.16mm reproj=0.247px ray_gap=0.185mm raw_correction=67.27mm
+[SIM] YOLOE rois: left=(444, 213, 590, 480) right=(334, 197, 480, 480)
+[RGB STEREO SERVO] capture=22 left=(518.6,287.3) right=(411.1,287.3) disparity=107.52px range=204.53mm center_error=163.75px range_error=+26.13mm size=24.55x23.07mm reproj=0.016px ray_gap=0.012mm raw_correction=64.03mm
+[SIM] YOLOE rois: left=(439, 217, 585, 480) right=(328, 200, 473, 480)
+[RGB STEREO SERVO] capture=23 left=(512.9,290.3) right=(404.6,290.3) disparity=108.32px range=203.01mm center_error=157.00px range_error=+24.61mm size=24.37x22.71mm reproj=0.006px ray_gap=0.004mm raw_correction=60.84mm
+[SIM] YOLOE rois: left=(433, 220, 579, 480) right=(322, 203, 467, 480)
+[RGB STEREO SERVO] capture=24 left=(507.1,296.2) right=(398.7,293.2) disparity=108.39px range=202.85mm center_error=149.70px range_error=+24.45mm size=25.46x22.78mm reproj=1.491px ray_gap=1.096mm raw_correction=58.34mm
+[SIM] YOLOE rois: left=(428, 222, 573, 480) right=(317, 206, 461, 480)
+[RGB STEREO SERVO] capture=25 left=(501.5,299.3) right=(392.6,296.2) disparity=108.87px range=201.96mm center_error=143.16px range_error=+23.56mm size=25.35x22.79mm reproj=1.526px ray_gap=1.116mm raw_correction=55.65mm
+[SIM] YOLOE rois: left=(422, 223, 568, 480) right=(312, 209, 454, 480)
+[RGB STEREO SERVO] capture=26 left=(495.9,302.3) right=(385.9,299.2) disparity=110.01px range=199.85mm center_error=136.33px range_error=+21.45mm size=25.08x22.55mm reproj=1.578px ray_gap=1.140mm raw_correction=52.18mm
+[SIM] YOLOE rois: left=(417, 227, 562, 480) right=(306, 211, 448, 480)
+[RGB STEREO SERVO] capture=27 left=(489.5,305.3) right=(379.0,302.2) disparity=110.50px range=198.98mm center_error=129.02px range_error=+20.58mm size=24.97x22.12mm reproj=1.519px ray_gap=1.093mm raw_correction=49.28mm
+[SIM] YOLOE rois: left=(410, 231, 556, 480) right=(301, 213, 441, 480)
+[RGB STEREO SERVO] capture=28 left=(484.0,308.4) right=(372.5,305.3) disparity=111.56px range=197.09mm center_error=122.27px range_error=+18.69mm size=24.74x22.27mm reproj=1.559px ray_gap=1.110mm raw_correction=46.05mm
+[SIM] YOLOE rois: left=(408, 230, 554, 480) right=(299, 213, 438, 480)
+[RGB STEREO SERVO] capture=29 left=(481.8,309.6) right=(369.7,306.3) disparity=112.10px range=196.13mm center_error=119.55px range_error=+17.73mm size=24.62x21.97mm reproj=1.631px ray_gap=1.155mm raw_correction=44.65mm
+[SIM] YOLOE rois: left=(381, 217, 544, 480) right=(289, 218, 428, 480)
+[RGB STEREO SERVO] capture=30 left=(471.7,315.3) right=(359.1,312.1) disparity=112.64px range=195.19mm center_error=107.70px range_error=+16.79mm size=24.50x22.11mm reproj=1.580px ray_gap=1.112mm raw_correction=40.34mm
+[SIM] YOLOE rois: left=(391, 242, 537, 480) right=(282, 221, 421, 480)
+[RGB STEREO SERVO] capture=31 left=(465.1,318.1) right=(352.1,315.1) disparity=113.08px range=194.43mm center_error=100.32px range_error=+16.03mm size=24.40x21.85mm reproj=1.501px ray_gap=1.052mm raw_correction=37.57mm
+[SIM] YOLOE rois: left=(370, 222, 531, 480) right=(275, 222, 413, 480)
+[RGB STEREO SERVO] capture=32 left=(459.1,321.2) right=(344.6,318.2) disparity=114.49px range=192.04mm center_error=92.89px range_error=+13.64mm size=24.10x21.54mm reproj=1.511px ray_gap=1.045mm raw_correction=34.00mm
+[SIM] YOLOE rois: left=(365, 225, 525, 480) right=(267, 225, 406, 480)
+[RGB STEREO SERVO] capture=33 left=(452.8,325.1) right=(337.1,322.1) disparity=115.69px range=190.05mm center_error=84.99px range_error=+11.65mm size=23.85x21.51mm reproj=1.499px ray_gap=1.025mm raw_correction=30.58mm
+[SIM] YOLOE rois: left=(372, 251, 518, 480) right=(259, 227, 398, 480)
+[RGB STEREO SERVO] capture=34 left=(446.1,328.5) right=(329.6,328.5) disparity=116.51px range=188.73mm center_error=76.45px range_error=+10.33mm size=24.72x21.33mm reproj=0.007px ray_gap=0.005mm raw_correction=27.32mm
+[SIM] YOLOE rois: left=(354, 230, 511, 480) right=(251, 229, 391, 480)
+[RGB STEREO SERVO] capture=35 left=(439.6,332.0) right=(321.8,332.2) disparity=117.76px range=186.73mm center_error=68.44px range_error=+8.33mm size=24.46x20.93mm reproj=0.082px ray_gap=0.055mm raw_correction=23.97mm
+[SIM] YOLOE rois: left=(348, 233, 505, 480) right=(244, 232, 384, 480)
+[RGB STEREO SERVO] capture=36 left=(433.0,335.3) right=(314.5,335.2) disparity=118.56px range=185.48mm center_error=60.84px range_error=+7.08mm size=24.29x21.12mm reproj=0.032px ray_gap=0.021mm raw_correction=21.08mm
+[SIM] YOLOE rois: left=(342, 236, 497, 480) right=(236, 235, 376, 480)
+[RGB STEREO SERVO] capture=37 left=(425.6,339.2) right=(305.9,339.1) disparity=119.71px range=183.70mm center_error=51.95px range_error=+5.30mm size=24.06x20.92mm reproj=0.030px ray_gap=0.020mm raw_correction=17.67mm
+[SIM] YOLOE rois: left=(336, 239, 490, 480) right=(227, 238, 368, 480)
+[RGB STEREO SERVO] capture=38 left=(418.7,343.1) right=(297.9,342.8) disparity=120.86px range=181.95mm center_error=43.56px range_error=+3.55mm size=23.83x21.00mm reproj=0.159px ray_gap=0.103mm raw_correction=14.51mm
+[SIM] YOLOE rois: left=(330, 241, 483, 480) right=(219, 241, 360, 480)
+[RGB STEREO SERVO] capture=39 left=(411.1,346.4) right=(289.7,346.7) disparity=121.40px range=181.13mm center_error=34.93px range_error=+2.73mm size=23.72x21.11mm reproj=0.163px ray_gap=0.105mm raw_correction=11.56mm
+[SIM] YOLOE rois: left=(324, 244, 474, 480) right=(211, 245, 352, 480)
+[RGB STEREO SERVO] capture=40 left=(404.0,350.6) right=(281.2,350.6) disparity=122.72px range=179.19mm center_error=26.10px range_error=+0.79mm size=23.46x21.37mm reproj=0.002px ray_gap=0.001mm raw_correction=8.46mm
+[SIM] YOLOE rois: left=(322, 245, 472, 480) right=(208, 245, 349, 480)
+[RGB STEREO SERVO] capture=41 left=(402.0,352.1) right=(278.3,351.8) disparity=123.65px range=177.84mm center_error=23.31px range_error=-0.56mm size=23.29x21.47mm reproj=0.158px ray_gap=0.100mm raw_correction=7.62mm
+[SIM] YOLOE rois: left=(312, 251, 460, 480) right=(195, 250, 337, 480)
+[RGB STEREO SERVO] capture=42 left=(389.3,358.5) right=(265.7,358.3) disparity=123.63px range=177.87mm center_error=9.11px range_error=-0.53mm size=23.29x20.86mm reproj=0.135px ray_gap=0.086mm raw_correction=3.05mm
+[SIM] YOLOE rois: left=(309, 251, 457, 480) right=(193, 251, 336, 480)
+[RGB STEREO SERVO] capture=43 left=(386.6,359.6) right=(263.2,359.7) disparity=123.44px range=178.14mm center_error=6.26px range_error=-0.26mm size=23.33x20.87mm reproj=0.036px ray_gap=0.022mm raw_correction=2.07mm
+[SIM] YOLOE rois: left=(307, 252, 455, 480) right=(191, 252, 333, 480)
+[RGB STEREO SERVO] capture=44 left=(384.2,361.2) right=(260.7,361.1) disparity=123.44px range=178.14mm center_error=3.35px range_error=-0.26mm size=23.33x21.14mm reproj=0.036px ray_gap=0.023mm raw_correction=1.14mm
+[SIM] YOLOE rois: left=(306, 253, 452, 480) right=(188, 253, 333, 480)
+[RGB STEREO SERVO] capture=45 left=(381.7,362.4) right=(258.5,362.7) disparity=123.24px range=178.43mm center_error=0.66px range_error=+0.03mm size=23.36x21.01mm reproj=0.180px ray_gap=0.114mm raw_correction=0.21mm
+[SIM] YOLOE rois: left=(305, 253, 450, 480) right=(187, 286, 328, 480)
 [SIM] RGB STEREO VISUAL ALIGNMENT LOCKED
-  center error: 0.953 px
-  range error: 0.309 mm
+  center error: 1.527 px
+  range error: 0.189 mm
   aligned captures: 2/2
-[RGB STEREO SERVO] capture=46 left=(380.3,363.1) right=(256.9,363.0) disparity=123.48px range=178.09mm center_error=0.95px range_error=-0.31mm size=23.31x21.15mm reproj=0.037px ray_gap=0.023mm raw_correction=0.43mm
+[RGB STEREO SERVO] capture=46 left=(379.8,363.2) right=(256.4,363.7) disparity=123.39px range=178.21mm center_error=1.53px range_error=-0.19mm size=23.34x20.98mm reproj=0.245px ray_gap=0.155mm raw_correction=0.51mm
 [SIM] RGB STEREO VISUAL SERVO COMPLETE
-  final ToolCenter target: [0.762461, -0.000984, 0.153219]
-  actual ToolCenter: [0.762529, -0.000931, 0.153203]
-  physical tracking error: 0.088 mm
+  final ToolCenter target: [0.762464, -0.001125, 0.153316]
+  actual ToolCenter: [0.762527, -0.001063, 0.153302]
+  physical tracking error: 0.090 mm
   settled frames: 10/10
   next action: 30° standoff → open → grasp → close → lift → carry.
 [SIM] 30 DEGREE GRASP STANDOFF
-  cable_point=[0.7412, -0.0003, 0.0509]
+  cable_point=[0.741, -0.0003, 0.0511]
   clearance_m=0.1200
   elevation_deg=30.0
   azimuth_deg=0.0
   approach=[0.866, 0.0, -0.5]
-  new IK_Target=[0.6373, -0.0003, 0.1109]
+  new IK_Target=[0.6371, -0.0003, 0.1111]
 [SIM]   finger_half_gap_m=0.0180
   side_allowance_m=0.0020
   fingers stay unchanged until the 30 degree pose settles
+[SIM] GRASP ANGLE SETTLED - OPEN FINGERS
+  fingers open at 18.0 mm per side
+[SIM] GRASP OPEN SETTLED
+  finger_positions_m=[0.0179, 0.0179]
+  moving to cable with fingers held open
+[SIM] STRAIGHT GRASP APPROACH
+  start IK_Target=[0.6371, -0.0003, 0.1111]
+  final IK_Target=[0.7389, -0.0003, 0.0524]
+  max_step_m=0.0030
+  fingers held open at 18.0 mm per side
+[SIM] GRASP CLOSE
+  commanding 0.0 mm per side (full close drive)
+  waiting for finger joints to stop moving before lift
+[SIM] GRASP CLOSE SETTLED
+  close_frames=66
+  finger_positions_m=[0.0108, 0.0108]
+[SIM] GRASP WELD AUTHORED
+  fixed_joint=/World/CableGraspFixedJoint
+  body0=/World/Franka/Robot/panda_hand
+  body1=/World/NetworkCable/E_crystal_head1_45
+[SIM] GRASP LIFT
+  lift_z_m=0.1000
+  max_step_m=0.0150
+  keeping angled orientation (no rotate after grasp)
+  start IK_Target=[0.7389, -0.0003, 0.0524]
+  final IK_Target=[0.7389, -0.0003, 0.1524]
