@@ -5,9 +5,9 @@ from pathlib import Path
 
 from config import CONFIG
 from front_lip_calibration import (
-    LIVE_WIDTH_MEDIAN_M,
-    LIVE_WIDTH_POPULATION_STD_M,
-    LIVE_WIDTH_SAMPLE_COUNT,
+    REJECTED_OUTER_BEZEL_MEDIAN_M,
+    REJECTED_OUTER_BEZEL_POPULATION_STD_M,
+    REJECTED_OUTER_BEZEL_SAMPLE_COUNT,
     VISIBLE_FRONT_LIP_HEIGHT_M,
     VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
@@ -18,20 +18,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VisibleFrontLipCalibrationTests(unittest.TestCase):
-    def test_production_uses_separate_validation_and_search_calibrations(self):
-        self.assertAlmostEqual(VISIBLE_FRONT_LIP_WIDTH_M, 0.0153, places=12)
+    def test_production_uses_physical_width_and_bounded_search_hypotheses(self):
+        self.assertAlmostEqual(VISIBLE_FRONT_LIP_WIDTH_M, 0.0129, places=12)
         self.assertAlmostEqual(VISIBLE_FRONT_LIP_HEIGHT_M, 0.0070, places=12)
         self.assertAlmostEqual(
             VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
             0.0114,
             places=12,
         )
-        self.assertEqual(LIVE_WIDTH_SAMPLE_COUNT, 91)
-        self.assertAlmostEqual(LIVE_WIDTH_MEDIAN_M, 0.015287, places=12)
+
+        # The old 15.3 mm cluster is retained as rejected bezel evidence, not
+        # silently reused as the physical-mouth validation target.
+        self.assertEqual(REJECTED_OUTER_BEZEL_SAMPLE_COUNT, 91)
+        self.assertAlmostEqual(REJECTED_OUTER_BEZEL_MEDIAN_M, 0.015287, places=12)
         self.assertAlmostEqual(
-            LIVE_WIDTH_POPULATION_STD_M,
+            REJECTED_OUTER_BEZEL_POPULATION_STD_M,
             0.0002513259929648458,
             places=15,
+        )
+        self.assertNotAlmostEqual(
+            VISIBLE_FRONT_LIP_WIDTH_M,
+            REJECTED_OUTER_BEZEL_MEDIAN_M,
+            places=4,
         )
 
         source = (ROOT / "main.py").read_text(encoding="utf-8")
@@ -56,6 +64,11 @@ class VisibleFrontLipCalibrationTests(unittest.TestCase):
             "aperture_height_m=CONFIG.perception.port_height_m",
             source,
         )
+
+        stereo_source = (ROOT / "plane_rectified_front_lip.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("fit_rectified_front_lip_width_prior", stereo_source)
 
     def test_internal_port_model_is_not_silently_redefined(self):
         self.assertAlmostEqual(CONFIG.perception.port_width_m, 0.0114, places=12)
