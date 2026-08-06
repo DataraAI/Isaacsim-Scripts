@@ -10,11 +10,13 @@ from __future__ import annotations
 VISIBLE_FRONT_LIP_WIDTH_M = 0.0153
 VISIBLE_FRONT_LIP_HEIGHT_M = 0.0070
 
-# Keep the narrower localization span that produced the accurate per-eye fits
-# before the visible-width calibration was introduced. This controls only how
-# far from the semantic mask the RGB fitter searches for side edges. It does
-# not redefine the accepted physical width of the visible opening.
-VISIBLE_FRONT_LIP_SEARCH_WIDTH_M = 0.0114
+# Side-edge localization must stay close to the semantic lower-mouth wall.
+# The fitter searches 45% of this span outside each mask boundary, so 5.0 mm
+# gives a 2.25 mm exterior search radius. That retains the observed mask-to-lip
+# under-coverage while excluding the farther outer-bezel edge that the left eye
+# selected in the August 6 failed run. This does not change the accepted visible
+# width, the independent-eye fit, or the 0.5 mm stereo disagreement gate.
+VISIBLE_FRONT_LIP_SEARCH_WIDTH_M = 0.0050
 
 LIVE_WIDTH_SAMPLE_COUNT = 91
 LIVE_WIDTH_MEDIAN_M = 0.015287
