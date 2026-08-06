@@ -11,6 +11,7 @@ from insertion import (
     InsertionStage,
     PartialInsertionController,
 )
+from insertion_target_trim import TrimmedConsecutivePoseInsertionController
 
 
 def limits() -> InsertionLimits:
@@ -44,9 +45,7 @@ def sample(frame: int, position=(0.0, 0.0, 0.0)) -> InsertionSample:
     )
 
 
-def collect_commands(
-    controller: PartialInsertionController,
-) -> list:
+def collect_commands(controller) -> list:
     event = controller.update(sample(0))
     commands = [event.command]
     frame = 0
@@ -94,8 +93,10 @@ class TwoStageInsertionTests(unittest.TestCase):
         baseline_commands = collect_commands(baseline)
 
         trim_world_m = np.array([0.0, -0.00015, -0.00025])
-        trimmed = PartialInsertionController(limits())
-        trimmed.set_target_offset_world_m(trim_world_m)
+        trimmed = TrimmedConsecutivePoseInsertionController(
+            limits(),
+            target_offset_world_m=trim_world_m,
+        )
         trimmed_commands = collect_commands(trimmed)
 
         self.assertEqual(len(trimmed_commands), 48)
