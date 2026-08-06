@@ -6,11 +6,13 @@ import cv2
 import numpy as np
 
 from front_lip_calibration import (
+    REJECTED_OUTER_BEZEL_MEDIAN_M,
     VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
 )
-from plane_rectified_fitting import fit_rectified_front_lip
 from plane_rectified_types import PlaneFrame, RectifiedEye
+from plane_rectified_width_hypotheses import fit_rectified_front_lip_width_prior
 
 
 class VisibleFrontLipGeometryTests(unittest.TestCase):
@@ -18,20 +20,21 @@ class VisibleFrontLipGeometryTests(unittest.TestCase):
     def _visible_front_lip() -> RectifiedEye:
         height, width = 300, 440
         rgb = np.full((height, width, 3), 210, dtype=np.uint8)
-        cv2.rectangle(rgb, (67, 70), (373, 210), (25, 25, 25), -1)
-        cv2.rectangle(rgb, (110, 95), (330, 190), (0, 0, 0), 3)
+        # 258 px at 0.05 mm/px = 12.9 mm physical visible mouth.
+        cv2.rectangle(rgb, (91, 70), (349, 210), (25, 25, 25), -1)
+        cv2.rectangle(rgb, (125, 95), (315, 190), (0, 0, 0), 3)
 
         mask = np.zeros((height, width), dtype=np.uint8)
         polygon = np.array(
             [
-                [67, 90],
-                [140, 90],
-                [140, 55],
-                [300, 55],
-                [300, 90],
-                [373, 90],
-                [373, 210],
-                [67, 210],
+                [106, 90],
+                [150, 90],
+                [150, 55],
+                [290, 55],
+                [290, 90],
+                [334, 90],
+                [334, 210],
+                [106, 210],
             ],
             dtype=np.int32,
         )
@@ -56,11 +59,12 @@ class VisibleFrontLipGeometryTests(unittest.TestCase):
             camera=None,
         )
 
-    def test_visible_rectangle_passes_with_live_calibration(self):
-        fit = fit_rectified_front_lip(
+    def test_physical_visible_rectangle_passes_width_prior(self):
+        fit = fit_rectified_front_lip_width_prior(
             self._visible_front_lip(),
             aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
             aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
+            search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
         )
 
         self.assertLess(abs(fit.width_m - VISIBLE_FRONT_LIP_WIDTH_M), 0.0002)
@@ -69,12 +73,13 @@ class VisibleFrontLipGeometryTests(unittest.TestCase):
         self.assertLess(abs(float(fit.center_uv_m[0])), 0.0001)
         self.assertLessEqual(fit.residual_px, 1.5)
 
-    def test_same_visible_rectangle_is_rejected_by_old_internal_width_prior(self):
-        with self.assertRaisesRegex(RuntimeError, "width"):
-            fit_rectified_front_lip(
+    def test_contaminated_outer_bezel_prior_rejects_physical_mouth(self):
+        with self.assertRaisesRegex(RuntimeError, "physical width prior"):
+            fit_rectified_front_lip_width_prior(
                 self._visible_front_lip(),
-                aperture_width_m=0.0114,
+                aperture_width_m=REJECTED_OUTER_BEZEL_MEDIAN_M,
                 aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
+                search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
             )
 
 
