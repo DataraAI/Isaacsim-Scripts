@@ -9,7 +9,14 @@ import threading
 import traceback
 from pathlib import Path
 
+import numpy as np
+
 from config import CONFIG
+from front_lip_calibration import (
+    VISIBLE_FRONT_LIP_HEIGHT_M,
+    VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
+    VISIBLE_FRONT_LIP_WIDTH_M,
+)
 
 
 class RunOutputTee:
@@ -132,9 +139,11 @@ try:
         }
     )
 
-    from cable_runtime import CableMountedSimulationRuntime
+    from full_insertion_runtime import (
+        AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
+    )
     from debug import DebugOutputs
-    from live_control import refine_live_observation
+    from live_control_projective import refine_live_observation
     from perception import YOLOEPortDetector, process_stereo_port
     from sim import warn
 
@@ -143,6 +152,24 @@ try:
         cfg=CONFIG,
     )
     runtime.prepare_for_perception()
+
+    if (
+        runtime.cable_mount is not None
+        and getattr(runtime.cable_mount, "tcp_probe_only", False)
+    ):
+        print(
+            "[CONNECTOR TCP PROBE] MOTION LOCKED\n"
+            "  red marker: legacy full-bounds tip\n"
+            "  cyan marker: mesh-derived insertion TCP\n"
+            "  inspect the markers on the RJ45 nose, then close Isaac Sim\n"
+            "  YOLOE, visual servo, handoff, and insertion are disabled",
+            flush=True,
+        )
+        while runtime.is_running():
+            runtime.step()
+            runtime.update_ik()
+        raise SystemExit(0)
+
     debug = DebugOutputs(CONFIG)
     detector = YOLOEPortDetector(CONFIG.yoloe)
     detector.initialize()
@@ -154,7 +181,12 @@ try:
     if CONFIG.front_plane.enabled:
         print(
             "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
-            "no manual depth offset and no RTX/USD ground truth in runtime.",
+            "no manual depth offset and no RTX/USD ground truth in runtime.\n"
+            f"  visible front-lip validation: "
+            f"{VISIBLE_FRONT_LIP_WIDTH_M * 1000.0:.3f} x "
+            f"{VISIBLE_FRONT_LIP_HEIGHT_M * 1000.0:.3f} mm\n"
+            f"  side-edge localization width: "
+            f"{VISIBLE_FRONT_LIP_SEARCH_WIDTH_M * 1000.0:.3f} mm",
             flush=True,
         )
 
@@ -195,6 +227,9 @@ try:
                     desired_port_virtual_camera_usd=(
                         runtime.desired_port_virtual_camera_usd
                     ),
+                    aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
+                    aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
+                    search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
                 )
                 print(
                     "[LIVE FRONT PLANE] "
@@ -202,6 +237,8 @@ try:
                     f"cavity_range={front_plane.cavity_range_m * 1000.0:.2f}mm "
                     f"opening_range={front_plane.opening_range_m * 1000.0:.2f}mm "
                     f"recess={front_plane.recess_depth_m * 1000.0:+.2f}mm "
+                    f"center={list(np.round(front_plane.aperture_center_world_m, 6))} "
+                    f"center_pair={front_plane.aperture_center_disagreement_m * 1000.0:.3f}mm "
                     f"plane_residual={front_plane.plane_residual_m * 1000.0:.3f}mm "
                     f"ray_gap={front_plane.max_ray_gap_m * 1000.0:.3f}mm "
                     f"dense={front_plane.consistent_disparity_count}/"
@@ -213,6 +250,9 @@ try:
                     flush=True,
                 )
             runtime.observe_visual_servo(observation)
+            frozen_port_point = runtime.frozen_port_point_world_m
+            if frozen_port_point is not None:
+                debug.update_frozen_port_point(frozen_port_point)
             debug.handle(frame, observation, capture_index)
         except Exception as exc:
             # Any rejected detector or front-plane estimate holds the current

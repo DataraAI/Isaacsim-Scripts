@@ -22,7 +22,10 @@ class RuntimeWiringTests(unittest.TestCase):
 
     def test_main_refines_before_motion_and_debug(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("from live_control import refine_live_observation", source)
+        self.assertIn(
+            "from live_control_projective import refine_live_observation",
+            source,
+        )
         refine = source.index("refine_live_observation(")
         observe = source.index("runtime.observe_visual_servo(observation)")
         debug = source.index("debug.handle(")
@@ -114,7 +117,7 @@ class RuntimeWiringTests(unittest.TestCase):
         prepare = source.index("runtime.prepare_for_perception()")
         debug = source.index("debug = DebugOutputs")
         yolo = source.index("detector.initialize()")
-        loop = source.index("while runtime.is_running()")
+        loop = source.index("while runtime.is_running()", yolo)
         self.assertLess(prepare, debug)
         self.assertLess(prepare, yolo)
         self.assertLess(yolo, loop)

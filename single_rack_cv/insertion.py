@@ -13,6 +13,26 @@ import numpy as np
 _EPS = 1.0e-12
 
 
+def orientation_abort_is_due(
+    *,
+    target_error_m: float,
+    settle_tolerance_m: float,
+    actual_port_depth_m: float,
+) -> bool:
+    """
+    Decide when the strict insertion orientation limit must be enforced.
+
+    A non-contact translation can produce a brief orientation transient while
+    the ToolCenter is still converging. The limit becomes active as soon as the
+    ToolCenter settles or the plug reaches the opening plane.
+    """
+
+    return bool(
+        target_error_m <= settle_tolerance_m
+        or actual_port_depth_m >= -_EPS
+    )
+
+
 def _vector3(value, *, label: str) -> np.ndarray:
     vector = np.asarray(value, dtype=np.float64).reshape(-1)
     if vector.shape != (3,):
@@ -427,6 +447,11 @@ class PartialInsertionController:
             if (
                 metrics.orientation_error_deg
                 > self.limits.max_orientation_error_deg
+                and orientation_abort_is_due(
+                    target_error_m=sample.target_error_m,
+                    settle_tolerance_m=self.limits.settle_tolerance_m,
+                    actual_port_depth_m=metrics.actual_port_depth_m,
+                )
             ):
                 return (
                     "orientation error exceeded limit: "

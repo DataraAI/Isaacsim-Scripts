@@ -7,7 +7,11 @@ import unittest
 
 import numpy as np
 
-from live_control import apply_front_plane_result
+from live_control import (
+    apply_front_plane_result,
+    apply_stereo_center_result,
+    refine_live_observation,
+)
 
 
 class FakeCamera:
@@ -54,10 +58,9 @@ class Observation:
 
 
 class LiveControlTests(unittest.TestCase):
-    def test_front_plane_replaces_recessed_cavity_without_offset(self):
-        camera = FakeCamera()
-        frame = SimpleNamespace(virtual_camera=camera)
-        cavity = Observation(
+    @staticmethod
+    def _cavity() -> Observation:
+        return Observation(
             center_world_xyz_m=np.array([0.0, 0.0, -0.14]),
             center_virtual_camera_usd_m=np.array([0.0, 0.0, -0.14]),
             normal_world=np.array([0.0, 0.0, 1.0]),
@@ -75,6 +78,11 @@ class LiveControlTests(unittest.TestCase):
             max_ray_gap_m=0.0,
             plane_residual_m=0.0,
         )
+
+    def test_front_plane_helper_remains_available_offline(self):
+        camera = FakeCamera()
+        frame = SimpleNamespace(virtual_camera=camera)
+        cavity = self._cavity()
         opening = SimpleNamespace(
             center_world_m=np.array([0.0, 0.0, -0.13]),
             normal_world=np.array([0.0, 0.0, 1.0]),
@@ -109,37 +117,63 @@ class LiveControlTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(refined.estimated_range_m, 0.13, places=12)
-        self.assertAlmostEqual(refined.range_error_m, 0.0, places=12)
+        self.assertTrue(np.allclose(refined.correction_world_m, np.zeros(3)))
         self.assertTrue(
-            np.allclose(refined.correction_world_m, np.zeros(3))
+            np.allclose(refined.center_world_xyz_m, opening.center_world_m)
         )
-        self.assertTrue(
-            np.allclose(
-                refined.center_world_xyz_m,
-                opening.center_world_m,
-            )
-        )
-        self.assertAlmostEqual(
-            diagnostics.cavity_range_m,
-            0.14,
-            places=12,
-        )
-        self.assertAlmostEqual(
-            diagnostics.opening_range_m,
-            0.13,
-            places=12,
-        )
-        self.assertAlmostEqual(
-            diagnostics.recess_depth_m,
-            0.01,
-            places=12,
+        self.assertAlmostEqual(diagnostics.cavity_range_m, 0.14, places=12)
+        self.assertAlmostEqual(diagnostics.opening_range_m, 0.13, places=12)
+
+    def test_front_rim_plane_center_replaces_control_center(self):
+        camera = FakeCamera()
+        frame = SimpleNamespace(virtual_camera=camera)
+        stereo_center = SimpleNamespace(
+            center_world_m=np.array([0.0, 0.0, -0.13]),
+            left_center_uv=np.array([700.0, 480.0]),
+            right_center_uv=np.array([400.0, 480.0]),
+            ray_gap_m=0.0002,
+            reprojection_rms_px=0.2,
+            max_reprojection_px=0.3,
         )
 
-    def test_public_api_has_no_manual_offset_parameter(self):
-        parameters = inspect.signature(apply_front_plane_result).parameters
-        self.assertFalse(
-            any("offset" in name.lower() for name in parameters)
+        refined, diagnostics = apply_stereo_center_result(
+            frame=frame,
+            observation=self._cavity(),
+            desired_port_virtual_camera_usd=np.array([0.0, 0.0, -0.13]),
+            stereo_center_result=stereo_center,
         )
+
+        np.testing.assert_allclose(
+            refined.center_world_xyz_m,
+            stereo_center.center_world_m,
+        )
+        self.assertAlmostEqual(refined.estimated_range_m, 0.13, places=12)
+        self.assertAlmostEqual(refined.max_ray_gap_m, 0.0002, places=12)
+        self.assertAlmostEqual(
+            diagnostics.aperture_center_disagreement_m,
+            0.0002,
+            places=12,
+        )
+        self.assertEqual(diagnostics.triangulated_count, 4)
+        self.assertEqual(diagnostics.side_support_counts, (1, 1, 1, 1))
+
+    def test_live_refinement_uses_rgb_front_rim_not_bezel_plane(self):
+        source = inspect.getsource(refine_live_observation)
+        self.assertIn("estimate_stereo_aperture_center", source)
+        self.assertIn("left_rgb=frame.left.rgb", source)
+        self.assertIn("right_rgb=frame.right.rgb", source)
+        self.assertIn("left_mask=observation.left.detection.mask", source)
+        self.assertIn("right_mask=observation.right.detection.mask", source)
+        self.assertIn("apply_stereo_center_result", source)
+        self.assertNotIn("estimate_front_plane", source)
+        self.assertNotIn("estimate_planar_aperture_center", source)
+
+    def test_public_apis_have_no_manual_offset_parameter(self):
+        for function in (apply_front_plane_result, apply_stereo_center_result):
+            parameters = inspect.signature(function).parameters
+            self.assertFalse(
+                any("offset" in name.lower() for name in parameters)
+            )
 
 
 if __name__ == "__main__":

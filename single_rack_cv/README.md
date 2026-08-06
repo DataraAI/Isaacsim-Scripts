@@ -9,9 +9,10 @@ This project uses synchronized wrist-mounted RGB cameras to locate one RJ45 port
 3. `live_control.py` replaces the recessed cavity observation with the automatically calculated opening-plane observation.
 4. `main.py` sends only that refined observation to the translation-only stop-and-look controller and debug marker.
 5. `cable_runtime.py` loads the connected cable before play, enables GPU PhysX, mounts the existing rigid RJ45 plug directly to `panda_hand`, and validates the mount before YOLOE starts.
-6. `insertion.py` freezes the physically settled ToolCenter frame, commands a 40 mm coarse approach followed by 20 mm fine motion, and holds on abort or completion.
+6. `angled_hand_runtime.py` preserves the validated plug-tip world pose, solves a new 30° downward `panda_hand` pose around it, and supplies the live PhysX plug nose axis to the existing insertion state machine.
+7. `insertion.py` retains the qualified 40 mm coarse approach, 20 mm fine motion, settle gates, abort checks, and terminal hold.
 
-Runtime visual control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark. Perception is frozen once visual alignment completes; approach and insertion use the frozen physical ToolCenter frame.
+Runtime visual control is image-only. RTX/USD raycasts and ground-truth JSON are used only by the offline benchmark. Perception is frozen once visual alignment completes; approach and insertion use the frozen physical plug-tip frame.
 
 ## Cable mount
 
@@ -29,6 +30,31 @@ The mount must validate for 30/30 consecutive frames before perception starts:
 - built-in deformable attachment remains unchanged
 - GPU dynamics remains active
 
+## Angled hand with horizontal plug
+
+The robot-right-side view defines the geometry:
+
+- the wrist is higher than the plug tip
+- the fingertips slope downward toward the port by 30°
+- the rigid RJ45 plug remains horizontal
+- the palm/finger presentation matches the older working pose instead of appearing flipped
+- the deformable cable tail hangs naturally
+- both wrist cameras remain rigid children of `panda_hand`
+
+`/World/IK_Target` and `/World/ToolCenter` keep the exact validated plug-tip position and orientation. `hand_plug_geometry.py` derives the new world hand frame from that preserved plug frame: the hand forward axis is rotated 30° downward, the palm side matches the older working pose, and the wrist position is solved upward/back so recomposing `world_T_hand @ hand_T_tool` reproduces the original plug pose exactly. The runtime replaces the fixed startup hand position, fixed startup hand orientation, and `hand_T_tool` rotation together; it does not use a guessed local palm roll.
+
+The qualified insertion state machine still contains its legacy frozen ToolCenter +Z initialization. `plug_axis_insertion.py` replaces that direction at the same freeze boundary with the live normalized PhysX plug nose axis. Every target still comes from the frozen start pose, and all existing drift, orientation, mount, IK, timeout, publication, and topology aborts remain active.
+
+Startup rejects the run when:
+
+- measured hand-to-plug pitch differs from the configured value by more than 0.5°
+- the wrist is not above the plug tip for a nonzero pitch
+- palm-side error relative to the older working pose exceeds 1.0°
+- plug horizontal error exceeds 1.0°
+- the existing fixed-joint, attachment, tip, axis, or GPU validation fails
+
+Do not loosen thresholds to compensate for a wrong pitch sign, wrong palm side, tilted plug, degraded stereo correspondence, diagonal insertion travel, or early port-rim contact.
+
 ## Runtime
 
 ```bash
@@ -38,7 +64,7 @@ cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 
 Canonical camera resolution is 1280×960. The visual servo keeps a fixed wrist orientation, uses bounded 5 mm coarse target updates, and holds position on detector/SGBM/plane-fit failure.
 
-After visual alignment and 30/30 final ToolCenter settle frames, the runtime freezes the current pose and frozen ToolCenter +Z axis, then executes 48 commands:
+After visual alignment and 30/30 final ToolCenter settle frames, the runtime freezes the current pose and live horizontal plug axis, then executes 48 commands:
 
 - **40 mm coarse approach:** eight 5 mm commands, ending 10 mm before the physical opening
 - **20 mm fine motion:** forty 0.5 mm commands, crossing the remaining 10 mm to the opening and continuing 10 mm inside the opening
@@ -55,6 +81,9 @@ The controller holds on abort when lateral drift exceeds 0.5 mm, orientation err
 ```bash
 cd "$HOME/Isaacsim-Scripts/single_rack_cv" || exit 1
 "$HOME/isaacsim/python.sh" -m unittest -v \
+  tests.test_hand_plug_geometry \
+  tests.test_plug_axis_insertion \
+  tests.test_angled_hand_runtime_wiring \
   tests.test_front_plane \
   tests.test_live_control \
   tests.test_runtime_wiring \
