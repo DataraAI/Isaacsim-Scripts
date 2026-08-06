@@ -11,6 +11,8 @@ class FullInsertionRuntimeWiringTests(unittest.TestCase):
     def test_main_selects_explicit_full_insertion_runtime(self):
         source = (ROOT / "main.py").read_text()
         export_source = (ROOT / "full_insertion_runtime.py").read_text()
+        hold_source = (ROOT / "handoff_position_hold_runtime.py").read_text()
+
         self.assertIn("from full_insertion_runtime import (", source)
         self.assertIn(
             "AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime",
@@ -18,15 +20,19 @@ class FullInsertionRuntimeWiringTests(unittest.TestCase):
         )
         self.assertNotIn("from precontact_runtime import (", source)
         self.assertIn(
-            "from full_insertion_base_runtime import",
+            "from handoff_position_hold_runtime import (",
             export_source,
+        )
+        self.assertIn(
+            "from full_insertion_base_runtime import (",
+            hold_source,
         )
         self.assertIn(
             "from insertion_target_trim import",
             export_source,
         )
         self.assertNotIn(
-            "from handoff_position_hold_runtime import",
+            "from full_insertion_base_runtime import (",
             export_source,
         )
 
