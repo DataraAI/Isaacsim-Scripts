@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production full insertion with an insertion-only target-line trim."""
+"""Production full insertion with a calibrated insertion-only centerline."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from sim import log
 
 
 _INSERTION_TARGET_OFFSET_WORLD_M = np.array(
-    [0.0, -0.00015, -0.00025],
+    [0.0, -0.00030, -0.00045],
     dtype=np.float64,
 )
 
@@ -22,7 +22,7 @@ _INSERTION_TARGET_OFFSET_WORLD_M = np.array(
 class AngledHandStereoHandoffRuntime(
     _BaseAngledHandStereoHandoffRuntime
 ):
-    """Move only the guarded insertion line; preserve perception and handoff."""
+    """Calibrate only the guarded insertion line; preserve perception/handoff."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -40,25 +40,22 @@ class AngledHandStereoHandoffRuntime(
             self.partial_insertion
         )
 
-        trim_magnitude_m = float(
+        calibration_magnitude_m = float(
             np.linalg.norm(_INSERTION_TARGET_OFFSET_WORLD_M)
         )
-        remaining_lateral_budget_m = (
-            float(limits.max_lateral_drift_m) - trim_magnitude_m
-        )
         log(
-            "INSERTION TARGET TRIM ACTIVE\n"
+            "INSERTION TARGET CALIBRATION ACTIVE\n"
             "  perception-derived port point: unchanged\n"
             "  50 mm handoff goal: unchanged\n"
             "  insertion depth schedule: unchanged at 48 commands\n"
-            "  insertion target line world Y: -0.150 mm\n"
-            "  insertion target line world Z: -0.250 mm\n"
-            f"  trim magnitude: {trim_magnitude_m * 1000.0:.3f} mm\n"
-            f"  lateral abort limit: "
+            "  insertion target line world Y: -0.300 mm\n"
+            "  insertion target line world Z: -0.450 mm\n"
+            f"  calibration magnitude: "
+            f"{calibration_magnitude_m * 1000.0:.3f} mm\n"
+            "  lateral drift reference: calibrated insertion line\n"
+            f"  lateral deviation abort limit: "
             f"{limits.max_lateral_drift_m * 1000.0:.3f} mm\n"
-            f"  conservative remaining lateral budget: "
-            f"{remaining_lateral_budget_m * 1000.0:.3f} mm\n"
-            "  trim remains visible to the existing drift guard"
+            "  calibration is not counted as lateral deviation"
         )
 
 
