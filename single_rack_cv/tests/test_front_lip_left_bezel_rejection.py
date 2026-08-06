@@ -10,8 +10,8 @@ from front_lip_calibration import (
     VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
 )
-from plane_rectified_fitting import fit_rectified_front_lip
 from plane_rectified_types import PlaneFrame, RectifiedEye
+from plane_rectified_width_hypotheses import fit_rectified_front_lip_width_prior
 
 
 class FrontLipLeftBezelRejectionTests(unittest.TestCase):
@@ -22,8 +22,8 @@ class FrontLipLeftBezelRejectionTests(unittest.TestCase):
         The narrow 5 mm search cannot reach the physical left mouth wall and
         therefore pairs the inner cavity with the physical right wall. The
         old wide search reaches the physical wall but blindly chooses the
-        farther outer-bezel edge first. Production must inspect all qualified
-        side edges and select the pair consistent with the physical width.
+        farther outer-bezel edge first. Production must inspect bounded search
+        hypotheses and select the fit consistent with the physical width.
         """
 
         height, width = 320, 440
@@ -78,7 +78,7 @@ class FrontLipLeftBezelRejectionTests(unittest.TestCase):
         )
 
     def test_production_selects_physical_pair_between_outer_and_inner_edges(self):
-        fit = fit_rectified_front_lip(
+        fit = fit_rectified_front_lip_width_prior(
             self._left_eye_three_edge_trap(),
             aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
             aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
@@ -91,7 +91,7 @@ class FrontLipLeftBezelRejectionTests(unittest.TestCase):
             "The fit did not select the physical visible-mouth side pair.",
         )
         self.assertLessEqual(
-            abs(fit.width_m - 0.0129),
+            abs(fit.width_m - VISIBLE_FRONT_LIP_WIDTH_M),
             0.0003,
             "The fit selected the outer bezel or inner cavity width.",
         )
