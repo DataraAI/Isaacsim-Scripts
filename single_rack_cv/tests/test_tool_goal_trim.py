@@ -49,33 +49,30 @@ class ToolGoalTrimTests(unittest.TestCase):
                 downward_trim_m=float("nan"),
             )
 
-    def test_production_trims_before_first_handoff_step_without_moving_port_point(self):
+    def test_old_handoff_trim_remains_dormant(self):
         production_source = (
+            ROOT / "full_insertion_runtime.py"
+        ).read_text(encoding="utf-8")
+        dormant_source = (
             ROOT / "handoff_position_hold_runtime.py"
         ).read_text(encoding="utf-8")
         handoff_source = (
             ROOT / "stereo_handoff_runtime.py"
         ).read_text(encoding="utf-8")
 
+        self.assertNotIn("apply_tool_goal_trim(", production_source)
+        self.assertNotIn("_handoff_goal_world_m", production_source)
         self.assertIn(
             "_TOOL_GOAL_LEFT_TRIM_M = 0.00015",
-            production_source,
+            dormant_source,
         )
         self.assertIn(
             "_TOOL_GOAL_DOWNWARD_TRIM_M = 0.00025",
-            production_source,
+            dormant_source,
         )
         self.assertIn(
             "def _advance_handoff_if_settled(self)",
-            production_source,
-        )
-        self.assertIn(
-            "apply_tool_goal_trim(",
-            production_source,
-        )
-        self.assertIn(
-            "super()._advance_handoff_if_settled()",
-            production_source,
+            dormant_source,
         )
         self.assertIn(
             "qualification.opening_position_m.copy()",
