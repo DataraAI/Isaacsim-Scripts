@@ -27,9 +27,9 @@ from plane_rectified_fit_utils import (
     _draw_reprojection,
     point_in_convex_quad,
 )
-from plane_rectified_fitting import (
-    _fit_joint_front_lip,
-    fit_rectified_front_lip,
+from plane_rectified_fitting import _fit_joint_front_lip
+from plane_rectified_width_hypotheses import (
+    fit_rectified_front_lip_width_prior as fit_rectified_front_lip,
 )
 
 
