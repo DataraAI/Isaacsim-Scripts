@@ -10,7 +10,6 @@ from full_insertion_base_runtime import (
 )
 from handoff_position_hold import update_handoff_position_command
 from sim import log, update_convergence_counter, warn
-from tool_goal_trim import apply_tool_goal_trim
 
 
 class AngledHandStereoHandoffRuntime(
@@ -24,23 +23,14 @@ class AngledHandStereoHandoffRuntime(
     _HANDOFF_POSITION_HOLD_LOG_INTERVAL_FRAMES = 30
     _HANDOFF_POSITION_HOLD_HARD_TIMEOUT_S = 10.0
 
-    # Final camera-view trim requested after the successful 48/48 run.
-    # With the current rack-facing camera convention, image-left is world -Y.
-    _TOOL_GOAL_LEFT_TRIM_M = 0.00015
-    _TOOL_GOAL_DOWNWARD_TRIM_M = 0.00025
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._last_handoff_position_hold_log_frame = -1_000_000
-        self._tool_goal_trim_applied = False
 
         log(
             "FROZEN HANDOFF POSITION HOLD ACTIVE\n"
-            "  frozen physical ToolCenter goal: camera-derived then trimmed once\n"
-            f"  final camera-view-left trim: "
-            f"{self._TOOL_GOAL_LEFT_TRIM_M * 1000.0:.3f} mm\n"
-            f"  final downward trim: "
-            f"{self._TOOL_GOAL_DOWNWARD_TRIM_M * 1000.0:.3f} mm\n"
+            "  frozen physical ToolCenter goal: unchanged\n"
+            "  compensation target: IK command only\n"
             f"  compensation gain: {self._HANDOFF_POSITION_HOLD_GAIN:.3f}\n"
             f"  maximum command step: "
             f"{self._HANDOFF_POSITION_HOLD_MAXIMUM_STEP_M * 1000.0:.3f} mm/frame\n"
@@ -50,39 +40,6 @@ class AngledHandStereoHandoffRuntime(
             f"  hard fail-closed timeout: "
             f"{self._HANDOFF_POSITION_HOLD_HARD_TIMEOUT_S:.1f} s"
         )
-
-    def _advance_handoff_if_settled(self) -> None:
-        """Apply the one-shot final trim before the first handoff motion step."""
-
-        goal = self._handoff_goal_world_m
-        if (
-            self._handoff_active
-            and goal is not None
-            and not self._tool_goal_trim_applied
-        ):
-            untrimmed_goal = np.asarray(goal, dtype=np.float64)
-            trimmed_goal = apply_tool_goal_trim(
-                untrimmed_goal,
-                left_trim_m=self._TOOL_GOAL_LEFT_TRIM_M,
-                downward_trim_m=self._TOOL_GOAL_DOWNWARD_TRIM_M,
-            )
-            self._handoff_goal_world_m = trimmed_goal
-            self._tool_goal_trim_applied = True
-
-            log(
-                "FINAL TOOLCENTER GOAL TRIM APPLIED\n"
-                f"  untrimmed camera-derived goal: "
-                f"{np.round(untrimmed_goal, 6).tolist()}\n"
-                f"  left trim (-world Y): "
-                f"{self._TOOL_GOAL_LEFT_TRIM_M * 1000.0:.3f} mm\n"
-                f"  downward trim (-world Z): "
-                f"{self._TOOL_GOAL_DOWNWARD_TRIM_M * 1000.0:.3f} mm\n"
-                f"  trimmed ToolCenter goal: "
-                f"{np.round(trimmed_goal, 6).tolist()}\n"
-                "  measured physical opening: unchanged"
-            )
-
-        super()._advance_handoff_if_settled()
 
     def update_visual_servo_completion(self) -> None:
         """Drive the actual ToolCenter onto the frozen goal before insertion."""
