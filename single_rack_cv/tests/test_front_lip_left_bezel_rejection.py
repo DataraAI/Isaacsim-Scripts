@@ -5,13 +5,13 @@ import unittest
 import cv2
 import numpy as np
 
-from front_lip_calibration import (
+from vision.front_lip_calibration import (
     VISIBLE_FRONT_LIP_HEIGHT_M,
     VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
 )
-from plane_rectified_types import PlaneFrame, RectifiedEye
-from plane_rectified_width_hypotheses import fit_rectified_front_lip_width_prior
+from vision.plane_rectified_types import PlaneFrame, RectifiedEye
+from vision.plane_rectified_width_hypotheses import fit_rectified_front_lip_width_prior
 
 
 class FrontLipLeftBezelRejectionTests(unittest.TestCase):
