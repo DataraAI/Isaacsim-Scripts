@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""Live image-only front-opening control geometry."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -76,53 +79,56 @@ def _replace_control_center(
         raise RuntimeError(
             "Estimated front opening lies behind the virtual camera."
         )
-    desired_uv = _project_camera_local(
-        desired_port_virtual_camera_usd,
-        virtual_camera,
-    )
-    projected_uv = virtual_camera.project_world(center_world)
-    center_error_px = projected_uv - desired_uv
-    desired_port = np.asarray(
+
+    desired = np.asarray(
         desired_port_virtual_camera_usd,
         dtype=np.float64,
     ).reshape(3)
-    range_error_m = opening_range_m + float(desired_port[2])
+    desired_center_uv = _project_camera_local(desired, virtual_camera)
+    projected_center_uv = virtual_camera.project_world(center_world)
+    center_error_px = projected_center_uv - desired_center_uv
+    range_error_m = opening_range_m - (-float(desired[2]))
     correction_world_m = _camera_error_to_world(
         center_virtual,
-        desired_port,
+        desired,
         virtual_camera,
     )
-    refined = replace(
+
+    return replace(
         observation,
-        center_world_xyz_m=center_world.copy(),
-        center_virtual_camera_usd_m=center_virtual.copy(),
-        projected_virtual_center_uv=(
-            float(projected_uv[0]),
-            float(projected_uv[1]),
+        center_world_xyz_m=center_world,
+        center_virtual_camera_usd_m=np.asarray(
+            center_virtual,
+            dtype=np.float64,
         ),
-        center_error_px=center_error_px,
-        estimated_range_m=opening_range_m,
-        range_error_m=range_error_m,
-        correction_world_m=correction_world_m,
+        projected_virtual_center_uv=(
+            float(projected_center_uv[0]),
+            float(projected_center_uv[1]),
+        ),
+        center_error_px=np.asarray(center_error_px, dtype=np.float64),
+        estimated_range_m=float(opening_range_m),
+        range_error_m=float(range_error_m),
+        correction_world_m=np.asarray(
+            correction_world_m,
+            dtype=np.float64,
+        ),
         mean_disparity_px=float(mean_disparity_px),
         reprojection_rms_px=float(reprojection_rms_px),
         max_reprojection_px=float(max_reprojection_px),
         max_ray_gap_m=float(max_ray_gap_m),
     )
-    return refined, opening_range_m
 
 
 def apply_front_plane_result(
-    *,
     frame,
     observation,
     desired_port_virtual_camera_usd,
     front_plane_result,
     aperture_center_disagreement_m: float = 0.0,
 ):
-    """Replace cavity-centered geometry with an image-derived front center."""
+    """Apply the qualified front-plane center to the live control observation."""
 
-    refined, opening_range_m = _replace_control_center(
+    refined = _replace_control_center(
         frame=frame,
         observation=observation,
         desired_port_virtual_camera_usd=desired_port_virtual_camera_usd,
@@ -132,24 +138,43 @@ def apply_front_plane_result(
         max_reprojection_px=front_plane_result.max_reprojection_px,
         max_ray_gap_m=front_plane_result.max_ray_gap_m,
     )
-    diagnostics = LiveFrontPlaneDiagnostics(
-        cavity_range_m=float(observation.estimated_range_m),
-        opening_range_m=opening_range_m,
-        recess_depth_m=(
-            float(observation.estimated_range_m) - opening_range_m
+    refined = replace(
+        refined,
+        corners_world_m=np.asarray(
+            front_plane_result.corners_world_m,
+            dtype=np.float64,
         ),
+        normal_world=np.asarray(
+            front_plane_result.normal_world,
+            dtype=np.float64,
+        ),
+        width_m=float(front_plane_result.width_m),
+        height_m=float(front_plane_result.height_m),
+        plane_residual_m=float(front_plane_result.plane_residual_m),
+    )
+
+    cavity_range_m = float(observation.estimated_range_m)
+    opening_range_m = float(refined.estimated_range_m)
+    diagnostics = LiveFrontPlaneDiagnostics(
+        cavity_range_m=cavity_range_m,
+        opening_range_m=opening_range_m,
+        recess_depth_m=float(cavity_range_m - opening_range_m),
         plane_residual_m=float(front_plane_result.plane_residual_m),
         max_ray_gap_m=float(front_plane_result.max_ray_gap_m),
-        valid_disparity_count=int(front_plane_result.valid_disparity_count),
+        valid_disparity_count=int(
+            front_plane_result.valid_disparity_count
+        ),
         consistent_disparity_count=int(
             front_plane_result.consistent_disparity_count
         ),
         ring_candidate_count=int(front_plane_result.ring_candidate_count),
         triangulated_count=int(front_plane_result.triangulated_count),
         cluster_count=int(front_plane_result.cluster_count),
-        side_support_counts=tuple(front_plane_result.side_support_counts),
+        side_support_counts=tuple(
+            int(value) for value in front_plane_result.side_support_counts
+        ),
         aperture_center_world_m=tuple(
-            float(value) for value in front_plane_result.center_world_m
+            float(value) for value in refined.center_world_xyz_m
         ),
         aperture_center_disagreement_m=float(
             aperture_center_disagreement_m
