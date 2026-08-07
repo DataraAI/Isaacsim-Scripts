@@ -67,6 +67,7 @@ FORBIDDEN_PATHS = (
     "tests/test_front_mouth_outer_edges.py",
     "tests/test_lower_mouth_projective_center.py",
     "tests/test_projective_front_rim_center.py",
+    "tests/test_rgb_front_rim_center.py",
     "tests/test_stereo_front_rim_plane.py",
     "tests/test_stereo_center.py",
 )
