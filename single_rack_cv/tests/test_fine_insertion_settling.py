@@ -6,8 +6,8 @@ import unittest
 
 import numpy as np
 
-from insertion import InsertionLimits, InsertionSample, InsertionStage
-from settled_insertion import ConsecutivePoseInsertionController
+from control.insertion import InsertionLimits, InsertionSample, InsertionStage
+from control.settled_insertion import ConsecutivePoseInsertionController
 
 
 def _limits() -> InsertionLimits:
