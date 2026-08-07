@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from validation_window import ConsecutiveValidityWindow
+from control.validation_window import ConsecutiveValidityWindow
 
 
 class ConsecutiveValidityWindowTests(unittest.TestCase):
