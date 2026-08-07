@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from perception import (
+from vision.perception import (
     CameraModel,
     build_virtual_camera_model,
     camera_point_error_to_world,
