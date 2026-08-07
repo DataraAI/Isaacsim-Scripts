@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from insertion import InsertionLimits
+from control.insertion import InsertionLimits
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ import math
 
 import numpy as np
 
-from insertion import (
+from control.insertion import (
     InsertionEvent,
     InsertionPhase,
     InsertionStage,

@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from settled_insertion import ConsecutivePoseInsertionController
+from control.settled_insertion import ConsecutivePoseInsertionController
 
 
 _MAXIMUM_INSERTION_CALIBRATION_M = 0.001
