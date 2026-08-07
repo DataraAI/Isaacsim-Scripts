@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from connector_tcp import (
+from cable.connector_tcp import (
     MeshComponentBounds,
     connected_component_bounds,
     derive_insertion_tcp,
