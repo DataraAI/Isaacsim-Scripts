@@ -7,30 +7,32 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_ROOT = ROOT / "runtime"
+CONTROL_ROOT = ROOT / "control"
 
 
 class ProductionRuntimeWiringTests(unittest.TestCase):
     def test_production_composes_position_hold_before_insertion_calibration(self):
         main_source = (ROOT / "main.py").read_text()
-        export_source = (ROOT / "full_insertion_runtime.py").read_text()
-        hold_source = (ROOT / "handoff_position_hold_runtime.py").read_text()
+        export_source = (RUNTIME_ROOT / "full_insertion_runtime.py").read_text()
+        hold_source = (RUNTIME_ROOT / "handoff_position_hold_runtime.py").read_text()
 
-        self.assertIn("from full_insertion_runtime import", main_source)
+        self.assertIn("from runtime.full_insertion_runtime import", main_source)
         self.assertIn(
-            "from handoff_position_hold_runtime import (",
+            "from runtime.handoff_position_hold_runtime import (",
             export_source,
         )
         self.assertNotIn(
-            "from full_insertion_base_runtime import (",
+            "from runtime.full_insertion_base_runtime import (",
             export_source,
         )
         self.assertIn(
-            "from full_insertion_base_runtime import (",
+            "from runtime.full_insertion_base_runtime import (",
             hold_source,
         )
 
     def test_position_hold_does_not_move_the_camera_derived_handoff_goal(self):
-        source = (ROOT / "handoff_position_hold_runtime.py").read_text()
+        source = (RUNTIME_ROOT / "handoff_position_hold_runtime.py").read_text()
 
         self.assertIn("FROZEN HANDOFF POSITION HOLD ACTIVE", source)
         self.assertIn("frozen physical ToolCenter goal: unchanged", source)
@@ -42,7 +44,7 @@ class ProductionRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("def _advance_handoff_if_settled", source)
 
     def test_position_hold_keeps_original_completion_gate_and_resets_command(self):
-        source = (ROOT / "handoff_position_hold_runtime.py").read_text()
+        source = (RUNTIME_ROOT / "handoff_position_hold_runtime.py").read_text()
 
         self.assertIn(
             "position_error_m > cfg.settle_position_tolerance_m",
@@ -61,7 +63,7 @@ class ProductionRuntimeWiringTests(unittest.TestCase):
         self.assertIn("maximum command bias", source)
 
     def test_exact_calibrated_offset_is_installed_on_insertion_controller(self):
-        source = (ROOT / "full_insertion_runtime.py").read_text()
+        source = (RUNTIME_ROOT / "full_insertion_runtime.py").read_text()
 
         self.assertIn("[0.0, -0.00030, -0.00045]", source)
         self.assertIn(
@@ -78,7 +80,7 @@ class ProductionRuntimeWiringTests(unittest.TestCase):
         )
 
     def test_log_states_perception_handoff_and_depth_are_unchanged(self):
-        source = (ROOT / "full_insertion_runtime.py").read_text()
+        source = (RUNTIME_ROOT / "full_insertion_runtime.py").read_text()
 
         self.assertIn("INSERTION TARGET CALIBRATION ACTIVE", source)
         self.assertIn("perception-derived port point: unchanged", source)
@@ -91,7 +93,7 @@ class ProductionRuntimeWiringTests(unittest.TestCase):
         self.assertIn("lateral deviation abort limit:", source)
 
     def test_calibration_controller_references_calibrated_line_for_drift(self):
-        source = (ROOT / "insertion_target_trim.py").read_text()
+        source = (CONTROL_ROOT / "insertion_target_trim.py").read_text()
 
         self.assertIn("_MAXIMUM_INSERTION_CALIBRATION_M = 0.001", source)
         self.assertIn("def _calibrated_lateral_drift_m", source)
