@@ -14,4 +14,5 @@ single_rack_cv/yoloe-26l-seg.pt
 single_rack_cv/assets/models/*.pt
 single_rack_cv/benchmarks/front_plane_ground_truth.json
 assets/
-.vscode/esha/ethernet_cable_pick_up/*.pt
+.vscode/
+esha/ethernet_cable_pick_up/*.pt
