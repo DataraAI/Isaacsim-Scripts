@@ -74,6 +74,11 @@ FORBIDDEN_PATHS = (
 
 
 class RepositoryCleanlinessTests(unittest.TestCase):
+    def test_responsibility_packages_exist(self):
+        for package in ("vision", "robot", "cable", "control", "runtime"):
+            init_path = ROOT / package / "__init__.py"
+            self.assertTrue(init_path.is_file(), init_path)
+
     def test_production_imports_no_legacy_modules(self):
         for path in PRODUCTION_FILES:
             self.assertTrue(path.is_file(), path)
