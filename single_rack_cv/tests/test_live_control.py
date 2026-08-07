@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from live_control import apply_front_plane_result
+from vision.live_control import apply_front_plane_result
 
 
 class FakeCamera:
