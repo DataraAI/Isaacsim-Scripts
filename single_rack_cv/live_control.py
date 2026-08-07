@@ -7,8 +7,6 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from stereo_front_rim_plane import estimate_stereo_aperture_center
-
 
 @dataclass(frozen=True)
 class LiveFrontPlaneDiagnostics:
@@ -128,7 +126,7 @@ def apply_front_plane_result(
     front_plane_result,
     aperture_center_disagreement_m: float = 0.0,
 ):
-    """Legacy helper retained for offline front-plane regression tests."""
+    """Apply the qualified front-plane center to the live control observation."""
 
     refined = _replace_control_center(
         frame=frame,
@@ -183,78 +181,3 @@ def apply_front_plane_result(
         ),
     )
     return refined, diagnostics
-
-
-def apply_stereo_center_result(
-    frame,
-    observation,
-    desired_port_virtual_camera_usd,
-    stereo_center_result,
-):
-    """Replace control with the centered point on the physical front-rim plane."""
-
-    disparity_px = float(
-        stereo_center_result.left_center_uv[0]
-        - stereo_center_result.right_center_uv[0]
-    )
-    refined = _replace_control_center(
-        frame=frame,
-        observation=observation,
-        desired_port_virtual_camera_usd=desired_port_virtual_camera_usd,
-        center_world_m=stereo_center_result.center_world_m,
-        mean_disparity_px=disparity_px,
-        reprojection_rms_px=stereo_center_result.reprojection_rms_px,
-        max_reprojection_px=stereo_center_result.max_reprojection_px,
-        max_ray_gap_m=stereo_center_result.ray_gap_m,
-    )
-
-    cavity_range_m = float(observation.estimated_range_m)
-    opening_range_m = float(refined.estimated_range_m)
-    diagnostics = LiveFrontPlaneDiagnostics(
-        cavity_range_m=cavity_range_m,
-        opening_range_m=opening_range_m,
-        recess_depth_m=float(cavity_range_m - opening_range_m),
-        plane_residual_m=float(observation.plane_residual_m),
-        max_ray_gap_m=float(stereo_center_result.ray_gap_m),
-        valid_disparity_count=0,
-        consistent_disparity_count=0,
-        ring_candidate_count=0,
-        triangulated_count=4,
-        cluster_count=1,
-        side_support_counts=(1, 1, 1, 1),
-        aperture_center_world_m=tuple(
-            float(value) for value in refined.center_world_xyz_m
-        ),
-        aperture_center_disagreement_m=float(
-            stereo_center_result.ray_gap_m
-        ),
-    )
-    return refined, diagnostics
-
-
-def refine_live_observation(
-    frame,
-    observation,
-    desired_port_virtual_camera_usd,
-    *,
-    aperture_width_m: float = 0.0114,
-    aperture_height_m: float = 0.0070,
-):
-    """Estimate the physical center on the triangulated RGB front-rim plane."""
-
-    del aperture_width_m, aperture_height_m
-
-    stereo_center = estimate_stereo_aperture_center(
-        left_rgb=frame.left.rgb,
-        right_rgb=frame.right.rgb,
-        left_mask=observation.left.detection.mask,
-        right_mask=observation.right.detection.mask,
-        left_camera=frame.left.camera,
-        right_camera=frame.right.camera,
-    )
-    return apply_stereo_center_result(
-        frame=frame,
-        observation=observation,
-        desired_port_virtual_camera_usd=desired_port_virtual_camera_usd,
-        stereo_center_result=stereo_center,
-    )
