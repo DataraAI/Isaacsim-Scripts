@@ -22,9 +22,9 @@ FORBIDDEN_MODULE_MARKERS = (
 PRODUCTION_FILES = (
     ROOT / "main.py",
     ROOT / "config.py",
-    ROOT / "front_plane.py",
-    ROOT / "stereo_geometry.py",
-    ROOT / "live_control.py",
+    ROOT / "vision" / "front_plane.py",
+    ROOT / "vision" / "stereo_geometry.py",
+    ROOT / "vision" / "live_control.py",
     ROOT / "benchmarks" / "front_plane_benchmark.py",
     ROOT / "benchmarks" / "capture_dataset.py",
     ROOT / "tools" / "run_benchmark_isaac.py",
