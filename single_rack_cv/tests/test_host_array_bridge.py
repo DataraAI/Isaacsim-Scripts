@@ -158,6 +158,7 @@ class HostArrayBridgeTests(unittest.TestCase):
             [0.01, -0.57, 0.0, -1.01, 0.0, -0.02, -0.52],
         )
         self.assertEqual(subset.positions.events, ["detach", "cpu", "numpy"])
+        self.assertEqual(wrapped.marker, "subset delegated")
 
     def test_ik_solver_internal_joint_subset_is_replaced_once(self):
         solver = _FakeArticulationKinematicsSolver()
