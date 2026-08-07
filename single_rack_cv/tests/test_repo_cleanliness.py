@@ -59,6 +59,16 @@ FORBIDDEN_PATHS = (
     "tools/extract_front_rim_ground_truth_bootstrap.py",
     "tools/run_center_diagnostic_isaac.py",
     "tools/diagnose_stereo_centers.py",
+    "front_mouth_projective_center.py",
+    "lower_mouth_projective_center.py",
+    "stereo_center_projective.py",
+    "stereo_front_rim_plane.py",
+    "stereo_center.py",
+    "tests/test_front_mouth_outer_edges.py",
+    "tests/test_lower_mouth_projective_center.py",
+    "tests/test_projective_front_rim_center.py",
+    "tests/test_stereo_front_rim_plane.py",
+    "tests/test_stereo_center.py",
 )
 
 
