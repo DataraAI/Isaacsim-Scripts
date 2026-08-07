@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import unittest
 from pathlib import Path
+import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CABLE_ROOT = ROOT / "cable"
+RUNTIME_ROOT = ROOT / "runtime"
 
 
 class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
     def test_scale_aware_mount_replaces_only_plug_tip_frame(self):
-        source = (ROOT / "scale_aware_cable_mount.py").read_text()
+        source = (CABLE_ROOT / "scale_aware_cable_mount.py").read_text()
         self.assertIn(
             "original_detect = cable_mount_module.detect_plug_frame",
             source,
@@ -24,7 +26,7 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
 
     def test_rejected_derivation_still_locks_before_detector_initialization(self):
         main_source = (ROOT / "main.py").read_text()
-        mount_source = (ROOT / "scale_aware_cable_mount.py").read_text()
+        mount_source = (CABLE_ROOT / "scale_aware_cable_mount.py").read_text()
         probe = main_source.index("[CONNECTOR TCP PROBE] MOTION LOCKED")
         detector = main_source.index("detector.initialize()")
         self.assertLess(probe, detector)
@@ -33,7 +35,7 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertIn("not derivation_accepted", mount_source)
 
     def test_usd_adapter_uses_rear_profile_donor_and_two_markers(self):
-        source = (ROOT / "connector_tcp_usd.py").read_text()
+        source = (CABLE_ROOT / "connector_tcp_usd.py").read_text()
         self.assertIn("connected_component_bounds", source)
         self.assertIn("#whole", source)
         self.assertIn("maximum_profile_setback_m=0.020", source)
@@ -46,7 +48,7 @@ class ConnectorTcpRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("port_offset", source)
 
     def test_production_wrapper_disables_precontact_without_touching_tcp_geometry(self):
-        source = (ROOT / "full_insertion_runtime.py").read_text()
+        source = (RUNTIME_ROOT / "full_insertion_base_runtime.py").read_text()
         self.assertIn(
             "_connector_tcp_usd.PRECONTACT_ALIGNMENT_ONLY = False",
             source,
