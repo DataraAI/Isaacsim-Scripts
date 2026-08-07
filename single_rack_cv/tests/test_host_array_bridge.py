@@ -176,7 +176,7 @@ class HostArrayBridgeTests(unittest.TestCase):
 
     def test_cable_runtime_wraps_all_cuda_pose_sources_once(self):
         source = (
-            ROOT / "runtime" / "cable_runtime.py"
+            ROOT / "runtime" / "cable_runtime_base.py"
         ).read_text(encoding="utf-8")
         self.assertIn("HostSafePoseObject", source)
         self.assertIn("install_host_safe_ik_warm_start", source)
