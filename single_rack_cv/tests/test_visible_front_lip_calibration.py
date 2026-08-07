@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from config import CONFIG
-from front_lip_calibration import (
+from vision.front_lip_calibration import (
     REJECTED_OUTER_BEZEL_MEDIAN_M,
     REJECTED_OUTER_BEZEL_POPULATION_STD_M,
     REJECTED_OUTER_BEZEL_SAMPLE_COUNT,
@@ -15,6 +15,7 @@ from front_lip_calibration import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VISION_ROOT = ROOT / "vision"
 
 
 class VisibleFrontLipCalibrationTests(unittest.TestCase):
@@ -27,8 +28,6 @@ class VisibleFrontLipCalibrationTests(unittest.TestCase):
             places=12,
         )
 
-        # The old 15.3 mm cluster is retained as rejected bezel evidence, not
-        # silently reused as the physical-mouth validation target.
         self.assertEqual(REJECTED_OUTER_BEZEL_SAMPLE_COUNT, 91)
         self.assertAlmostEqual(REJECTED_OUTER_BEZEL_MEDIAN_M, 0.015287, places=12)
         self.assertAlmostEqual(
@@ -43,7 +42,7 @@ class VisibleFrontLipCalibrationTests(unittest.TestCase):
         )
 
         source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("from front_lip_calibration import (", source)
+        self.assertIn("from vision.front_lip_calibration import (", source)
         self.assertIn(
             "aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M",
             source,
@@ -65,7 +64,7 @@ class VisibleFrontLipCalibrationTests(unittest.TestCase):
             source,
         )
 
-        stereo_source = (ROOT / "plane_rectified_front_lip.py").read_text(
+        stereo_source = (VISION_ROOT / "plane_rectified_front_lip.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("fit_rectified_front_lip_width_prior", stereo_source)
