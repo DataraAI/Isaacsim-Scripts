@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from plug_axis_insertion import ExplicitInsertionAxisAdapter
+from control.plug_axis_insertion import ExplicitInsertionAxisAdapter
 
 
 class FakeController:
