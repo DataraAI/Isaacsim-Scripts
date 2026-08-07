@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from hand_plug_geometry import (
+from robot.hand_plug_geometry import (
     compute_angled_hand_pose_preserving_tool,
     expected_camera_baseline_axis_world,
     horizontal_axis_error_deg,
