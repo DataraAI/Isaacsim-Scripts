@@ -7,9 +7,9 @@ import unittest
 import cv2
 import numpy as np
 
-from plane_rectified_fitting import fit_rectified_front_lip
-from plane_rectified_geometry import build_plane_frame
-from plane_rectified_types import PlaneFrame, RectifiedEye
+from vision.plane_rectified_fitting import fit_rectified_front_lip
+from vision.plane_rectified_geometry import build_plane_frame
+from vision.plane_rectified_types import PlaneFrame, RectifiedEye
 
 
 class _Camera:
