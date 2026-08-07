@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from insertion import (
+from control.insertion import (
     InsertionLimits,
     InsertionPhase,
     InsertionSample,
