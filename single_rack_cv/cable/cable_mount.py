@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
-from cable_geometry import (
+from cable.cable_geometry import (
     CableMountValidation,
     PlugFrame,
     angular_error_deg,

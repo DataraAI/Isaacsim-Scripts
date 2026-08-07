@@ -8,9 +8,9 @@ from dataclasses import replace
 import numpy as np
 from pxr import Gf, Usd, UsdGeom
 
-from cable_geometry import PlugFrame, validate_transform
-from cable_mount import _world_transform
-from connector_tcp import (
+from cable.cable_geometry import PlugFrame, validate_transform
+from cable.cable_mount import _world_transform
+from cable.connector_tcp import (
     InsertionTcpDerivation,
     MeshComponentBounds,
     connected_component_bounds,

@@ -8,21 +8,21 @@ from dataclasses import replace
 import numpy as np
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, Vt
 
-import cable_mount as cable_mount_module
-from affine_root_geometry import (
+from cable import cable_mount as cable_mount_module
+from cable.affine_root_geometry import (
     compute_world_from_root_for_tip_preserving_affine,
 )
-from articulation_host_bridge import HostSafeDofPropertiesArticulation
-from cable_geometry import (
+from robot.articulation_host_bridge import HostSafeDofPropertiesArticulation
+from cable.cable_geometry import (
     matrix_to_quaternion_wxyz,
     rigid_pose_from_affine,
     validate_affine_transform,
 )
-from cable_mount import (
+from cable.cable_mount import (
     CableMount,
     _world_transform,
 )
-from connector_tcp_usd import (
+from cable.connector_tcp_usd import (
     PRECONTACT_ALIGNMENT_ONLY,
     PRECONTACT_HOLD_OFFSET_M,
     TCP_PROBE_ONLY,
@@ -30,7 +30,7 @@ from connector_tcp_usd import (
     derive_plug_frame_from_mesh,
     log_tcp_derivation,
 )
-from tail_preshape import preshape_free_hanging_tail
+from cable.tail_preshape import preshape_free_hanging_tail
 
 
 _TAIL_PRESHAPE_ANCHOR_LENGTH_M = 0.015

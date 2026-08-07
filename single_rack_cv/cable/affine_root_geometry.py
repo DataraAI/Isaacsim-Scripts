@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from cable_geometry import (
+from cable.cable_geometry import (
     PlugFrame,
     rigid_pose_from_affine,
     validate_affine_transform,
