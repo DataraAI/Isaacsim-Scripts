@@ -5,15 +5,16 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VISION_ROOT = ROOT / "vision"
 
 
 class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
     def test_runtime_adapter_uses_projective_center_on_outer_bezel_plane(self):
-        source = (ROOT / "live_control_projective.py").read_text(
+        source = (VISION_ROOT / "live_control_projective.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "from outer_bezel_projective_center import",
+            "from vision.outer_bezel_projective_center import",
             source,
         )
         self.assertIn(
@@ -26,11 +27,11 @@ class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("estimate_planar_aperture_center", source)
 
     def test_outer_bezel_center_uses_plane_rectified_rgb_front_lip(self):
-        source = (ROOT / "outer_bezel_projective_center.py").read_text(
+        source = (VISION_ROOT / "outer_bezel_projective_center.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "from plane_rectified_front_lip import",
+            "from vision.plane_rectified_front_lip import",
             source,
         )
         self.assertIn(
@@ -44,7 +45,7 @@ class FrontRimPlaneRuntimeWiringTests(unittest.TestCase):
     def test_main_routes_live_observations_through_corrected_adapter(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn(
-            "from live_control_projective import refine_live_observation",
+            "from vision.live_control_projective import refine_live_observation",
             source,
         )
         refine = source.index("refine_live_observation(")

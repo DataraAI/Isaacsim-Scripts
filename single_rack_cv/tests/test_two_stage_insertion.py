@@ -5,14 +5,14 @@ import unittest
 
 import numpy as np
 
-from insertion import (
+from control.insertion import (
     InsertionLimits,
     InsertionPhase,
     InsertionSample,
     InsertionStage,
     PartialInsertionController,
 )
-from insertion_target_trim import TrimmedConsecutivePoseInsertionController
+from control.insertion_target_trim import TrimmedConsecutivePoseInsertionController
 
 
 def limits() -> InsertionLimits:

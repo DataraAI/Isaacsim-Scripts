@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import numpy as np
 
-from cable_geometry import (
+from cable.cable_geometry import (
     angular_error_deg,
     compute_attachment_bounds,
     compute_world_from_root_for_tip,

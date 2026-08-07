@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from orientation_hold import (
+from control.orientation_hold import (
     quaternion_error_deg,
     quaternion_multiply_wxyz,
     update_orientation_hold_command,

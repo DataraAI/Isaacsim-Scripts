@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from stereo_handoff import (
+from control.stereo_handoff import (
     bounded_step_to_goal,
     estimate_stable_goal,
     qualify_stationary_port_goal,

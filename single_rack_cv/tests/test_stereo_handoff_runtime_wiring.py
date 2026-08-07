@@ -5,8 +5,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_PATH = ROOT / "stereo_handoff_runtime.py"
-SETTLED_RUNTIME_PATH = ROOT / "settled_stereo_handoff_runtime.py"
+RUNTIME_PATH = ROOT / "runtime" / "stereo_handoff_runtime.py"
+SETTLED_RUNTIME_PATH = ROOT / "runtime" / "settled_stereo_handoff_runtime.py"
 MAIN_PATH = ROOT / "main.py"
 CONFIG_PATH = ROOT / "config.py"
 DEBUG_PATH = ROOT / "debug.py"

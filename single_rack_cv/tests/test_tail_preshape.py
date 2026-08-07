@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from tail_preshape import preshape_free_hanging_tail
+from cable.tail_preshape import preshape_free_hanging_tail
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,7 +59,7 @@ class TailPreshapeTests(unittest.TestCase):
             )
 
     def test_runtime_wires_preshape_before_play(self):
-        source = (ROOT / "scale_aware_cable_mount.py").read_text(
+        source = (ROOT / "cable" / "scale_aware_cable_mount.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("_TAIL_PRESHAPE_DROP_M = 0.100", source)

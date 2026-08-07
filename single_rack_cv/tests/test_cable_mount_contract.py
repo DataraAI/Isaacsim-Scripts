@@ -79,7 +79,7 @@ class CableMountContractTests(unittest.TestCase):
         self.assertNotIn("PhysxAutoAttachmentAPI", source)
 
     def test_runtime_mount_contract_exposes_fingers_validation_and_diagnostics(self):
-        source = Path("cable_mount.py").read_text(encoding="utf-8")
+        source = Path("cable/cable_mount.py").read_text(encoding="utf-8")
         for token in (
             "def configure_fingers",
             "finger_joint_names",

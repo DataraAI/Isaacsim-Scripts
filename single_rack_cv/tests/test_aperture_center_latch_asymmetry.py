@@ -5,7 +5,7 @@ import unittest
 import cv2
 import numpy as np
 
-from aperture_center import estimate_planar_aperture_center
+from vision.aperture_center import estimate_planar_aperture_center
 
 
 IMAGE_HEIGHT = 240

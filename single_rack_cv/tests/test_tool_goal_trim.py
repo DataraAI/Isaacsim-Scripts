@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tool_goal_trim import apply_tool_goal_trim
+from control.tool_goal_trim import apply_tool_goal_trim
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,13 +51,13 @@ class ToolGoalTrimTests(unittest.TestCase):
 
     def test_legacy_handoff_trim_helper_is_not_used_by_any_runtime(self):
         production_source = (
-            ROOT / "full_insertion_runtime.py"
+            ROOT / "runtime" / "full_insertion_runtime.py"
         ).read_text(encoding="utf-8")
         hold_source = (
-            ROOT / "handoff_position_hold_runtime.py"
+            ROOT / "runtime" / "handoff_position_hold_runtime.py"
         ).read_text(encoding="utf-8")
         handoff_source = (
-            ROOT / "stereo_handoff_runtime.py"
+            ROOT / "runtime" / "stereo_handoff_runtime.py"
         ).read_text(encoding="utf-8")
 
         self.assertNotIn("apply_tool_goal_trim(", production_source)

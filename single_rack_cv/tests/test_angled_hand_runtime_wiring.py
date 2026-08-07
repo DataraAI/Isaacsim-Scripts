@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
-from angled_hand_config import ANGLED_HAND_CONFIG
+from robot.angled_hand_config import ANGLED_HAND_CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_PATH = ROOT / "angled_hand_runtime.py"
-HANDOFF_RUNTIME_PATH = ROOT / "stereo_handoff_runtime.py"
+RUNTIME_PATH = ROOT / "runtime" / "angled_hand_runtime.py"
+HANDOFF_RUNTIME_PATH = ROOT / "runtime" / "stereo_handoff_runtime.py"
 MAIN_PATH = ROOT / "main.py"
 
 
@@ -36,7 +36,7 @@ class AngledHandRuntimeWiringTests(unittest.TestCase):
         )
         self.assertIn("runtime = CableMountedSimulationRuntime(", main_source)
         self.assertIn(
-            "from angled_hand_runtime import AngledHandCableRuntime",
+            "from runtime.angled_hand_runtime import AngledHandCableRuntime",
             handoff_source,
         )
         self.assertIn(

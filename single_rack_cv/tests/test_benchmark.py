@@ -26,7 +26,7 @@ class BenchmarkStructureTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("EXPECTED_RESOLUTION = [960, 1280]", source)
-        self.assertIn("from front_plane import", source)
+        self.assertIn("from vision.front_plane import", source)
         self.assertIn("plane_residual_p95_mm", source)
         self.assertIn('"mode": "front_plane_highres_v1"', source)
         self.assertNotIn("front_rim_sgbm_refined", source)

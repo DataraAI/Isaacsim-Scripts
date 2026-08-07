@@ -4,14 +4,14 @@ import unittest
 
 import numpy as np
 
-from insertion import (
+from control.insertion import (
     InsertionLimits,
     InsertionPhase,
     InsertionSample,
     InsertionStage,
     PartialInsertionController,
 )
-from precontact_alignment import (
+from control.precontact_alignment import (
     PrecontactAlignmentPolicy,
     PrecontactInsertionLimits,
     build_precontact_limits,

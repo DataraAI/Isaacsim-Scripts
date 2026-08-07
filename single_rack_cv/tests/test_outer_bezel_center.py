@@ -7,12 +7,12 @@ from unittest.mock import patch
 
 import numpy as np
 
-from outer_bezel_center import (
+from vision.outer_bezel_center import (
     OUTER_BEZEL_CONFIG,
     OuterBezelPlaneResult,
     select_nearest_supported_range_cluster,
 )
-from outer_bezel_projective_center import (
+from vision.outer_bezel_projective_center import (
     estimate_outer_bezel_projective_center,
 )
 
@@ -198,10 +198,10 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
         right_mask = np.zeros((120, 160), dtype=np.uint8)
 
         with patch(
-            "outer_bezel_projective_center.estimate_outer_bezel_plane",
+            "vision.outer_bezel_projective_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_projective_center.estimate_plane_rectified_front_lip_center",
+            "vision.outer_bezel_projective_center.estimate_plane_rectified_front_lip_center",
             return_value=front_lip,
         ) as estimate_front_lip:
             result = estimate_outer_bezel_projective_center(
@@ -252,10 +252,10 @@ class OuterBezelProjectiveCenterTests(unittest.TestCase):
         camera = DummyCamera()
 
         with patch(
-            "outer_bezel_projective_center.estimate_outer_bezel_plane",
+            "vision.outer_bezel_projective_center.estimate_outer_bezel_plane",
             return_value=plane,
         ), patch(
-            "outer_bezel_projective_center.estimate_plane_rectified_front_lip_center",
+            "vision.outer_bezel_projective_center.estimate_plane_rectified_front_lip_center",
             side_effect=RuntimeError(
                 "Plane-rectified RGB front-lip centers disagree by 0.700 mm."
             ),

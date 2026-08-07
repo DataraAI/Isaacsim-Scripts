@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 import torch
 
-from articulation_host_bridge import HostSafeDofPropertiesArticulation
+from robot.articulation_host_bridge import HostSafeDofPropertiesArticulation
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -141,7 +141,9 @@ class HostSafeArticulationTests(unittest.TestCase):
                     _ = wrapped.dof_properties
 
     def test_scale_aware_mount_wraps_only_the_finger_configuration_boundary(self):
-        source = (ROOT / "scale_aware_cable_mount.py").read_text(encoding="utf-8")
+        source = (
+            ROOT / "cable" / "scale_aware_cable_mount.py"
+        ).read_text(encoding="utf-8")
         self.assertIn("HostSafeDofPropertiesArticulation", source)
         self.assertIn(
             "super().configure_fingers(\n"

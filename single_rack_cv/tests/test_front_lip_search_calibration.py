@@ -4,14 +4,15 @@ import inspect
 import unittest
 from pathlib import Path
 
-from front_lip_calibration import VISIBLE_FRONT_LIP_SEARCH_WIDTH_M
-from plane_rectified_width_hypotheses import (
+from vision.front_lip_calibration import VISIBLE_FRONT_LIP_SEARCH_WIDTH_M
+from vision.plane_rectified_width_hypotheses import (
     _search_width_hypotheses,
     fit_rectified_front_lip_width_prior,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VISION_ROOT = ROOT / "vision"
 
 
 class FrontLipSearchCalibrationTests(unittest.TestCase):
@@ -27,17 +28,17 @@ class FrontLipSearchCalibrationTests(unittest.TestCase):
         self.assertTrue(all(first < second for first, second in zip(widths, widths[1:])))
 
     def test_width_prior_reaches_both_independent_eye_fitters_in_production(self):
-        live_source = (ROOT / "live_control_projective.py").read_text(
+        live_source = (VISION_ROOT / "live_control_projective.py").read_text(
             encoding="utf-8"
         )
         projective_source = (
-            ROOT / "outer_bezel_projective_center.py"
+            VISION_ROOT / "outer_bezel_projective_center.py"
         ).read_text(encoding="utf-8")
-        stereo_source = (ROOT / "plane_rectified_front_lip.py").read_text(
+        stereo_source = (VISION_ROOT / "plane_rectified_front_lip.py").read_text(
             encoding="utf-8"
         )
         hypothesis_source = (
-            ROOT / "plane_rectified_width_hypotheses.py"
+            VISION_ROOT / "plane_rectified_width_hypotheses.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("search_width_m=search_width_m", live_source)

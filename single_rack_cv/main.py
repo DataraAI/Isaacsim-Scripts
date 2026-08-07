@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from config import CONFIG
-from front_lip_calibration import (
+from vision.front_lip_calibration import (
     VISIBLE_FRONT_LIP_HEIGHT_M,
     VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
@@ -139,12 +139,12 @@ try:
         }
     )
 
-    from full_insertion_runtime import (
+    from runtime.full_insertion_runtime import (
         AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
     from debug import DebugOutputs
-    from live_control_projective import refine_live_observation
-    from perception import YOLOEPortDetector, process_stereo_port
+    from vision.live_control_projective import refine_live_observation
+    from vision.perception import YOLOEPortDetector, process_stereo_port
     from sim import warn
 
     runtime = CableMountedSimulationRuntime(
@@ -255,8 +255,6 @@ try:
                 debug.update_frozen_port_point(frozen_port_point)
             debug.handle(frame, observation, capture_index)
         except Exception as exc:
-            # Any rejected detector or front-plane estimate holds the current
-            # target; repeated misses trigger clean image-space reacquisition.
             runtime.note_perception_failure()
             warn(f"RGB stereo capture {capture_index} skipped: {exc}")
 

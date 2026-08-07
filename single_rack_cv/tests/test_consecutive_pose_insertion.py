@@ -5,8 +5,8 @@ import unittest
 
 import numpy as np
 
-from insertion import InsertionLimits, InsertionPhase, InsertionSample
-from settled_insertion import ConsecutivePoseInsertionController
+from control.insertion import InsertionLimits, InsertionPhase, InsertionSample
+from control.settled_insertion import ConsecutivePoseInsertionController
 
 
 def _quat_x_deg(angle_deg: float) -> np.ndarray:

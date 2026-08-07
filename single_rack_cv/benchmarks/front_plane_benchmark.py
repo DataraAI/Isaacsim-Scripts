@@ -21,14 +21,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import CONFIG
-from front_plane import (
+from vision.front_plane import (
     DEFAULT_FRONT_PLANE_CONFIG,
     FrontPlaneResult,
     LocalDisparityResult,
     compute_local_disparity,
     estimate_front_plane,
 )
-from perception import (
+from vision.perception import (
     CameraFrame,
     CameraModel,
     PortDetection,

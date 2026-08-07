@@ -17,14 +17,17 @@ FORBIDDEN_MODULE_MARKERS = (
     "live_front_plane",
     "highres_config",
     "prompt_benchmark_core",
+    "from perception import",
+    "from front_plane import",
 )
 
 PRODUCTION_FILES = (
     ROOT / "main.py",
     ROOT / "config.py",
-    ROOT / "front_plane.py",
-    ROOT / "stereo_geometry.py",
-    ROOT / "live_control.py",
+    ROOT / "debug.py",
+    ROOT / "vision" / "front_plane.py",
+    ROOT / "vision" / "stereo_geometry.py",
+    ROOT / "vision" / "live_control.py",
     ROOT / "benchmarks" / "front_plane_benchmark.py",
     ROOT / "benchmarks" / "capture_dataset.py",
     ROOT / "tools" / "run_benchmark_isaac.py",
@@ -74,6 +77,11 @@ FORBIDDEN_PATHS = (
 
 
 class RepositoryCleanlinessTests(unittest.TestCase):
+    def test_responsibility_packages_exist(self):
+        for package in ("vision", "robot", "cable", "control", "runtime"):
+            init_path = ROOT / package / "__init__.py"
+            self.assertTrue(init_path.is_file(), init_path)
+
     def test_production_imports_no_legacy_modules(self):
         for path in PRODUCTION_FILES:
             self.assertTrue(path.is_file(), path)

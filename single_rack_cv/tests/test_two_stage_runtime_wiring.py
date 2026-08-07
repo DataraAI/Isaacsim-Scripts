@@ -7,6 +7,7 @@ from config import CONFIG
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_ROOT = ROOT / "runtime"
 
 
 class TwoStageRuntimeWiringTests(unittest.TestCase):
@@ -23,7 +24,7 @@ class TwoStageRuntimeWiringTests(unittest.TestCase):
         self.assertEqual(CONFIG.insertion.step_timeout_s, 2.0)
 
     def test_runtime_passes_both_stages_and_logs_port_depth(self):
-        source = (ROOT / "cable_runtime" / "__init__.py").read_text(
+        source = (RUNTIME_ROOT / "cable_runtime.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("coarse_approach_depth_m", source)

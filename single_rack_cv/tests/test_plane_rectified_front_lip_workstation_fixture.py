@@ -10,7 +10,7 @@ import unittest
 import cv2
 import numpy as np
 
-from plane_rectified_front_lip import (
+from vision.plane_rectified_front_lip import (
     estimate_plane_rectified_front_lip_center,
 )
 

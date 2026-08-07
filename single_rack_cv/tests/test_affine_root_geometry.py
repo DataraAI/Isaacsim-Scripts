@@ -5,10 +5,10 @@ import unittest
 
 import numpy as np
 
-from affine_root_geometry import (
+from cable.affine_root_geometry import (
     compute_world_from_root_for_tip_preserving_affine,
 )
-from cable_geometry import rigid_pose_from_affine
+from cable.cable_geometry import rigid_pose_from_affine
 
 
 def _transform(linear=None, translation=(0.0, 0.0, 0.0)):
