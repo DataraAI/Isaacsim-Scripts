@@ -8,8 +8,8 @@ import math
 
 import numpy as np
 
-from aperture_center import estimate_planar_aperture_center
-from front_plane import (
+from vision.aperture_center import estimate_planar_aperture_center
+from vision.front_plane import (
     DEFAULT_FRONT_PLANE_CONFIG,
     FrontPlaneConfig,
     build_bezel_ring_pixels,
@@ -18,7 +18,7 @@ from front_plane import (
     intersect_midpoint_ray_with_plane,
     intersect_pixel_with_plane,
 )
-from stereo_geometry import triangulate_pixel_pair, unit_vector
+from vision.stereo_geometry import triangulate_pixel_pair, unit_vector
 
 
 _SIDE_COUNT = 4

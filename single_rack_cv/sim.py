@@ -28,7 +28,7 @@ from isaacsim.sensors.experimental.rtx import CameraSensor, RtxCamera
 from isaacsim.storage.native import get_assets_root_path
 
 from config import Config
-from perception import (
+from vision.perception import (
     CameraFrame,
     CameraModel,
     PortDetection,

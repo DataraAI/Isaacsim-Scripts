@@ -9,7 +9,7 @@ import math
 import cv2
 import numpy as np
 
-from stereo_geometry import triangulate_pixel_pair, unit_vector
+from vision.stereo_geometry import triangulate_pixel_pair, unit_vector
 
 
 SIDE_NAMES = ("top", "right", "bottom", "left")

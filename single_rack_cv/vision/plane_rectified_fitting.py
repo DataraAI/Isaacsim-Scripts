@@ -7,13 +7,13 @@ import math
 import cv2
 import numpy as np
 
-from plane_rectified_types import (
+from vision.plane_rectified_types import (
     FrontLipFit,
     MAX_EDGE_REPROJECTION_PX,
     MAX_OPPOSITE_EDGE_ANGLE_DEG,
     RectifiedEye,
 )
-from plane_rectified_fit_utils import (
+from vision.plane_rectified_fit_utils import (
     _edge_reprojection_residual,
     _fit_parallel_pair,
     _line_angle_deg,

@@ -9,8 +9,8 @@ import math
 import cv2
 import numpy as np
 
-from front_plane import intersect_pixel_with_plane
-from stereo_geometry import unit_vector
+from vision.front_plane import intersect_pixel_with_plane
+from vision.stereo_geometry import unit_vector
 
 
 MAX_CENTER_DISAGREEMENT_M = 0.0005

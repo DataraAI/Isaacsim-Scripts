@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from live_control import apply_front_plane_result
-from outer_bezel_projective_center import (
+from vision.live_control import apply_front_plane_result
+from vision.outer_bezel_projective_center import (
     estimate_outer_bezel_projective_center,
 )
 

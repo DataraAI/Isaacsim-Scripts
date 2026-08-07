@@ -7,13 +7,13 @@ import math
 
 import numpy as np
 
-from front_plane import FrontPlaneConfig
-from outer_bezel_center import (
+from vision.front_plane import FrontPlaneConfig
+from vision.outer_bezel_center import (
     OUTER_BEZEL_CONFIG,
     OuterBezelApertureResult,
     estimate_outer_bezel_plane,
 )
-from plane_rectified_front_lip import (
+from vision.plane_rectified_front_lip import (
     estimate_plane_rectified_front_lip_center,
 )
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from plane_rectified_types import (
+from vision.plane_rectified_types import (
     DEFAULT_RECTIFIED_PADDING_M,
     DEFAULT_RECTIFIED_RESOLUTION_M,
     MAX_CENTER_DISAGREEMENT_M,
@@ -17,18 +17,18 @@ from plane_rectified_types import (
     PlaneRectifiedFrontLipDebug,
     PlaneRectifiedFrontLipResult,
 )
-from plane_rectified_geometry import (
+from vision.plane_rectified_geometry import (
     build_plane_frame,
     project_mask_bounds_to_plane,
     rectify_eye_to_plane,
 )
-from plane_rectified_fit_utils import (
+from vision.plane_rectified_fit_utils import (
     _draw_fit,
     _draw_reprojection,
     point_in_convex_quad,
 )
-from plane_rectified_fitting import _fit_joint_front_lip
-from plane_rectified_width_hypotheses import (
+from vision.plane_rectified_fitting import _fit_joint_front_lip
+from vision.plane_rectified_width_hypotheses import (
     fit_rectified_front_lip_width_prior as fit_rectified_front_lip,
 )
 
@@ -41,7 +41,7 @@ def get_latest_plane_rectified_debug() -> PlaneRectifiedFrontLipDebug | None:
 
 
 def _write_debug_image(filename: str, image: np.ndarray) -> None:
-    output_dir = Path(__file__).resolve().parent / "camera_output"
+    output_dir = Path(__file__).resolve().parents[1] / "camera_output"
     output_dir.mkdir(parents=True, exist_ok=True)
     success = cv2.imwrite(
         str(output_dir / filename),

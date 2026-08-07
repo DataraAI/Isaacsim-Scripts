@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from config import CONFIG
-from front_lip_calibration import (
+from vision.front_lip_calibration import (
     VISIBLE_FRONT_LIP_HEIGHT_M,
     VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
     VISIBLE_FRONT_LIP_WIDTH_M,
@@ -143,8 +143,8 @@ try:
         AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
     from debug import DebugOutputs
-    from live_control_projective import refine_live_observation
-    from perception import YOLOEPortDetector, process_stereo_port
+    from vision.live_control_projective import refine_live_observation
+    from vision.perception import YOLOEPortDetector, process_stereo_port
     from sim import warn
 
     runtime = CableMountedSimulationRuntime(

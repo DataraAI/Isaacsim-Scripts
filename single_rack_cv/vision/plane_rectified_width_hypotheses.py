@@ -7,9 +7,9 @@ import math
 
 import numpy as np
 
-from plane_rectified_fit_utils import _mask_lower_mouth_geometry
-from plane_rectified_fitting import fit_rectified_front_lip as _fit_single_search
-from plane_rectified_types import FrontLipFit, MAX_EDGE_REPROJECTION_PX, RectifiedEye
+from vision.plane_rectified_fit_utils import _mask_lower_mouth_geometry
+from vision.plane_rectified_fitting import fit_rectified_front_lip as _fit_single_search
+from vision.plane_rectified_types import FrontLipFit, MAX_EDGE_REPROJECTION_PX, RectifiedEye
 
 
 _SEARCH_HYPOTHESIS_COUNT = 5
@@ -118,6 +118,3 @@ def fit_rectified_front_lip_width_prior(
         flush=True,
     )
     return selected
-
-
-__all__ = ["fit_rectified_front_lip_width_prior"]
