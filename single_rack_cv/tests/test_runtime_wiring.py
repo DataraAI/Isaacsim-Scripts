@@ -9,6 +9,9 @@ from config import CONFIG
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VISION_ROOT = ROOT / "vision"
+CABLE_ROOT = ROOT / "cable"
+RUNTIME_ROOT = ROOT / "runtime"
 
 
 class RuntimeWiringTests(unittest.TestCase):
@@ -23,7 +26,7 @@ class RuntimeWiringTests(unittest.TestCase):
     def test_main_refines_before_motion_and_debug(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn(
-            "from live_control_projective import refine_live_observation",
+            "from vision.live_control_projective import refine_live_observation",
             source,
         )
         refine = source.index("refine_live_observation(")
@@ -60,7 +63,7 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("forward_tip_offset_m", config_source)
 
     def test_cable_mount_uses_existing_rigid_plug_topology(self):
-        source = (ROOT / "cable_mount.py").read_text(encoding="utf-8")
+        source = (CABLE_ROOT / "cable_mount.py").read_text(encoding="utf-8")
         self.assertIn("UsdPhysics.RigidBodyAPI", source)
         self.assertIn('HasAPI("PhysxAutoDeformableAttachmentAPI")', source)
         self.assertIn("built_in_attachment_is_preserved", source)
@@ -71,7 +74,7 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("PhysxPhysicsAttachment", source)
 
     def test_direct_plug_joint_and_narrow_collision_filtering(self):
-        source = (ROOT / "cable_mount.py").read_text(encoding="utf-8")
+        source = (CABLE_ROOT / "cable_mount.py").read_text(encoding="utf-8")
         self.assertIn("UsdPhysics.FixedJoint.Define", source)
         self.assertIn("CreateBody0Rel", source)
         self.assertIn("CreateBody1Rel", source)
@@ -81,7 +84,7 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertNotIn("create_auto_deformable_attachment", source)
 
     def test_tracked_plug_is_forced_dynamic_before_fixed_joint(self):
-        source = (ROOT / "scale_aware_cable_mount.py").read_text(
+        source = (CABLE_ROOT / "scale_aware_cable_mount.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("def _ensure_tracked_plug_dynamic", source)
@@ -92,7 +95,7 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertLess(dynamic, joint)
 
     def test_cable_runtime_owns_gpu_startup_and_bounded_mount_gate(self):
-        source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
+        source = (RUNTIME_ROOT / "cable_runtime_base.py").read_text(encoding="utf-8")
         self.assertIn(
             "class CableMountedSimulationRuntime(SimulationRuntime)",
             source,
@@ -100,7 +103,7 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertIn("set_enabled_gpu_dynamics(True)", source)
         self.assertIn('set_broadphase_type("GPU")', source)
         self.assertIn('set_solver_type("TGS")', source)
-        self.assertIn("CableMount(self.cfg)", source)
+        self.assertIn("ScaleAwareCableMount(self.cfg)", source)
         self.assertIn("author_before_play", source)
         self.assertIn("configure_fingers", source)
         self.assertIn("def prepare_for_perception", source)
@@ -140,9 +143,9 @@ class RuntimeWiringTests(unittest.TestCase):
         self.assertEqual(CONFIG.insertion.max_orientation_error_deg, 1.0)
 
     def test_partial_insertion_runtime_is_wired_after_visual_completion(self):
-        runtime_source = (
-            ROOT / "cable_runtime" / "__init__.py"
-        ).read_text(encoding="utf-8")
+        runtime_source = (RUNTIME_ROOT / "cable_runtime.py").read_text(
+            encoding="utf-8"
+        )
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn("PartialInsertionController", runtime_source)
         self.assertIn("def update_partial_insertion", runtime_source)
