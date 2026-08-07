@@ -65,7 +65,7 @@ class ScaleAwareCableMountContractTests(unittest.TestCase):
         self.assertIn("original_converter", source)
 
     def test_runtime_uses_scale_aware_adapter(self):
-        source = (ROOT / "runtime" / "cable_runtime.py").read_text(
+        source = (ROOT / "runtime" / "cable_runtime_base.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
