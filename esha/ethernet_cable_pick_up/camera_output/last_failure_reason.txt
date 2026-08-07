@@ -1,2 +1,2 @@
-capture=16
-reason=name 'log' is not defined
+capture=36
+reason=left eye did not detect a valid RGB cable
