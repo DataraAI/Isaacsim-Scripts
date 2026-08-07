@@ -5,14 +5,14 @@ import unittest
 
 import numpy as np
 
-from scale_aware_cable_mount import _matrix_to_gf_quatf_compatible
+from cable.scale_aware_cable_mount import _matrix_to_gf_quatf_compatible
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScaleAwareCableMountContractTests(unittest.TestCase):
     def test_adapter_extracts_rigid_joint_frames_from_affine_usd_poses(self):
-        source = (ROOT / "scale_aware_cable_mount.py").read_text(
+        source = (ROOT / "cable" / "scale_aware_cable_mount.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("class ScaleAwareCableMount(CableMount)", source)
@@ -44,7 +44,7 @@ class ScaleAwareCableMountContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(imaginary[2]), expected, places=6)
 
     def test_adapter_patches_and_restores_affine_root_helpers(self):
-        source = (ROOT / "scale_aware_cable_mount.py").read_text(
+        source = (ROOT / "cable" / "scale_aware_cable_mount.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
@@ -65,9 +65,11 @@ class ScaleAwareCableMountContractTests(unittest.TestCase):
         self.assertIn("original_converter", source)
 
     def test_runtime_uses_scale_aware_adapter(self):
-        source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
+        source = (ROOT / "runtime" / "cable_runtime.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn(
-            "from scale_aware_cable_mount import ScaleAwareCableMount",
+            "from cable.scale_aware_cable_mount import ScaleAwareCableMount",
             source,
         )
         self.assertIn(
