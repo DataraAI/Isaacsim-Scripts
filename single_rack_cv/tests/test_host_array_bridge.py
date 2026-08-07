@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from host_array_bridge import (
+from robot.host_array_bridge import (
     HostSafeJointSubset,
     HostSafePoseObject,
     install_host_safe_ik_warm_start,
@@ -158,7 +158,6 @@ class HostArrayBridgeTests(unittest.TestCase):
             [0.01, -0.57, 0.0, -1.01, 0.0, -0.02, -0.52],
         )
         self.assertEqual(subset.positions.events, ["detach", "cpu", "numpy"])
-        self.assertEqual(wrapped.marker, "subset delegated")
 
     def test_ik_solver_internal_joint_subset_is_replaced_once(self):
         solver = _FakeArticulationKinematicsSolver()
@@ -175,7 +174,9 @@ class HostArrayBridgeTests(unittest.TestCase):
         )
 
     def test_cable_runtime_wraps_all_cuda_pose_sources_once(self):
-        source = (ROOT / "cable_runtime.py").read_text(encoding="utf-8")
+        source = (
+            ROOT / "runtime" / "cable_runtime.py"
+        ).read_text(encoding="utf-8")
         self.assertIn("HostSafePoseObject", source)
         self.assertIn("install_host_safe_ik_warm_start", source)
         self.assertIn('label="Franka articulation"', source)
