@@ -5,10 +5,10 @@ import unittest
 
 import numpy as np
 
-from angled_grasp_centering import (
+from robot.angled_grasp_centering import (
     recenter_horizontal_plug_rear_in_pitched_hand,
 )
-from hand_plug_geometry import compute_angled_hand_pose_preserving_tool
+from robot.hand_plug_geometry import compute_angled_hand_pose_preserving_tool
 
 
 def rotation_y(angle_deg: float) -> np.ndarray:
