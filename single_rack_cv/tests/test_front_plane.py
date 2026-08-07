@@ -5,7 +5,7 @@ import unittest
 import cv2
 import numpy as np
 
-from front_plane import (
+from vision.front_plane import (
     FrontPlaneConfig,
     build_bezel_ring_pixels,
     compute_local_disparity,
