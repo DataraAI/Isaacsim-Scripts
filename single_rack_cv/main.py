@@ -139,7 +139,7 @@ try:
         }
     )
 
-    from full_insertion_runtime import (
+    from runtime.full_insertion_runtime import (
         AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
     from debug import DebugOutputs
@@ -255,8 +255,6 @@ try:
                 debug.update_frozen_port_point(frozen_port_point)
             debug.handle(frame, observation, capture_index)
         except Exception as exc:
-            # Any rejected detector or front-plane estimate holds the current
-            # target; repeated misses trigger clean image-space reacquisition.
             runtime.note_perception_failure()
             warn(f"RGB stereo capture {capture_index} skipped: {exc}")
 
