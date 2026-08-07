@@ -18,6 +18,7 @@ FORBIDDEN_MODULE_MARKERS = (
     "highres_config",
     "prompt_benchmark_core",
     "from perception import",
+    "from front_plane import",
 )
 
 PRODUCTION_FILES = (
