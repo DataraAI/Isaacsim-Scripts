@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from host_array_bridge import to_numpy_cpu
+from robot.host_array_bridge import to_numpy_cpu
 
 
 class HostSafeDofPropertiesArticulation:

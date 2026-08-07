@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from hand_plug_geometry import validate_downward_hand_pitch_deg
+from robot.hand_plug_geometry import validate_downward_hand_pitch_deg
 
 
 @dataclass(frozen=True)
