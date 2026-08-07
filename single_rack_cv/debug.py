@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 from pxr import Gf, UsdGeom
 
 from config import Config
-from perception import PortCorners, StereoFrame, StereoPortObservation
+from vision.perception import PortCorners, StereoFrame, StereoPortObservation
 
 
 class DebugOutputs:
