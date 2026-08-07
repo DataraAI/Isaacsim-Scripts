@@ -6,12 +6,14 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_ROOT = ROOT / "runtime"
+ROBOT_ROOT = ROOT / "robot"
 MAIN_PATH = ROOT / "main.py"
-RUNTIME_PATH = ROOT / "settled_stereo_handoff_runtime.py"
-FULL_RUNTIME_PATH = ROOT / "full_insertion_runtime.py"
-HANDOFF_HOLD_RUNTIME_PATH = ROOT / "handoff_position_hold_runtime.py"
-FULL_BASE_RUNTIME_PATH = ROOT / "full_insertion_base_runtime.py"
-ANGLED_CONFIG_PATH = ROOT / "angled_hand_config.py"
+RUNTIME_PATH = RUNTIME_ROOT / "settled_stereo_handoff_runtime.py"
+FULL_RUNTIME_PATH = RUNTIME_ROOT / "full_insertion_runtime.py"
+HANDOFF_HOLD_RUNTIME_PATH = RUNTIME_ROOT / "handoff_position_hold_runtime.py"
+FULL_BASE_RUNTIME_PATH = RUNTIME_ROOT / "full_insertion_base_runtime.py"
+ANGLED_CONFIG_PATH = ROBOT_ROOT / "angled_hand_config.py"
 
 
 class StartupGeometrySettleTests(unittest.TestCase):
@@ -22,23 +24,23 @@ class StartupGeometrySettleTests(unittest.TestCase):
         base_source = FULL_BASE_RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "from full_insertion_runtime import (",
+            "from runtime.full_insertion_runtime import (",
             source,
         )
         self.assertIn(
-            "from handoff_position_hold_runtime import (",
+            "from runtime.handoff_position_hold_runtime import (",
             export_source,
         )
         self.assertNotIn(
-            "from full_insertion_base_runtime import (",
+            "from runtime.full_insertion_base_runtime import (",
             export_source,
         )
         self.assertIn(
-            "from full_insertion_base_runtime import (",
+            "from runtime.full_insertion_base_runtime import (",
             hold_source,
         )
         self.assertIn(
-            "from settled_stereo_handoff_runtime import (",
+            "from runtime.settled_stereo_handoff_runtime import (",
             base_source,
         )
         self.assertIn(
@@ -46,7 +48,7 @@ class StartupGeometrySettleTests(unittest.TestCase):
             "CableMountedSimulationRuntime",
             source,
         )
-        self.assertNotIn("from precontact_runtime import (", source)
+        self.assertNotIn("from runtime.precontact_runtime import (", source)
 
     def test_transient_geometry_miss_resets_consecutive_window(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
@@ -76,7 +78,7 @@ class StartupGeometrySettleTests(unittest.TestCase):
         base_source = FULL_BASE_RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "from settled_insertion import ConsecutivePoseInsertionController",
+            "from control.settled_insertion import ConsecutivePoseInsertionController",
             source,
         )
         self.assertIn(
