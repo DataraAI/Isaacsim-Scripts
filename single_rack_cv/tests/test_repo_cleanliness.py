@@ -17,11 +17,13 @@ FORBIDDEN_MODULE_MARKERS = (
     "live_front_plane",
     "highres_config",
     "prompt_benchmark_core",
+    "from perception import",
 )
 
 PRODUCTION_FILES = (
     ROOT / "main.py",
     ROOT / "config.py",
+    ROOT / "debug.py",
     ROOT / "vision" / "front_plane.py",
     ROOT / "vision" / "stereo_geometry.py",
     ROOT / "vision" / "live_control.py",
