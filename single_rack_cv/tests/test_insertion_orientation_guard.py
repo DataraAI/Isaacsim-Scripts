@@ -2,7 +2,7 @@
 
 import unittest
 
-from insertion import orientation_abort_is_due
+from control.insertion import orientation_abort_is_due
 
 
 class InsertionOrientationGuardTests(unittest.TestCase):
