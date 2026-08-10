@@ -8,6 +8,29 @@ from pathlib import Path
 
 from perception import PerceptionConfig
 
+import os
+
+
+def _load_dotenv(path: Path) -> None:
+    """Minimal .env loader: KEY=VALUE per line, '#' comments allowed.
+    Never overwrites a variable that's already set in the real
+    environment, so `export FOO=bar` still takes precedence over .env."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv(Path(__file__).resolve().parent / ".env")
+
+ISAACSIM_ASSETS_ROOT = os.environ.get(
+    "ISAACSIM_ASSETS_ROOT", "/home/advaith/Isaacsim-assets"
+)
+
 
 @dataclass(frozen=True)
 class CableHeadYOLOEConfig:
@@ -54,8 +77,7 @@ class SceneConfig:
     # detailedInsertion/cable pickup scripts, so ground-truth comparisons
     # (get_bbox on the connector) stay meaningful during development.
     cable_usd_path: str = (
-        "/home/advaith/Isaacsim-assets/Network cable 001/"
-        "model_Networkcable1_69323.usd"
+        f"{ISAACSIM_ASSETS_ROOT}/Network cable 001/model_Networkcable1_69323.usd"
     )
     cable_root_path: str = "/World/NetworkCable"
     tracked_connector_path: str = "/World/NetworkCable/E_crystal_head1_45"
@@ -95,9 +117,8 @@ class SceneConfig:
     # Set False to skip loading for lighter/faster detection A/B tests.
     datahall_enabled: bool = True #change if data hall shows up in the scene
     datahall_usd_path: str = (
-        "/home/advaith/Isaacsim-assets/DigitalTwin/"
-        "Assets/Datacenter/Facilities/Stages/Data_Hall/"
-        "DataHall_Full_01.usd"
+        f"{ISAACSIM_ASSETS_ROOT}/DigitalTwin/Assets/Datacenter/Facilities/"
+        "Stages/Data_Hall/DataHall_Full_01.usd"
     )
     datahall_prim_path: str = "/World/DataHall"
     # World XY = cable_spawn_xy + this offset → ~(-9.26, 0) with current spawn.

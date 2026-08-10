@@ -16,3 +16,4 @@ single_rack_cv/benchmarks/front_plane_ground_truth.json
 assets/
 .vscode/
 esha/ethernet_cable_pick_up/*.pt
+esha/ethernet_cable_pick_up/.env
