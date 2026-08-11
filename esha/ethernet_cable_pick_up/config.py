@@ -31,6 +31,15 @@ ISAACSIM_ASSETS_ROOT = os.environ.get(
     "ISAACSIM_ASSETS_ROOT", "/home/advaith/Isaacsim-assets"
 )
 
+# Some machines have the Data Hall asset nested under an extra layer
+# (e.g. .../datacenter/Assets/DigitalTwin/...) instead of directly
+# under ISAACSIM_ASSETS_ROOT. Defaults to ISAACSIM_ASSETS_ROOT when
+# the layout matches (the common case); override only on machines
+# where it doesn't.
+DATAHALL_ASSETS_ROOT = os.environ.get(
+    "DATAHALL_ASSETS_ROOT", ISAACSIM_ASSETS_ROOT
+)
+
 
 @dataclass(frozen=True)
 class CableHeadYOLOEConfig:
@@ -117,7 +126,7 @@ class SceneConfig:
     # Set False to skip loading for lighter/faster detection A/B tests.
     datahall_enabled: bool = True #change if data hall shows up in the scene
     datahall_usd_path: str = (
-        f"{ISAACSIM_ASSETS_ROOT}/DigitalTwin/Assets/Datacenter/Facilities/"
+        f"{DATAHALL_ASSETS_ROOT}/DigitalTwin/Assets/Datacenter/Facilities/"
         "Stages/Data_Hall/DataHall_Full_01.usd"
     )
     datahall_prim_path: str = "/World/DataHall"
