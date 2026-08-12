@@ -18,7 +18,7 @@ class AppConfig:
 class SceneConfig:
     rack_usd_path: str = (
         "/home/aayush/isaacsim_assets/datacenter/"
-        "single_server_rack_fixed.usda"
+        "single_server_rack_fixed_no_panels.usd"
     )
     rack_path: str = "/World/ServerRack"
     rack_asset_path: str = "/World/ServerRack/Asset"
