@@ -2972,6 +2972,7 @@ class SimulationRuntime:
             stage.RemovePrim(scene.cable_root_path)
 
         self._add_reference(scene.cable_usd_path, scene.cable_root_path)
+        self._set_prim_local_scale(scene.cable_root_path, scene.cable_scale)
         if scene.cable_support_enabled:
             self._place_tracked_plug_on_support()
         else:
@@ -3075,6 +3076,37 @@ class SimulationRuntime:
                 op.Set(value)
                 return
         xform.AddTranslateOp().Set(value)
+
+    def _set_prim_local_scale(
+        self,
+        prim_path: str,
+        scale_factor: float,
+    ) -> None:
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            raise RuntimeError(f"Missing prim: {prim_path}")
+
+        value = Gf.Vec3d(scale_factor, scale_factor, scale_factor)
+        xform = UsdGeom.Xformable(prim)
+        ops = xform.GetOrderedXformOps()
+
+        for op in ops:
+            if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+                op.Set(value)
+                return
+
+        # Keep scale as the innermost op (last in the order) so the
+        # world translate applied during placement stays outermost and
+        # isn't itself scaled. Ensure a translate op precedes it.
+        has_translate = any(
+            op.GetOpType() == UsdGeom.XformOp.TypeTranslate for op in ops
+        )
+        if not has_translate:
+            xform.AddTranslateOp(
+                UsdGeom.XformOp.PrecisionDouble
+            ).Set(Gf.Vec3d(0.0, 0.0, 0.0))
+        xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(value)
 
     def _place_tracked_plug_on_support(self) -> None:
         """

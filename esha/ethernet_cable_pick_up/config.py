@@ -91,6 +91,10 @@ class SceneConfig:
     cable_root_path: str = "/World/NetworkCable"
     tracked_connector_path: str = "/World/NetworkCable/E_crystal_head1_45"
 
+    # Uniform scale applied to the cable root prim after referencing.
+    # Applied before placement so bbox-based positioning accounts for it.
+    cable_scale: float = 2.0
+
     # Where the tracked connector should sit in XY.
     # +240 mm in X vs the original (0.5, 0).
     cable_spawn_xy: tuple[float, float] = (0.74, 0.0)
