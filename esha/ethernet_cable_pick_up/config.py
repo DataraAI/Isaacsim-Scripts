@@ -49,7 +49,7 @@ class CableHeadYOLOEConfig:
     head's apparent size varies far more across the approach distance
     than the port's does."""
 
-    model_name: str = "yoloe-11l-seg.pt"
+    model_name: str = "yoloe-26l-seg.pt"
     reference_image_path: str = "yoloe_prompts/yoloe_reference_head_atlas.png"
     reference_boxes_xyxy: tuple[tuple[float, float, float, float], ...] = (
         (20.0, 20.0, 81.0, 114.0),
