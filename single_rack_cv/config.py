@@ -3,8 +3,46 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _find_asset(env_var: str, candidates: tuple[str, ...]) -> str:
+    """Resolve an asset path: env var override first, otherwise check each
+    candidate relative path against the home directory and return the
+    first one that actually exists. Falls back to the first candidate
+    (even if missing) so a downstream failure points at a real, readable
+    path instead of an empty string."""
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    home = Path.home()
+    for relative in candidates:
+        candidate = home / relative
+        if candidate.exists():
+            return str(candidate)
+    return str(home / candidates[0])
+
+
+MODIFIED_RACK_USD = _find_asset(
+    "ISAACSIM_MODIFIED_RACK_USD",
+    (
+        "isaacsim_assets/datacenter/Assets/DigitalTwin/Assets/Datacenter/"
+        "Facilities/Stages/Data_Hall/"
+        "DataHall_Single_Rack_3x_Ethernet_Rows_Rebalanced.usd",
+        "isaacsim_assets/Data Centre/assets/DigitalTwin/Assets/Datacenter/"
+        "Facilities/Stages/Data_Hall/"
+        "DataHall_Single_Rack_3x_Ethernet_Rows_Rebalanced.usd",
+        "Isaacsim-assets/Data Centre/assets/DigitalTwin/Assets/Datacenter/"
+        "Facilities/Stages/Data_Hall/"
+        "DataHall_Single_Rack_3x_Ethernet_Rows_Rebalanced.usd",
+        "isaacsim_assets/DigitalTwin/Assets/Datacenter/Facilities/Stages/"
+        "Data_Hall/DataHall_Single_Rack_3x_Ethernet_Rows_Rebalanced.usd",
+        "Isaacsim-assets/DigitalTwin/Assets/Datacenter/Facilities/Stages/"
+        "Data_Hall/DataHall_Single_Rack_3x_Ethernet_Rows_Rebalanced.usd",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -16,10 +54,7 @@ class AppConfig:
 
 @dataclass(frozen=True)
 class SceneConfig:
-    rack_usd_path: str = (
-        "/home/aayush/isaacsim_assets/datacenter/"
-        "single_server_rack_fixed_no_panels.usd"
-    )
+    rack_usd_path: str = MODIFIED_RACK_USD
     rack_path: str = "/World/ServerRack"
     rack_asset_path: str = "/World/ServerRack/Asset"
     rack_scale: float = 1.0
