@@ -59,6 +59,15 @@ class SceneConfig:
     rack_asset_path: str = "/World/ServerRack/Asset"
     rack_scale: float = 1.0
     rack_yaw_deg: float = 0.0
+    # Fine-tuning shift applied after the rack's own world origin is
+    # canceled to (0, 0, 0). Zero because the alignment now directly
+    # cancels the asset's measured world position; adjust only if the
+    # rack needs nudging from that origin.
+    rack_position_correction_m: tuple[float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+    )
 
     franka_path: str = "/World/Franka"
     franka_asset_path: str = "/World/Franka/Robot"

@@ -1570,13 +1570,23 @@ class SimulationRuntime:
 
     def _center_rack(self) -> None:
         scene = self.cfg.scene
-        minimum, maximum = self._world_bounds(scene.rack_path)
-        center = (minimum + maximum) / 2.0
 
-        translation = np.array(
-            [-center[0], -center[1], -minimum[2]],
+        # Let the freshly added reference finish loading/resolving its
+        # transform before we read it; without this the pose comes back at
+        # exactly (0, 0, 0) because the reference has not populated yet.
+        self._update_app(45)
+
+        # Read the Asset prim's actual current world position (its local
+        # origin in world space) and cancel it so that origin lands at
+        # (0, 0, 0), matching where the rack sat on main with the old asset.
+        current_world_position, _ = self._get_world_pose(
+            scene.rack_asset_path
+        )
+        correction = np.array(
+            scene.rack_position_correction_m,
             dtype=np.float64,
         )
+        translation = -current_world_position + correction
 
         stage = omni.usd.get_context().get_stage()
         xform = UsdGeom.Xformable(
@@ -1588,8 +1598,11 @@ class SimulationRuntime:
                 op.Set(Gf.Vec3d(*translation.tolist()))
                 self._update_app(10)
                 log(
-                    "Rack centered: "
-                    f"translation={np.round(translation, 4).tolist()}"
+                    "Rack aligned: "
+                    f"current_world_position="
+                    f"{np.round(current_world_position, 4).tolist()} "
+                    f"correction={np.round(correction, 4).tolist()} "
+                    f"=> translation={np.round(translation, 4).tolist()}"
                 )
                 return
 
