@@ -60,12 +60,11 @@ class SceneConfig:
     rack_scale: float = 1.0
     rack_yaw_deg: float = 0.0
     # Fine-tuning shift applied after the rack's own world origin is
-    # canceled to (0, 0, 0). Zero because the alignment now directly
-    # cancels the asset's measured world position; adjust only if the
-    # rack needs nudging from that origin.
+    # canceled to (0, 0, 0). Moves the rack's front corner from the
+    # origin to this world position.
     rack_position_correction_m: tuple[float, float, float] = (
-        0.0,
-        0.0,
+        0.72489,
+        0.30528,
         0.0,
     )
 
