@@ -323,6 +323,10 @@ class SimulationRuntime:
         self.app = simulation_app
         self.cfg = cfg
 
+        # Structured run logger; injected by main.py after construction.
+        # Optional so alternate entry points can run without one.
+        self.run_logger = None
+
         self.frame_index = 0
         self.left_camera_path = ""
         self.right_camera_path = ""
@@ -622,6 +626,14 @@ class SimulationRuntime:
             f"  stereo range spread: {range_spread_m * 1000.0:.3f} mm\n"
             "  controller: virtual-center translation-only feedback"
         )
+
+        if self.run_logger is not None:
+            self.run_logger.log_event(
+                t=self.frame_index,
+                event="RGB_STEREO_TRACK_ACQUIRED",
+                center_spread_px=center_spread_px,
+                range_spread_mm=range_spread_m * 1000.0,
+            )
 
     def update_visual_servo_completion(self) -> None:
         """Verify that the actual ToolCenter reaches the final visual target."""

@@ -300,6 +300,19 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
                 f"  plug-tip error: {tip_error_m * 1000.0:.6f} mm\n"
                 f"  plug-axis error: {axis_error_deg:.6f} deg"
             )
+            if self.run_logger is not None:
+                self.run_logger.log_event(
+                    t=self.frame_index,
+                    event="ANGLED_HAND_GEOMETRY_VALIDATED",
+                    relative_pitch_deg=metrics.relative_pitch_deg,
+                    wrist_above_tip_mm=metrics.wrist_above_tip_m * 1000.0,
+                    palm_roll_error_deg=metrics.palm_roll_error_deg,
+                    plug_horizontal_error_deg=(
+                        metrics.plug_horizontal_error_deg
+                    ),
+                    plug_tip_error_mm=tip_error_m * 1000.0,
+                    plug_axis_error_deg=axis_error_deg,
+                )
             self._geometry_success_logged = True
         return tip_error_m, axis_error_deg
 

@@ -224,6 +224,17 @@ class AngledHandStereoHandoffRuntime(
             "  orientation: unchanged horizontal plug"
         )
 
+        if self.run_logger is not None:
+            self.run_logger.log_event(
+                t=self.frame_index,
+                event="RGB_STATIONARY_PORT_POSE_QUALIFIED",
+                accepted_samples=qualification.sample_count,
+                opening_spread_mm=qualification.opening_spread_m * 1000.0,
+                goal_spread_mm=qualification.goal_spread_m * 1000.0,
+                standoff_mm=qualification.standoff_m * 1000.0,
+                remaining_translation_mm=remaining_m * 1000.0,
+            )
+
         self._advance_handoff_if_settled()
 
     def note_perception_failure(self) -> None:
@@ -379,6 +390,14 @@ class AngledHandStereoHandoffRuntime(
                 f"{cfg.required_settled_frames}\n"
                 "  next action: begin guarded two-stage port entry"
             )
+            if self.run_logger is not None:
+                self.run_logger.log_event(
+                    t=self.frame_index,
+                    event="RGB_QUALIFIED_PORT_POSE_ALIGNMENT_COMPLETE",
+                    tracking_error_mm=position_error_m * 1000.0,
+                    settled_frames=state.settled_frame_count,
+                    required_settled_frames=cfg.required_settled_frames,
+                )
             return
 
         timeout_frames = max(

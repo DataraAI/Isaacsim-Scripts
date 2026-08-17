@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from config import CONFIG
+from run_logger import RunLogger
 from vision.front_lip_calibration import (
     VISIBLE_FRONT_LIP_HEIGHT_M,
     VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
@@ -121,6 +122,8 @@ run_output_tee.start()
 
 simulation_app = None
 runtime = None
+logger = None
+run_failed = False
 
 try:
     print(
@@ -139,6 +142,12 @@ try:
         }
     )
 
+    logger = RunLogger(
+        output_dir=Path("run_logs"),
+        pipeline="single_rack_cv",
+        task="port_insertion",
+    )
+
     from runtime.full_insertion_runtime import (
         AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
     )
@@ -151,6 +160,7 @@ try:
         simulation_app=simulation_app,
         cfg=CONFIG,
     )
+    runtime.run_logger = logger
     runtime.prepare_for_perception()
 
     if (
@@ -178,6 +188,7 @@ try:
         "full-frame stereo inference is active.",
         flush=True,
     )
+    logger.log_event(0, "yoloe_initialized")
     if CONFIG.front_plane.enabled:
         print(
             "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
@@ -249,6 +260,15 @@ try:
                     f"sides={front_plane.side_support_counts}",
                     flush=True,
                 )
+                logger.log_frame(
+                    capture_index,
+                    cavity_range_mm=front_plane.cavity_range_m * 1000.0,
+                    opening_range_mm=front_plane.opening_range_m * 1000.0,
+                    recess_depth_mm=front_plane.recess_depth_m * 1000.0,
+                    plane_residual_mm=front_plane.plane_residual_m * 1000.0,
+                    yoloe_conf_left=observation.left.detection.shape_score,
+                    yoloe_conf_right=observation.right.detection.shape_score,
+                )
             runtime.observe_visual_servo(observation)
             frozen_port_point = runtime.frozen_port_point_world_m
             if frozen_port_point is not None:
@@ -259,6 +279,7 @@ try:
             warn(f"RGB stereo capture {capture_index} skipped: {exc}")
 
 except Exception:
+    run_failed = True
     print(
         "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n"
         + traceback.format_exc(),
@@ -267,6 +288,11 @@ except Exception:
     raise
 
 finally:
+    if logger is not None:
+        try:
+            logger.finalize("failure" if run_failed else "success")
+        except Exception:
+            pass
     try:
         if runtime is not None:
             runtime.stop()

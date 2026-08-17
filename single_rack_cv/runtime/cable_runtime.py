@@ -444,6 +444,33 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
 
         log("\n".join(lines))
 
+        if self.run_logger is not None:
+            event_name = label.replace(" ", "_").replace("-", "_")
+            fields: dict[str, object] = {}
+            if event.settled_step_index is not None:
+                fields["settled_command"] = event.settled_step_index
+                fields["total_steps"] = self._insertion_total_steps
+            if event.command is not None:
+                fields["next_command"] = event.command.step_index
+                fields["next_stage"] = event.command.stage.value
+            if event.metrics is not None:
+                fields["lateral_drift_mm"] = (
+                    event.metrics.lateral_drift_m * 1000.0
+                )
+                fields["tool_center_tracking_error_mm"] = (
+                    event.metrics.target_error_m * 1000.0
+                )
+                fields["orientation_error_deg"] = (
+                    event.metrics.orientation_error_deg
+                )
+            if event.reason is not None:
+                fields["reason"] = event.reason
+            self.run_logger.log_event(
+                t=self.frame_index,
+                event=event_name,
+                **fields,
+            )
+
     def _hand_pose_from_articulation(self) -> tuple[np.ndarray, np.ndarray]:
         if self.ik is None:
             raise RuntimeError("IK runtime is not initialized")
