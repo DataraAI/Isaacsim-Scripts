@@ -131,7 +131,7 @@ class SceneConfig:
     datahall_enabled: bool = True #change if data hall shows up in the scene
     datahall_usd_path: str = (
         f"{DATAHALL_ASSETS_ROOT}/DigitalTwin/Assets/Datacenter/Facilities/"
-        "Stages/Data_Hall/DataHall_Full_01.usd"
+        "Stages/Data_Hall/DataHall_Single_Rack_3x_Ethernet_Rows_Rebalanced.usd"
     )
     datahall_prim_path: str = "/World/DataHall"
     # World XY = cable_spawn_xy + this offset → ~(-9.26, 0) with current spawn.
