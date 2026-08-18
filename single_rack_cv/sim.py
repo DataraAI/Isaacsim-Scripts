@@ -352,6 +352,38 @@ class SimulationRuntime:
         self.app.update()
         self.frame_index += 1
 
+    def current_phase(self) -> str:
+        """Coarse pipeline-stage label for structured frame logging.
+
+        Combines the visual-servo progression (base class) with the
+        two-stage insertion phase/stage (present on cable-mount subclasses)
+        into a single string such as "port_detect", "coarse_approach",
+        "fine_insertion", or "done". InsertionPhase/InsertionStage are str
+        enums, so plain string comparisons are used to avoid importing them.
+        """
+        insertion = getattr(self, "partial_insertion", None)
+        if insertion is not None and insertion.phase != "waiting_for_alignment":
+            phase = insertion.phase
+            if phase == "complete":
+                return "done"
+            if phase == "aborted":
+                return "aborted"
+            command = getattr(insertion, "last_command", None)
+            if command is not None:
+                return str(command.stage.value)
+            return "coarse_approach"
+
+        state = self.visual_servo
+        if not state.startup_ready:
+            return "startup"
+        if not state.acquired:
+            return "port_detect"
+        if not state.visual_aligned:
+            return "servoing"
+        if not state.complete:
+            return "aligning"
+        return "insertion_pending"
+
     def capture_due(self) -> bool:
         """
         Capture only when the camera is physically stationary enough to use.

@@ -471,6 +471,21 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
                 **fields,
             )
 
+            # Frame-stream coverage during coarse_approach/fine_insertion:
+            # the perception-loop log_frame() stops firing once the camera
+            # is disabled at qualification, so mirror the settlement metrics
+            # into frames.jsonl here.
+            if event.metrics is not None:
+                self.run_logger.log_frame(
+                    t=self.frame_index,
+                    phase=self.current_phase(),
+                    lateral_drift_mm=event.metrics.lateral_drift_m * 1000.0,
+                    tool_center_tracking_error_mm=(
+                        event.metrics.target_error_m * 1000.0
+                    ),
+                    orientation_error_deg=event.metrics.orientation_error_deg,
+                )
+
     def _hand_pose_from_articulation(self) -> tuple[np.ndarray, np.ndarray]:
         if self.ik is None:
             raise RuntimeError("IK runtime is not initialized")

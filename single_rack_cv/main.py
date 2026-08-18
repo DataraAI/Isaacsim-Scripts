@@ -268,6 +268,7 @@ try:
                     plane_residual_mm=front_plane.plane_residual_m * 1000.0,
                     yoloe_conf_left=observation.left.detection.shape_score,
                     yoloe_conf_right=observation.right.detection.shape_score,
+                    phase=runtime.current_phase(),
                 )
             runtime.observe_visual_servo(observation)
             frozen_port_point = runtime.frozen_port_point_world_m
