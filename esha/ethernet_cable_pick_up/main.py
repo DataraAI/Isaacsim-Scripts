@@ -15,11 +15,13 @@ logic lives in sibling modules:
 from __future__ import annotations
 
 import traceback
+from pathlib import Path
 
 from config import CONFIG
 from head_detector import YOLOEHeadDetector
 from logging_tee import RunOutputTee
 from perception import process_stereo_cable
+from run_logger import RunLogger
 
 
 run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
@@ -28,6 +30,8 @@ run_output_tee.start()
 
 simulation_app = None
 runtime = None
+logger = None
+run_failed = False
 
 try:
     print(
@@ -46,12 +50,19 @@ try:
         }
     )
 
+    logger = RunLogger(
+        output_dir=Path("run_logs"),
+        pipeline="esha",
+        task="grasp_and_carry",
+    )
+
     from debug import DebugOutputs
     from sim import SimulationRuntime, warn
 
     runtime = SimulationRuntime(
         simulation_app=simulation_app,
         cfg=CONFIG,
+        run_logger=logger,
     )
     debug = DebugOutputs(CONFIG)
 
@@ -117,6 +128,7 @@ try:
             )
 
 except Exception:
+    run_failed = True
     print(
         "\n[CABLE GRASP RGB STEREO SERVO] FATAL ERROR\n"
         + traceback.format_exc(),
@@ -125,6 +137,11 @@ except Exception:
     raise
 
 finally:
+    if logger is not None:
+        try:
+            logger.finalize("failure" if run_failed else "success")
+        except Exception:
+            pass
     try:
         if runtime is not None:
             runtime.stop()

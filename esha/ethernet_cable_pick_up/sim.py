@@ -419,9 +419,12 @@ class _LulaCpuArticulation:
 class SimulationRuntime:
     """Small public interface around the Isaac Sim-specific implementation."""
 
-    def __init__(self, simulation_app, cfg: Config):
+    def __init__(self, simulation_app, cfg: Config, run_logger=None):
         self.app = simulation_app
         self.cfg = cfg
+        # Structured run logger (run_logger.RunLogger); optional so the
+        # runtime can still be constructed without one.
+        self.run_logger = run_logger
 
         self.frame_index = 0
         self._post_grasp_fixed_joint_path = "/World/CableGraspFixedJoint"
@@ -995,6 +998,15 @@ class SimulationRuntime:
                 f"  finger_positions_m="
                 f"{None if finger_pos is None else np.round(finger_pos, 4).tolist()}"
             )
+            if self.run_logger is not None:
+                self.run_logger.log_event(
+                    t=self.frame_index,
+                    event="GRASP_CLOSE_SETTLED",
+                    close_frames=state.close_frames,
+                    finger_close_half_gap_mm=(
+                        state.finger_close_half_gap_m * 1000.0
+                    ),
+                )
             self._weld_grasped_cable_to_hand()
             self._begin_grasp_lift()
             return
@@ -1025,6 +1037,13 @@ class SimulationRuntime:
                 f"  fingers held closed at "
                 f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
             )
+            if self.run_logger is not None:
+                self.run_logger.log_event(
+                    t=self.frame_index,
+                    event="GRASP_LIFT_DONE",
+                    lift_z_m=cfg.lift_z_m,
+                    ik_target=np.round(target_position, 4).tolist(),
+                )
             if cfg.carry_orientation_wxyz is not None:
                 self._begin_grasp_pullback()
             else:
@@ -1095,6 +1114,13 @@ class SimulationRuntime:
                 f"  fingers held closed at "
                 f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
             )
+            if self.run_logger is not None:
+                self.run_logger.log_event(
+                    t=self.frame_index,
+                    event="GRASP_CARRY_DONE",
+                    carry_offset_m=np.round(cfg.carry_offset_m, 4).tolist(),
+                    ik_target=np.round(target_position, 4).tolist(),
+                )
 
     def _tool_target_orientation_error_rad(self) -> float:
         """Angle between actual ToolCenter and IK_Target orientations."""
@@ -1576,6 +1602,16 @@ class SimulationRuntime:
             f"  body0={self.ik.hand_path if self.ik is not None else 'N/A'}\n"
             f"  body1={self.cfg.scene.tracked_connector_path}"
         )
+        if self.run_logger is not None:
+            self.run_logger.log_event(
+                t=self.frame_index,
+                event="GRASP_WELD_AUTHORED",
+                fixed_joint=self._post_grasp_fixed_joint_path,
+                body0=(
+                    self.ik.hand_path if self.ik is not None else "N/A"
+                ),
+                body1=self.cfg.scene.tracked_connector_path,
+            )
 
     def _begin_grasp_pullback(self) -> None:
         """Pull the tool closer to the base before rotating.
@@ -1795,6 +1831,18 @@ class SimulationRuntime:
             return
 
         self._update_actual_tool_frame(runtime)
+
+        if self.run_logger is not None:
+            self.run_logger.log_frame(
+                t=self.frame_index,
+                tool_center_error_mm=(
+                    self._tool_target_position_error_m() * 1000.0
+                ),
+                tool_center_orientation_error_deg=math.degrees(
+                    self._tool_target_orientation_error_rad()
+                ),
+                phase=self.pre_grasp.phase,
+            )
 
         if not cfg.tracking_enabled:
             return

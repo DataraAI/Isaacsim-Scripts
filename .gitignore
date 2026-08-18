@@ -18,3 +18,4 @@ assets/
 esha/ethernet_cable_pick_up/*.pt
 esha/ethernet_cable_pick_up/.env
 single_rack_cv/run_logs/
+esha/ethernet_cable_pick_up/run_logs/
