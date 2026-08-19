@@ -175,6 +175,62 @@ class CableMount:
             existing_attachment_path=self.topology.existing_attachment_path,
         )
 
+    def author_from_existing_grasp(
+        self,
+        stage: Usd.Stage,
+        hand_path: str,
+    ) -> None:
+        """Compute cable topology and plug_frame from a cable that's already
+        loaded and physically grasped (real FixedJoint from esha's pickup
+        pipeline), instead of teleporting a synthetic pregrasp mount.
+
+        Mirrors author_before_play()'s geometry-analysis steps exactly, but
+        never loads a cable reference and never repositions anything — the
+        cable's current pose is the ground truth to analyze, not something
+        to override.
+        """
+        if not self.mount_cfg.enabled:
+            return
+        if not stage:
+            raise RuntimeError("A valid USD stage is required for cable mounting")
+
+        self.stage = stage
+        self.hand_path = hand_path
+        hand = stage.GetPrimAtPath(hand_path)
+        if not hand.IsValid() or not hand.HasAPI(UsdPhysics.RigidBodyAPI):
+            raise RuntimeError(f"Franka hand is not a rigid body: {hand_path}")
+
+        cable_root = stage.GetPrimAtPath(self.mount_cfg.root_path)
+        if not cable_root.IsValid():
+            raise RuntimeError(
+                f"Expected cable already loaded at {self.mount_cfg.root_path}, "
+                "but no valid prim was found. author_from_existing_grasp() "
+                "requires the pickup pipeline to have already loaded and "
+                "grasped the cable."
+            )
+
+        self.topology = self._discover_topology(stage)
+        local_min, local_max = _local_bounds(
+            stage,
+            self.mount_cfg.tracked_plug_path,
+        )
+        world_from_plug = _world_transform(
+            stage,
+            self.mount_cfg.tracked_plug_path,
+        )
+        cable_center_world = _world_bounds_center(
+            stage,
+            self.mount_cfg.root_path,
+        )
+        self.plug_frame = detect_plug_frame(
+            local_min,
+            local_max,
+            world_from_plug,
+            cable_center_world,
+            axis_ratio_min=self.mount_cfg.axis_ratio_min,
+            cable_projection_min_m=self.mount_cfg.cable_projection_min_m,
+        )
+
     def configure_fingers(self, articulation) -> None:
         """Set a symmetric cosmetic gap around the rigidly mounted plug."""
 
