@@ -211,11 +211,17 @@ class CableMountedSimulationRuntime(SimulationRuntime):
 
         if self.cfg.cable_mount.enabled:
             self.cable_mount = ScaleAwareCableMount(self.cfg)
-            self.cable_mount.author_before_play(
-                stage=stage,
-                hand_path=hand_path,
-                world_from_toolcenter=world_from_toolcenter,
-            )
+            if self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+                self.cable_mount.author_from_existing_grasp(
+                    stage=stage,
+                    hand_path=hand_path,
+                )
+            else:
+                self.cable_mount.author_before_play(
+                    stage=stage,
+                    hand_path=hand_path,
+                    world_from_toolcenter=world_from_toolcenter,
+                )
 
         app_utils.play()
         app_utils.update_app(steps=30)
