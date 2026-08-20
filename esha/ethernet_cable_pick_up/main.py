@@ -24,7 +24,7 @@ from perception import process_stereo_cable
 from run_logger import RunLogger
 
 
-def run_pickup_phase(simulation_app) -> RunLogger:
+def run_pickup_phase(simulation_app, close_app_when_done: bool = True) -> RunLogger:
     run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
     run_output_tee = RunOutputTee(run_output_path)
     run_output_tee.start()
@@ -128,21 +128,31 @@ def run_pickup_phase(simulation_app) -> RunLogger:
     finally:
         if logger is not None:
             try:
+                print("[DEBUG] about to call logger.finalize()", flush=True)
                 logger.finalize("failure" if run_failed else "success")
+                print("[DEBUG] logger.finalize() returned", flush=True)
             except Exception:
                 pass
         try:
             if runtime is not None:
+                print("[DEBUG] about to call runtime.stop()", flush=True)
                 runtime.stop()
+                print("[DEBUG] runtime.stop() returned", flush=True)
 
-            if simulation_app is not None:
+            if simulation_app is not None and close_app_when_done:
+                print("[DEBUG] about to call simulation_app.close()", flush=True)
                 simulation_app.close()
+                print("[DEBUG] simulation_app.close() returned", flush=True)
+            else:
+                print("[DEBUG] simulation_app.close() skipped", flush=True)
         finally:
             print(
                 f"[LOG] Run output saved to: {run_output_path}",
                 flush=True,
             )
+            print("[DEBUG] about to call run_output_tee.stop()", flush=True)
             run_output_tee.stop()
+            print("[DEBUG] run_output_tee.stop() returned", flush=True)
 
     return logger
 

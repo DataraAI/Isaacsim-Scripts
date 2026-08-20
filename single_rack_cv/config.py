@@ -67,6 +67,14 @@ class SceneConfig:
         0.30528,
         0.0,
     )
+    # The Franka base pose single_rack_cv's insertion geometry (including
+    # rack_position_correction_m) was originally tuned against, when run
+    # standalone. Used by _center_rack() to re-derive the correct rack
+    # placement if the robot's actual base pose differs (e.g. when run as
+    # part of the merged pickup+insertion demo, where esha places the
+    # robot at a different position/yaw).
+    reference_franka_position: tuple[float, float, float] = (1.35, 0.0, 1.0)
+    reference_franka_yaw_deg: float = 180.0
 
     franka_path: str = "/World/Franka"
     franka_asset_path: str = "/World/Franka/Robot"

@@ -73,6 +73,13 @@ def _normalize_quaternion_wxyz(
     return quaternion / norm
 
 
+def _rotate_z(vec: np.ndarray, angle_rad: float) -> np.ndarray:
+    """Rotate a 3D vector about the world Z axis."""
+    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+    x, y, z = vec
+    return np.array([cos_a * x - sin_a * y, sin_a * x + cos_a * y, z])
+
+
 def quaternion_wxyz_to_matrix(
     quaternion_wxyz: np.ndarray,
 ) -> np.ndarray:
@@ -1626,16 +1633,47 @@ class SimulationRuntime:
         current_world_position, _ = self._get_world_pose(
             scene.rack_asset_path
         )
-        correction = np.array(
-            scene.rack_position_correction_m,
-            dtype=np.float64,
+
+        # Re-derive the rack correction relative to the robot's actual base
+        # pose. rack_position_correction_m was tuned against a fixed
+        # reference Franka pose; if the robot is placed elsewhere (e.g. the
+        # merged pickup+insertion demo), rotate and translate the correction
+        # so the rack keeps the same pose relative to the robot.
+        robot_position = np.array(scene.franka_position, dtype=np.float64)
+        robot_yaw_rad = math.radians(scene.franka_yaw_deg)
+
+        reference_position = np.array(
+            scene.reference_franka_position, dtype=np.float64
         )
+        reference_yaw_rad = math.radians(scene.reference_franka_yaw_deg)
+
+        correction_world = np.array(
+            scene.rack_position_correction_m, dtype=np.float64
+        )
+        delta_yaw_rad = robot_yaw_rad - reference_yaw_rad
+        relative_offset = correction_world - reference_position
+        rotated_offset = _rotate_z(relative_offset, delta_yaw_rad)
+        correction = robot_position + rotated_offset
+
         translation = -current_world_position + correction
+
+        new_rack_yaw_deg = scene.rack_yaw_deg + math.degrees(delta_yaw_rad)
 
         stage = omni.usd.get_context().get_stage()
         xform = UsdGeom.Xformable(
             stage.GetPrimAtPath(scene.rack_path)
         )
+
+        new_rack_yaw_rad = math.radians(new_rack_yaw_deg)
+        for op in xform.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeOrient:
+                op.Set(
+                    Gf.Quatd(
+                        math.cos(new_rack_yaw_rad / 2.0),
+                        Gf.Vec3d(0.0, 0.0, math.sin(new_rack_yaw_rad / 2.0)),
+                    )
+                )
+                break
 
         for op in xform.GetOrderedXformOps():
             if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
@@ -1646,7 +1684,11 @@ class SimulationRuntime:
                     f"current_world_position="
                     f"{np.round(current_world_position, 4).tolist()} "
                     f"correction={np.round(correction, 4).tolist()} "
-                    f"=> translation={np.round(translation, 4).tolist()}"
+                    f"=> translation={np.round(translation, 4).tolist()} "
+                    f"robot_position={np.round(robot_position, 4).tolist()} "
+                    f"robot_yaw_deg={math.degrees(robot_yaw_rad):.3f} "
+                    f"delta_yaw_deg={math.degrees(delta_yaw_rad):.3f} "
+                    f"new_rack_yaw_deg={new_rack_yaw_deg:.3f}"
                 )
                 return
 

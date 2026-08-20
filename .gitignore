@@ -20,3 +20,7 @@ esha/ethernet_cable_pick_up/.env
 single_rack_cv/run_logs/
 esha/ethernet_cable_pick_up/run_logs/
 esha/ethernet_cable_pick_up/camera_output/
+combined_demo/run_logs/
+combined_demo/*.pt
+run_logs/
+*.pt

@@ -50,7 +50,9 @@ class CableHeadYOLOEConfig:
     than the port's does."""
 
     model_name: str = "yoloe-26l-seg.pt"
-    reference_image_path: str = "yoloe_prompts/yoloe_reference_head_atlas.png"
+    reference_image_path: str = str(
+        Path(__file__).resolve().parent / "yoloe_prompts" / "yoloe_reference_head_atlas.png"
+    )
     reference_boxes_xyxy: tuple[tuple[float, float, float, float], ...] = (
         (20.0, 20.0, 81.0, 114.0),
         (124.0, 20.0, 188.0, 121.0),
