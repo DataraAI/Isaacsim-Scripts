@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 ESHA_PATH = str(REPO_ROOT / "esha" / "ethernet_cable_pick_up")
 SINGLE_RACK_PATH = str(REPO_ROOT / "single_rack_cv")
 
