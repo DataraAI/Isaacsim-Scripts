@@ -243,7 +243,9 @@ class CableMountConfig:
     validation_frames: int = 30
     max_tip_error_m: float = 0.0005
     max_axis_error_deg: float = 1.0
-    already_grasped_by_pickup_pipeline: bool = False
+    already_grasped_by_pickup_pipeline: bool = (
+        os.environ.get("ALREADY_GRASPED_BY_PICKUP_PIPELINE", "0") == "1"
+    )
 
 
 @dataclass(frozen=True)
