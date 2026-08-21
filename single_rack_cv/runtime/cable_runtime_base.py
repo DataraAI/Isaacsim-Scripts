@@ -98,87 +98,161 @@ class CableMountedSimulationRuntime(SimulationRuntime):
             )
 
         log("Creating cable-mounted stage")
-        omni.usd.get_context().new_stage()
+        print("[DEBUG] about to call new_stage() (guarded)", flush=True)
+        if not self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            omni.usd.get_context().new_stage()
+        print("[DEBUG] new_stage() (guarded) returned", flush=True)
+        print("[DEBUG] about to call _update_app(5)", flush=True)
         self._update_app(5)
+        print("[DEBUG] _update_app(5) returned", flush=True)
 
+        print("[DEBUG] about to call get_stage()", flush=True)
         stage = omni.usd.get_context().get_stage()
+        print("[DEBUG] get_stage() returned", flush=True)
         if stage is None:
             raise RuntimeError("Isaac Sim did not create a valid stage.")
 
+        print("[DEBUG] about to call SetStageMetersPerUnit()", flush=True)
         UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+        print("[DEBUG] SetStageMetersPerUnit() returned", flush=True)
+        print("[DEBUG] about to call SetStageUpAxis()", flush=True)
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+        print("[DEBUG] SetStageUpAxis() returned", flush=True)
 
-        GroundPlane("/World/GroundPlane")
+        print("[DEBUG] about to call GroundPlane() (guarded)", flush=True)
+        if not self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            GroundPlane("/World/GroundPlane")
+        print("[DEBUG] GroundPlane() (guarded) returned", flush=True)
+        print("[DEBUG] about to call DomeLight()", flush=True)
         light = DomeLight("/World/DomeLight")
+        print("[DEBUG] DomeLight() returned", flush=True)
+        print("[DEBUG] about to call light.set_intensities()", flush=True)
         light.set_intensities(scene.light_intensity)
+        print("[DEBUG] light.set_intensities() returned", flush=True)
 
+        print("[DEBUG] about to call _define_xform(rack)", flush=True)
         self._define_xform(
             scene.rack_path,
             position=(0.0, 0.0, 0.0),
             yaw_deg=scene.rack_yaw_deg,
             scale=(scene.rack_scale,) * 3,
         )
+        print("[DEBUG] _define_xform(rack) returned", flush=True)
+        print("[DEBUG] about to call _add_reference(rack)", flush=True)
         self._add_reference(scene.rack_usd_path, scene.rack_asset_path)
+        print("[DEBUG] _add_reference(rack) returned", flush=True)
+        print("[DEBUG] about to call _center_rack()", flush=True)
         self._center_rack()
+        print("[DEBUG] _center_rack() returned", flush=True)
 
+        print("[DEBUG] about to call get_assets_root_path()", flush=True)
         assets_root = get_assets_root_path()
+        print("[DEBUG] get_assets_root_path() returned", flush=True)
         if assets_root is None:
             raise RuntimeError("Could not resolve Isaac Sim assets root.")
 
-        franka_usd = (
-            assets_root
-            + "/Isaac/Robots/FrankaRobotics/"
-            "FrankaPanda/franka.usd"
-        )
-        self._define_xform(
-            scene.franka_path,
-            position=scene.franka_position,
-            yaw_deg=scene.franka_yaw_deg,
-            scale=(1.0, 1.0, 1.0),
-        )
-        self._add_reference(franka_usd, scene.franka_asset_path)
-        self._configure_franka_gravity()
-        self._configure_franka_arm_drives()
+        print("[DEBUG] about to enter Franka spawn block (guarded)", flush=True)
+        if not self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            franka_usd = (
+                assets_root
+                + "/Isaac/Robots/FrankaRobotics/"
+                "FrankaPanda/franka.usd"
+            )
+            print("[DEBUG] about to call _define_xform(franka)", flush=True)
+            self._define_xform(
+                scene.franka_path,
+                position=scene.franka_position,
+                yaw_deg=scene.franka_yaw_deg,
+                scale=(1.0, 1.0, 1.0),
+            )
+            print("[DEBUG] _define_xform(franka) returned", flush=True)
+            print("[DEBUG] about to call _add_reference(franka)", flush=True)
+            self._add_reference(franka_usd, scene.franka_asset_path)
+            print("[DEBUG] _add_reference(franka) returned", flush=True)
+            print("[DEBUG] about to call _configure_franka_gravity()", flush=True)
+            self._configure_franka_gravity()
+            print("[DEBUG] _configure_franka_gravity() returned", flush=True)
+            print(
+                "[DEBUG] about to call _configure_franka_arm_drives()",
+                flush=True,
+            )
+            self._configure_franka_arm_drives()
+            print(
+                "[DEBUG] _configure_franka_arm_drives() returned",
+                flush=True,
+            )
+        print("[DEBUG] exited Franka spawn block (guarded)", flush=True)
 
+        left_camera_name = (
+            self.cfg.camera.left_camera_name + "_insertion"
+            if self.cfg.cable_mount.already_grasped_by_pickup_pipeline
+            else self.cfg.camera.left_camera_name
+        )
+        right_camera_name = (
+            self.cfg.camera.right_camera_name + "_insertion"
+            if self.cfg.cable_mount.already_grasped_by_pickup_pipeline
+            else self.cfg.camera.right_camera_name
+        )
+
+        print("[DEBUG] about to call _create_hand_camera(left)", flush=True)
         (
             self.left_camera_path,
             left_rtx_camera,
         ) = self._create_hand_camera(
-            self.cfg.camera.left_camera_name,
+            left_camera_name,
             self.cfg.camera.left_local_position,
             "left",
         )
+        print("[DEBUG] _create_hand_camera(left) returned", flush=True)
+        print("[DEBUG] about to call _create_hand_camera(right)", flush=True)
         (
             self.right_camera_path,
             right_rtx_camera,
         ) = self._create_hand_camera(
-            self.cfg.camera.right_camera_name,
+            right_camera_name,
             self.cfg.camera.right_local_position,
             "right",
         )
+        print("[DEBUG] _create_hand_camera(right) returned", flush=True)
+        print("[DEBUG] about to call CameraSensor(left)", flush=True)
         self.left_camera_sensor = CameraSensor(
             left_rtx_camera,
             resolution=self.cfg.camera.resolution,
             annotators=["rgb"],
         )
+        print("[DEBUG] CameraSensor(left) returned", flush=True)
+        print("[DEBUG] about to call CameraSensor(right)", flush=True)
         self.right_camera_sensor = CameraSensor(
             right_rtx_camera,
             resolution=self.cfg.camera.resolution,
             annotators=["rgb"],
         )
+        print("[DEBUG] CameraSensor(right) returned", flush=True)
+        print("[DEBUG] about to call output_dir.mkdir()", flush=True)
         self.cfg.camera.output_dir.mkdir(parents=True, exist_ok=True)
+        print("[DEBUG] output_dir.mkdir() returned", flush=True)
 
+        print("[DEBUG] about to call setup_simulation()", flush=True)
         SimulationManager.setup_simulation(
             dt=scene.physics_dt,
             device=scene.device,
         )
+        print("[DEBUG] setup_simulation() returned", flush=True)
+        print("[DEBUG] about to call get_physics_scenes()", flush=True)
         physics_scenes = SimulationManager.get_physics_scenes()
+        print("[DEBUG] get_physics_scenes() returned", flush=True)
         if not physics_scenes:
             raise RuntimeError("No physics scene was created.")
         self.physics_scene = physics_scenes[0]
+        print("[DEBUG] about to call set_enabled_gpu_dynamics()", flush=True)
         self.physics_scene.set_enabled_gpu_dynamics(True)
+        print("[DEBUG] set_enabled_gpu_dynamics() returned", flush=True)
+        print("[DEBUG] about to call set_broadphase_type()", flush=True)
         self.physics_scene.set_broadphase_type("GPU")
+        print("[DEBUG] set_broadphase_type() returned", flush=True)
+        print("[DEBUG] about to call set_solver_type()", flush=True)
         self.physics_scene.set_solver_type("TGS")
+        print("[DEBUG] set_solver_type() returned", flush=True)
         if not self.physics_scene.get_enabled_gpu_dynamics():
             raise RuntimeError("Cable mount requires GPU dynamics")
         if self.physics_scene.get_broadphase_type() != "GPU":
@@ -186,11 +260,16 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         if self.physics_scene.get_solver_type() != "TGS":
             raise RuntimeError("Cable mount requires TGS")
 
+        print("[DEBUG] about to call _find_unique_descendant()", flush=True)
         hand_path = self._find_unique_descendant(
             self.cfg.scene.franka_asset_path,
             self.cfg.cable_mount.hand_link_name,
         )
+        print("[DEBUG] _find_unique_descendant() returned", flush=True)
+        print("[DEBUG] about to call _get_world_pose(hand_path)", flush=True)
         hand_position, hand_orientation = self._get_world_pose(hand_path)
+        print("[DEBUG] _get_world_pose(hand_path) returned", flush=True)
+        print("[DEBUG] about to call hand_pose_to_tool_pose()", flush=True)
         tool_position, tool_orientation = hand_pose_to_tool_pose(
             hand_position_m=hand_position,
             hand_orientation_wxyz=hand_orientation,
@@ -203,34 +282,62 @@ class CableMountedSimulationRuntime(SimulationRuntime):
                 dtype=np.float64,
             ),
         )
+        print("[DEBUG] hand_pose_to_tool_pose() returned", flush=True)
         world_from_toolcenter = np.eye(4, dtype=np.float64)
+        print("[DEBUG] about to call quaternion_wxyz_to_matrix()", flush=True)
         world_from_toolcenter[:3, :3] = quaternion_wxyz_to_matrix(
             tool_orientation
         )
+        print("[DEBUG] quaternion_wxyz_to_matrix() returned", flush=True)
         world_from_toolcenter[:3, 3] = tool_position
 
+        print("[DEBUG] about to enter cable_mount block", flush=True)
         if self.cfg.cable_mount.enabled:
+            print("[DEBUG] about to call ScaleAwareCableMount()", flush=True)
             self.cable_mount = ScaleAwareCableMount(self.cfg)
+            print("[DEBUG] ScaleAwareCableMount() returned", flush=True)
             if self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+                print(
+                    "[DEBUG] about to call author_from_existing_grasp()",
+                    flush=True,
+                )
                 self.cable_mount.author_from_existing_grasp(
                     stage=stage,
                     hand_path=hand_path,
                 )
+                print(
+                    "[DEBUG] author_from_existing_grasp() returned",
+                    flush=True,
+                )
             else:
+                print("[DEBUG] about to call author_before_play()", flush=True)
                 self.cable_mount.author_before_play(
                     stage=stage,
                     hand_path=hand_path,
                     world_from_toolcenter=world_from_toolcenter,
                 )
+                print("[DEBUG] author_before_play() returned", flush=True)
+        print("[DEBUG] exited cable_mount block", flush=True)
 
+        print("[DEBUG] about to call app_utils.play()", flush=True)
         app_utils.play()
+        print("[DEBUG] app_utils.play() returned", flush=True)
+        print("[DEBUG] about to call app_utils.update_app(steps=30)", flush=True)
         app_utils.update_app(steps=30)
+        print("[DEBUG] app_utils.update_app(steps=30) returned", flush=True)
 
+        print("[DEBUG] about to call _create_ik()", flush=True)
         self.ik = self._create_ik(assets_root)
+        print("[DEBUG] _create_ik() returned", flush=True)
         if self.cable_mount is not None:
+            print("[DEBUG] about to call configure_fingers()", flush=True)
             self.cable_mount.configure_fingers(self.ik.articulation)
+            print("[DEBUG] configure_fingers() returned", flush=True)
+        print("[DEBUG] about to call _set_external_view()", flush=True)
         self._set_external_view()
+        print("[DEBUG] _set_external_view() returned", flush=True)
 
+        print("[DEBUG] about to call log(READY)", flush=True)
         log(
             "READY\n"
             f"  rack:       {scene.rack_usd_path}\n"
@@ -251,6 +358,8 @@ class CableMountedSimulationRuntime(SimulationRuntime):
             f"  desired port in virtual center eye: "
             f"{np.round(self.desired_port_virtual_camera_usd, 5).tolist()}"
         )
+        print("[DEBUG] log(READY) returned", flush=True)
+        print("[DEBUG] _build_scene() complete", flush=True)
 
     def _log_startup_diagnostics(
         self,

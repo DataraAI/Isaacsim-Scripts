@@ -975,7 +975,8 @@ class SimulationRuntime:
             )
 
         log("Creating stage")
-        omni.usd.get_context().new_stage()
+        if not self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            omni.usd.get_context().new_stage()
         self._update_app(5)
 
         stage = omni.usd.get_context().get_stage()

@@ -52,7 +52,7 @@ def run_pickup_phase(simulation_app):
         # config.py must come first: the other modules do "from config import
         # CONFIG" internally and will find this forced copy already present.
         print("[DEBUG] about to force-load config", flush=True)
-        _force_load_module("config", esha_root / "config.py")
+        config_module = _force_load_module("config", esha_root / "config.py")
         print("[DEBUG] force-load config returned", flush=True)
         print("[DEBUG] about to force-load sim", flush=True)
         _force_load_module("sim", esha_root / "sim.py")
@@ -80,6 +80,24 @@ def run_pickup_phase(simulation_app):
             simulation_app, close_app_when_done=False
         )
         print("[DEBUG] esha run_pickup_phase() returned", flush=True)
+
+        import omni.usd
+
+        datahall_prim_path = config_module.CONFIG.scene.datahall_prim_path
+        print(
+            f"[DEBUG] about to remove {datahall_prim_path} from stage",
+            flush=True,
+        )
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(datahall_prim_path).IsValid():
+            stage.RemovePrim(datahall_prim_path)
+            print(f"[DEBUG] removed {datahall_prim_path}", flush=True)
+        else:
+            print(
+                f"[DEBUG] {datahall_prim_path} not present, nothing to remove",
+                flush=True,
+            )
+
         return result
     finally:
         print("[DEBUG] about to call sys.path.remove(ESHA_PATH)", flush=True)

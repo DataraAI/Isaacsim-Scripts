@@ -191,6 +191,40 @@ def run_insertion_phase(simulation_app) -> RunLogger:
             )
 
         capture_index = 0
+
+        # TEMP: world-space bounding-box dimensions (X, Y, Z) sanity check.
+        try:
+            def _bbox_dims(path: str):
+                minimum, maximum = runtime._world_bounds(path)
+                return maximum - minimum
+
+            franka_dims = _bbox_dims(CONFIG.scene.franka_path)
+            rack_dims = _bbox_dims(CONFIG.scene.rack_path)
+            print("SINGLE RACK CV", flush=True)
+            print(
+                f"Franka:  X={franka_dims[0]:.4f} "
+                f"Y={franka_dims[1]:.4f} Z={franka_dims[2]:.4f}",
+                flush=True,
+            )
+            print(
+                f"Rack:    X={rack_dims[0]:.4f} "
+                f"Y={rack_dims[1]:.4f} Z={rack_dims[2]:.4f}",
+                flush=True,
+            )
+
+            import omni.usd
+            from pxr import UsdGeom
+
+            stage = omni.usd.get_context().get_stage()
+            franka = stage.GetPrimAtPath("/World/Franka")
+            if franka.IsValid():
+                xform = UsdGeom.Xformable(franka)
+                print("FrankA local transform ops:", flush=True)
+                for op in xform.GetOrderedXformOps():
+                    print(op.GetOpName(), op.Get(), flush=True)
+        except Exception as exc:
+            print(f"[TEMP bbox] failed: {exc}", flush=True)
+
         while runtime.is_running():
             runtime.step()
             try:
