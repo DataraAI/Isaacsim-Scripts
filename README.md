@@ -22,6 +22,7 @@ Press **Play** in the timeline. The script runs grasp → transit → pre-insert
 |------|------|
 | `detailedInsertion/insert_lula.py` | Main entry point: scene setup, task config, sim loop |
 | `detailedInsertion/franka_lula_controller.py` | Cartesian waypoint queue, closed-loop IK, gripper logic |
+| `tanish/behaviour_tree/` | Generated task-intelligence JSON runtime and Isaac controller adapters |
 | `archive/` | Older experiments (`current/`, `baseline/`, `attempts/`, etc.) |
 
 ## Configuration

@@ -1,0 +1,82 @@
+{
+  "tree": {
+    "type": "sequence",
+    "name": "Physical block pick-and-place",
+    "children": [
+      {
+        "type": "action",
+        "name": "Move to observation pose",
+        "primitive": "navigate_to_workspace",
+        "inputs": {"position": [0.45, 0.0, 0.5]},
+        "preconditions": ["robot_ready"],
+        "success_conditions": ["at_workspace"]
+      },
+      {
+        "type": "selector",
+        "name": "Find the block",
+        "children": [
+          {"type": "condition", "name": "Use cached detection", "fact": "target_visible"},
+          {
+            "type": "retry",
+            "name": "Retry camera detection",
+            "max_attempts": 2,
+            "child": {
+              "type": "action",
+              "name": "Detect physics block",
+              "primitive": "perceive_objects",
+              "inputs": {"fail_first_attempt": true},
+              "success_conditions": ["target_visible"]
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "name": "Acquire the block",
+        "children": [
+          {"type": "condition", "name": "Block is already held", "fact": "block_held"},
+          {
+            "type": "retry",
+            "name": "Retry physical grasp",
+            "max_attempts": 2,
+            "child": {
+              "type": "action",
+              "name": "Physically grasp and lift block",
+              "primitive": "grasp_object",
+              "preconditions": ["target_visible"],
+              "success_conditions": ["block_held"]
+            }
+          }
+        ]
+      },
+      {"type": "condition", "name": "Confirm grasp before transport", "fact": "block_held"},
+      {
+        "type": "action",
+        "name": "Carry and release block in green goal",
+        "primitive": "manipulate_object",
+        "preconditions": ["block_held"],
+        "success_conditions": ["block_placed"]
+      },
+      {
+        "type": "parallel",
+        "name": "Final checks in parallel",
+        "children": [
+          {
+            "type": "action",
+            "name": "Verify block reached goal",
+            "primitive": "verify_block_at_goal",
+            "preconditions": ["block_placed"],
+            "success_conditions": ["block_at_goal"]
+          },
+          {
+            "type": "action",
+            "name": "Verify robot state",
+            "primitive": "inspect_workspace",
+            "preconditions": ["block_placed"],
+            "success_conditions": ["robot_state_valid"]
+          }
+        ]
+      }
+    ]
+  }
+}
