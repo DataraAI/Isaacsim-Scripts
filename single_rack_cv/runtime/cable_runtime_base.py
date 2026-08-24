@@ -130,17 +130,29 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         light.set_intensities(scene.light_intensity)
         print("[DEBUG] light.set_intensities() returned", flush=True)
 
-        print("[DEBUG] about to call _define_xform(rack)", flush=True)
-        self._define_xform(
-            scene.rack_path,
-            position=(0.0, 0.0, 0.0),
-            yaw_deg=scene.rack_yaw_deg,
-            scale=(scene.rack_scale,) * 3,
-        )
-        print("[DEBUG] _define_xform(rack) returned", flush=True)
-        print("[DEBUG] about to call _add_reference(rack)", flush=True)
-        self._add_reference(scene.rack_usd_path, scene.rack_asset_path)
-        print("[DEBUG] _add_reference(rack) returned", flush=True)
+        print("[DEBUG] about to enter rack spawn block (guarded)", flush=True)
+        if self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            print(
+                "[DEBUG] rack already present from esha's datahall load, "
+                "skipping define_xform/add_reference",
+                flush=True,
+            )
+            # SceneConfig is frozen; mutate in place so _center_rack() and
+            # later readers see the datahall-embedded rack prim paths.
+            object.__setattr__(
+                scene,
+                "rack_path",
+                "/World/DataHall/DataHall_01/DataHall_01/DataHall_Racks/Rack_42U_01",
+            )
+            object.__setattr__(scene, "rack_asset_path", scene.rack_path)
+        else:
+            self._define_xform(
+                scene.rack_path,
+                position=(0.0, 0.0, 0.0),
+                yaw_deg=scene.rack_yaw_deg,
+                scale=(scene.rack_scale,) * 3,
+            )
+            self._add_reference(scene.rack_usd_path, scene.rack_asset_path)
         print("[DEBUG] about to call _center_rack()", flush=True)
         self._center_rack()
         print("[DEBUG] _center_rack() returned", flush=True)

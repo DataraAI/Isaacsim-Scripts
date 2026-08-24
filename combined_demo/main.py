@@ -77,7 +77,7 @@ def run_pickup_phase(simulation_app):
         print("[DEBUG] force-load main returned", flush=True)
         print("[DEBUG] about to call esha run_pickup_phase()", flush=True)
         result = main_module.run_pickup_phase(
-            simulation_app, close_app_when_done=False
+            simulation_app, close_app_when_done=False, stop_timeline=False
         )
         print("[DEBUG] esha run_pickup_phase() returned", flush=True)
 

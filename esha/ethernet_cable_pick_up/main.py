@@ -18,13 +18,22 @@ import traceback
 from pathlib import Path
 
 from config import CONFIG
+print("[DEBUG] main.py: config import done", flush=True)
 from head_detector import YOLOEHeadDetector
+print("[DEBUG] main.py: head_detector import done", flush=True)
 from logging_tee import RunOutputTee
+print("[DEBUG] main.py: logging_tee import done", flush=True)
 from perception import process_stereo_cable
+print("[DEBUG] main.py: perception import done", flush=True)
 from run_logger import RunLogger
+print("[DEBUG] main.py: run_logger import done", flush=True)
 
 
-def run_pickup_phase(simulation_app, close_app_when_done: bool = True) -> RunLogger:
+def run_pickup_phase(
+    simulation_app,
+    close_app_when_done: bool = True,
+    stop_timeline: bool = True,
+) -> RunLogger:
     run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
     run_output_tee = RunOutputTee(run_output_path)
     run_output_tee.start()
@@ -167,10 +176,12 @@ def run_pickup_phase(simulation_app, close_app_when_done: bool = True) -> RunLog
             except Exception:
                 pass
         try:
-            if runtime is not None:
+            if runtime is not None and stop_timeline:
                 print("[DEBUG] about to call runtime.stop()", flush=True)
                 runtime.stop()
                 print("[DEBUG] runtime.stop() returned", flush=True)
+            elif runtime is not None:
+                print("[DEBUG] runtime.stop() skipped (stop_timeline=False)", flush=True)
 
             if simulation_app is not None and close_app_when_done:
                 print("[DEBUG] about to call simulation_app.close()", flush=True)
