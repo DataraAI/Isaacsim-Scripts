@@ -170,6 +170,12 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
             "  control frame: unchanged horizontal RJ45 plug tip\n"
             "  insertion frame: live PhysX plug nose axis"
         )
+        print(
+            f"[DEBUG] exact hand target for esha carry match: "
+            f"position={np.round(angled_pose.hand_position_world_m, 6).tolist()} "
+            f"orientation_wxyz={list(angled_hand_orientation)}",
+            flush=True,
+        )
 
     def _live_plug_tip_and_axis(self) -> tuple[np.ndarray, np.ndarray]:
         if self.cable_mount is None:

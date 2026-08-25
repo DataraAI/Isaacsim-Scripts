@@ -249,6 +249,11 @@ class CableMountedSimulationRuntime(SimulationRuntime):
             dt=scene.physics_dt,
             device=scene.device,
         )
+        print(
+            f"[DEBUG] SimulationManager backend={SimulationManager.get_backend()!r} "
+            f"device={SimulationManager.get_device()!r}",
+            flush=True,
+        )
         print("[DEBUG] setup_simulation() returned", flush=True)
         print("[DEBUG] about to call get_physics_scenes()", flush=True)
         physics_scenes = SimulationManager.get_physics_scenes()

@@ -388,6 +388,26 @@ class PreGraspConfig:
     carry_offset_m: tuple[float, float, float] = (-0.40, -0.20, 0.40) #change target location
     # Post-weld carry; fixed joint allows a slightly larger step.
     carry_step_m: float = 0.035
+    # Final handoff pose for single_rack_cv's insertion phase: exact
+    # panda_hand world position/orientation single_rack_cv's angled-hand
+    # IK expects at startup (captured via a debug print in
+    # single_rack_cv/runtime/angled_hand_runtime.py's ANGLED HAND RUNTIME
+    # ACTIVE log). This is NOT esha's own tool_center convention — it must
+    # be converted via hand_pose_to_tool_pose() before use as an IK_Target.
+    handoff_hand_target_position_m: tuple[float, float, float] = (
+        0.891166,
+        -0.1375,
+        1.351046,
+    )
+    handoff_hand_target_orientation_wxyz: tuple[
+        float, float, float, float
+    ] = (
+        0.5,
+        0.0,
+        -0.8660254037844386,
+        0.0,
+    )
+    handoff_step_m: float = 0.035
     # Extra open gap per side beyond measured cable half-thickness.
     side_allowance_m: float = 0.002
     # Never approach with less than this opening per finger.

@@ -1105,7 +1105,6 @@ class SimulationRuntime:
                 return
             if not self._pre_grasp_pose_settled(required_settled):
                 return
-            state.phase = "done"
             target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
             log(
                 "GRASP CARRY DONE\n"
@@ -1121,6 +1120,51 @@ class SimulationRuntime:
                     carry_offset_m=np.round(cfg.carry_offset_m, 4).tolist(),
                     ik_target=np.round(target_position, 4).tolist(),
                 )
+            self._begin_handoff_reorient()
+            return
+
+        if state.phase == "handoff_reorient":
+            state.reorient_frames += 1
+            if not self._pre_grasp_pose_settled(required_settled):
+                if state.reorient_frames > cfg.reorient_timeout_frames:
+                    warn(
+                        "HANDOFF REORIENT timed out; target orientation may "
+                        "be unreachable.\n"
+                        f"  reorient_frames={state.reorient_frames}\n"
+                        f"  timeout_frames={cfg.reorient_timeout_frames}"
+                    )
+                    self._begin_handoff_move()
+                return
+            target_position, target_orientation = self._get_world_pose(
+                self.cfg.ik.target_path
+            )
+            log(
+                "HANDOFF REORIENT DONE\n"
+                f"  reorient_frames={state.reorient_frames}\n"
+                f"  IK_Target={np.round(target_position, 4).tolist()}\n"
+                f"  orientation_wxyz="
+                f"{np.round(target_orientation, 4).tolist()}"
+            )
+            self._begin_handoff_move()
+            return
+
+        if state.phase == "handoff_move":
+            if not self._advance_linear_ik_target(
+                state.grasp_target_world_m,
+                max_step_m=cfg.handoff_step_m,
+            ):
+                return
+            if not self._pre_grasp_pose_settled(required_settled):
+                return
+            state.phase = "done"
+            target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+            log(
+                "HANDOFF MOVE DONE\n"
+                f"  IK_Target={np.round(target_position, 4).tolist()}\n"
+                f"  fingers held closed at "
+                f"{state.finger_close_half_gap_m * 1000.0:.1f} mm per side"
+            )
+            return
 
     def _tool_target_orientation_error_rad(self) -> float:
         """Angle between actual ToolCenter and IK_Target orientations."""
@@ -1703,6 +1747,90 @@ class SimulationRuntime:
             f"{np.round(state.grasp_target_world_m, 4).tolist()}\n"
             f"  max_step_m={cfg.carry_step_m:.4f}\n"
             "  fingers stay closed"
+        )
+
+    def _begin_handoff_reorient(self) -> None:
+        """Rotate in place to the exact hand orientation single_rack_cv's
+        insertion IK expects at startup, before moving to the handoff
+        position."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
+
+        target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+        hand_orientation = _normalize_quaternion_wxyz(
+            np.asarray(
+                cfg.handoff_hand_target_orientation_wxyz,
+                dtype=np.float64,
+            )
+        )
+        _, tool_orientation = hand_pose_to_tool_pose(
+            hand_position_m=np.asarray(
+                cfg.handoff_hand_target_position_m, dtype=np.float64
+            ),
+            hand_orientation_wxyz=hand_orientation,
+            tool_local_position_m=np.asarray(
+                self.cfg.ik.tool_center_local_position_m, dtype=np.float64
+            ),
+            tool_local_orientation_wxyz=np.asarray(
+                self.cfg.ik.tool_center_local_orientation_wxyz,
+                dtype=np.float64,
+            ),
+        )
+        state.grasp_orientation_wxyz = tool_orientation
+        self.ik.target.set_world_pose(
+            position=target_position,
+            orientation=tool_orientation,
+        )
+        state.phase = "handoff_reorient"
+        state.move_settled_frames = 0
+        state.reorient_frames = 0
+        log(
+            "HANDOFF REORIENT\n"
+            f"  held IK_Target={np.round(target_position, 4).tolist()}\n"
+            f"  new orientation_wxyz="
+            f"{np.round(tool_orientation, 4).tolist()}"
+        )
+        self._apply_finger_gap(state.finger_close_half_gap_m)
+
+    def _begin_handoff_move(self) -> None:
+        """Translate to the exact tool-center position matching
+        single_rack_cv's expected startup hand pose."""
+        cfg = self.cfg.pre_grasp
+        state = self.pre_grasp
+        if self.ik is None:
+            return
+
+        target_position, _ = self._get_world_pose(self.cfg.ik.target_path)
+        hand_orientation = _normalize_quaternion_wxyz(
+            np.asarray(
+                cfg.handoff_hand_target_orientation_wxyz,
+                dtype=np.float64,
+            )
+        )
+        tool_position, _ = hand_pose_to_tool_pose(
+            hand_position_m=np.asarray(
+                cfg.handoff_hand_target_position_m, dtype=np.float64
+            ),
+            hand_orientation_wxyz=hand_orientation,
+            tool_local_position_m=np.asarray(
+                self.cfg.ik.tool_center_local_position_m, dtype=np.float64
+            ),
+            tool_local_orientation_wxyz=np.asarray(
+                self.cfg.ik.tool_center_local_orientation_wxyz,
+                dtype=np.float64,
+            ),
+        )
+        state.grasp_target_world_m = tool_position
+        state.phase = "handoff_move"
+        state.move_settled_frames = 0
+        self._apply_finger_gap(state.finger_close_half_gap_m)
+        log(
+            "HANDOFF MOVE\n"
+            f"  start IK_Target={np.round(target_position, 4).tolist()}\n"
+            f"  final IK_Target={np.round(tool_position, 4).tolist()}\n"
+            f"  max_step_m={cfg.handoff_step_m:.4f}"
         )
 
     def _apply_finger_gap(self, half_gap_m: float) -> None:

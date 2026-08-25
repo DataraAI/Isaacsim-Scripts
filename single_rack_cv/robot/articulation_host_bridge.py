@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import numpy as np
-import torch
 
 from robot.host_array_bridge import to_numpy_cpu
 
 
 class HostSafeDofPropertiesArticulation:
-    """Bridge legacy NumPy finger setup to a CUDA-backed articulation view."""
+    """Bridge legacy NumPy finger setup to an articulation view whose active backend may not match the configured physics device."""
 
     def __init__(self, articulation) -> None:
         self._articulation = articulation
@@ -25,45 +24,41 @@ class HostSafeDofPropertiesArticulation:
             raise RuntimeError("Articulation view is unavailable")
         return view
 
-    def _float_tensor(self, values):
-        return torch.as_tensor(
-            values,
-            dtype=torch.float32,
-            device=self._articulation._device,
-        )
-
-    def _index_tensor(self, values):
-        if values is None:
-            return None
-        return torch.as_tensor(
-            values,
-            dtype=torch.int64,
-            device=self._articulation._device,
-        )
-
-    def _batched_positions(self, values):
-        tensor = self._float_tensor(values)
-        if tensor.ndim != 1:
+    def _float_array(self, values):
+        array = np.asarray(values, dtype=np.float32)
+        if array.ndim != 1:
             raise ValueError(
                 "Finger positions must be one-dimensional, "
-                f"got {tuple(tensor.shape)}"
+                f"got {tuple(array.shape)}"
             )
-        return tensor.unsqueeze(0)
+        return array
+
+    def _index_array(self, values):
+        if values is None:
+            return None
+        return np.asarray(values, dtype=np.int64)
+
+    def _batched_positions(self, values):
+        return self._float_array(values)[np.newaxis, :]
 
     def set_joint_positions(self, positions, joint_indices=None):
-        """Write immediate positions through the GPU-capable articulation view."""
+        """Write immediate positions through the articulation view, using
+        host NumPy arrays — this view's active backend is NumPy regardless
+        of which physics device is configured, so torch/CUDA tensors here
+        fail the same way passing them to any other NumPy-only API would."""
 
         return self._view.set_joint_positions(
             self._batched_positions(positions),
-            joint_indices=self._index_tensor(joint_indices),
+            joint_indices=self._index_array(joint_indices),
         )
 
     def set_joint_position_targets(self, positions, joint_indices=None):
-        """Write PD targets through the GPU-capable articulation view."""
+        """Write PD targets through the articulation view, using host
+        NumPy arrays (see set_joint_positions for why)."""
 
         return self._view.set_joint_position_targets(
             self._batched_positions(positions),
-            joint_indices=self._index_tensor(joint_indices),
+            joint_indices=self._index_array(joint_indices),
         )
 
     @property
