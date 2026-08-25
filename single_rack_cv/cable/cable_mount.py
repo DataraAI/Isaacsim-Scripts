@@ -231,6 +231,17 @@ class CableMount:
             cable_projection_min_m=self.mount_cfg.cable_projection_min_m,
         )
 
+        self.diagnostics = CableMountDiagnostics(
+            plug_dimensions_m=tuple(
+                float(value) for value in self.plug_frame.dimensions_m
+            ),
+            tip_local_m=tuple(
+                float(value) for value in self.plug_frame.tip_local_m
+            ),
+            deformable_body_path=self.topology.deformable_body_path,
+            existing_attachment_path=self.topology.existing_attachment_path,
+        )
+
     def configure_fingers(self, articulation) -> None:
         """Set a symmetric cosmetic gap around the rigidly mounted plug."""
 

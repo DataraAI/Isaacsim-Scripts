@@ -81,23 +81,6 @@ def run_pickup_phase(simulation_app):
         )
         print("[DEBUG] esha run_pickup_phase() returned", flush=True)
 
-        import omni.usd
-
-        datahall_prim_path = config_module.CONFIG.scene.datahall_prim_path
-        print(
-            f"[DEBUG] about to remove {datahall_prim_path} from stage",
-            flush=True,
-        )
-        stage = omni.usd.get_context().get_stage()
-        if stage.GetPrimAtPath(datahall_prim_path).IsValid():
-            stage.RemovePrim(datahall_prim_path)
-            print(f"[DEBUG] removed {datahall_prim_path}", flush=True)
-        else:
-            print(
-                f"[DEBUG] {datahall_prim_path} not present, nothing to remove",
-                flush=True,
-            )
-
         return result
     finally:
         print("[DEBUG] about to call sys.path.remove(ESHA_PATH)", flush=True)
