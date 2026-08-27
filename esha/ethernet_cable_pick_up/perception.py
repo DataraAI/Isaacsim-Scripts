@@ -32,7 +32,7 @@ class PerceptionConfig:
     min_oriented_short_px: float = 4.0
     # Soft ranking prior only (does not reject): prefer compact heads when
     # both a head blob and a long cord blob exist in the same eye.
-    prefer_oriented_long_px: float = 120.0
+    prefer_oriented_long_px: float = 60.0
     oriented_long_penalty_weight: float = 0.25
     # For long cord+head blobs, first split neutral/clear RJ45 pixels from
     # the blue boot/cable along the principal axis. Width-only extraction is

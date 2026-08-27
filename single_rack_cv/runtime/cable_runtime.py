@@ -10,6 +10,7 @@ import omni.usd
 from pxr import Gf, UsdGeom
 
 from isaacsim.core.prims import SingleRigidPrim
+import isaacsim.core.experimental.utils.app as app_utils
 
 from cable.cable_geometry import angular_error_deg
 from robot.host_array_bridge import to_numpy_cpu
@@ -64,6 +65,52 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
             name="tracked_cable_plug_live",
         )
         self._tracked_plug_body.initialize()
+        self._plug_axis_sample_count = 0
+        print(
+            "[DEBUG] PhysX tracked-plug sampling for 20 steps after "
+            f"SingleRigidPrim init ({self.cfg.cable_mount.tracked_plug_path})",
+            flush=True,
+        )
+        for step in range(20):
+            app_utils.update_app(steps=1)
+            if step % 5 == 0 or step == 19:
+                tip_world, plug_axis = self._physx_plug_tip_and_axis()
+                usd_sample = self._sample_tracked_plug_tip_and_axis_from_stage()
+                usd_axis = (
+                    None
+                    if usd_sample is None
+                    else np.round(usd_sample[1], 6).tolist()
+                )
+                hand_forward = "no-ik"
+                if self.ik is not None:
+                    try:
+                        _, hand_orientation = (
+                            self.ik.articulation.get_world_pose()
+                        )
+                        hand_rotation = quaternion_wxyz_to_matrix(
+                            to_numpy_cpu(
+                                hand_orientation,
+                                shape=(4,),
+                                label="hand orientation for plug sample",
+                            )
+                        )
+                        hand_forward = np.round(
+                            hand_rotation[:, 2], 6
+                        ).tolist()
+                    except Exception as error:
+                        hand_forward = f"unavailable:{type(error).__name__}"
+                print(
+                    f"[DEBUG] physx plug settle step={step}: "
+                    f"tip={np.round(tip_world, 6).tolist()} "
+                    f"plug_axis={np.round(plug_axis, 6).tolist()} "
+                    f"plug_axis[2]={plug_axis[2]:.6f} "
+                    f"usd_plug_axis={usd_axis} "
+                    f"hand_forward={hand_forward} "
+                    f"physx_pos={np.round(to_numpy_cpu(self._tracked_plug_body.get_world_pose()[0], shape=(3,), label='plug pos'), 6).tolist()} "
+                    f"physx_quat_wxyz={np.round(to_numpy_cpu(self._tracked_plug_body.get_world_pose()[1], shape=(4,), label='plug quat'), 6).tolist()} "
+                    f"physx_scale={np.round(to_numpy_cpu(self._tracked_plug_body.get_world_scale(), shape=(3,), label='plug scale'), 6).tolist()}",
+                    flush=True,
+                )
 
         self._base_mount_sample_validation = self.cable_mount.sample_validation
         self.cable_mount.sample_validation = self._sample_mount_validation_live
@@ -524,8 +571,8 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
             ),
         )
 
-    def _sample_mount_validation_live(self, runtime) -> tuple[float, float]:
-        self._base_mount_sample_validation(runtime)
+    def _physx_plug_tip_and_axis(self) -> tuple[np.ndarray, np.ndarray]:
+        """Live tip/nose from PhysX SingleRigidPrim on tracked_plug_path."""
 
         plug_frame = self.cable_mount.plug_frame
         if plug_frame is None:
@@ -549,18 +596,151 @@ class CableMountedSimulationRuntime(_BaseCableMountedSimulationRuntime):
             label="tracked RJ45 world scale",
         )
 
+        # Same-frame orientation source comparison (read-path hypothesis).
+        self._plug_orient_cmp_count = getattr(self, "_plug_orient_cmp_count", 0) + 1
+        if self._plug_orient_cmp_count <= 8 or self._plug_orient_cmp_count % 10 == 0:
+            view = getattr(self._tracked_plug_body, "_prim_view", None)
+            if view is None:
+                view = getattr(self._tracked_plug_body, "_rigid_prim_view", None)
+            handle_valid = (
+                bool(view.is_physics_handle_valid())
+                if view is not None and hasattr(view, "is_physics_handle_valid")
+                else None
+            )
+            raw_pos = raw_quat_wxyz = None
+            raw_xyzw = None
+            if (
+                view is not None
+                and handle_valid
+                and getattr(view, "_physics_view", None) is not None
+            ):
+                pose = view._physics_view.get_transforms()
+                pose_np = to_numpy_cpu(
+                    pose,
+                    shape=(1, 7),
+                    label="raw physics get_transforms",
+                )
+                # RigidPrim slices [0:3] pos and xyzw2wxyz([3:7]) for orient.
+                raw_pos = np.asarray(pose_np[0, 0:3], dtype=np.float64)
+                raw_xyzw = np.asarray(pose_np[0, 3:7], dtype=np.float64)
+                raw_quat_wxyz = np.asarray(
+                    [raw_xyzw[3], raw_xyzw[0], raw_xyzw[1], raw_xyzw[2]],
+                    dtype=np.float64,
+                )
+            usd_sample = self._sample_tracked_plug_tip_and_axis_from_stage()
+            usd_axis = (
+                None
+                if usd_sample is None
+                else np.round(usd_sample[1], 6).tolist()
+            )
+            usd_tip = (
+                None
+                if usd_sample is None
+                else np.round(usd_sample[0], 6).tolist()
+            )
+            # USD orientation via XformCache rotation part * nose.
+            from cable.cable_mount import _world_transform
+
+            usd_T = None
+            if self.cable_mount.stage is not None:
+                usd_T = _world_transform(
+                    self.cable_mount.stage,
+                    self.cfg.cable_mount.tracked_plug_path,
+                )
+            api_nose = quaternion_wxyz_to_matrix(orientation) @ (
+                plug_frame.nose_axis_local
+            )
+            api_nose = api_nose / max(float(np.linalg.norm(api_nose)), 1e-12)
+            raw_nose = None
+            if raw_quat_wxyz is not None:
+                raw_nose = quaternion_wxyz_to_matrix(raw_quat_wxyz) @ (
+                    plug_frame.nose_axis_local
+                )
+                raw_nose = raw_nose / max(float(np.linalg.norm(raw_nose)), 1e-12)
+            pos_delta = (
+                None
+                if raw_pos is None
+                else float(np.linalg.norm(position - raw_pos))
+            )
+            quat_delta = (
+                None
+                if raw_quat_wxyz is None
+                else float(
+                    np.linalg.norm(
+                        orientation / max(np.linalg.norm(orientation), 1e-12)
+                        - raw_quat_wxyz
+                        / max(np.linalg.norm(raw_quat_wxyz), 1e-12)
+                    )
+                )
+            )
+            print(
+                "[DEBUG] plug orient source compare "
+                f"n={self._plug_orient_cmp_count}:\n"
+                f"  physics_handle_valid={handle_valid}\n"
+                f"  (a) get_world_pose pos={np.round(position, 6).tolist()} "
+                f"quat_wxyz={np.round(orientation, 6).tolist()} "
+                f"nose={np.round(api_nose, 6).tolist()}\n"
+                f"  (b) raw get_transforms pos="
+                f"{None if raw_pos is None else np.round(raw_pos, 6).tolist()} "
+                f"quat_xyzw={None if raw_xyzw is None else np.round(raw_xyzw, 6).tolist()} "
+                f"quat_wxyz={None if raw_quat_wxyz is None else np.round(raw_quat_wxyz, 6).tolist()} "
+                f"nose={None if raw_nose is None else np.round(raw_nose, 6).tolist()}\n"
+                f"  (a)-(b) |pos|={pos_delta} |quat_wxyz|={quat_delta}\n"
+                f"  (c) USD XformCache tip={usd_tip} axis={usd_axis} "
+                f"T_pos={None if usd_T is None else np.round(usd_T[:3, 3], 6).tolist()}",
+                flush=True,
+            )
+            # Joint still enabled? Any JOINT_BREAK events so far?
+            try:
+                stage = omni.usd.get_context().get_stage()
+                jp = stage.GetPrimAtPath(
+                    self.cfg.cable_mount.fixed_joint_path
+                )
+                je = (
+                    jp.GetAttribute("physics:jointEnabled").Get()
+                    if jp.IsValid()
+                    else None
+                )
+                breaks = getattr(self, "_joint_break_events", [])
+                print(
+                    "[DEBUG] FixedJoint live status at orient cmp "
+                    f"n={self._plug_orient_cmp_count}: "
+                    f"jointEnabled={je!r} "
+                    f"JOINT_BREAK_events_so_far={len(breaks)} "
+                    f"break_paths="
+                    f"{[e.get('joint_path') for e in breaks]}",
+                    flush=True,
+                )
+            except Exception as error:
+                print(
+                    f"[DEBUG] FixedJoint live status failed: "
+                    f"{type(error).__name__}: {error}",
+                    flush=True,
+                )
+
         world_from_plug = np.eye(4, dtype=np.float64)
         world_from_plug[:3, :3] = (
             quaternion_wxyz_to_matrix(orientation) @ np.diag(scale)
         )
         world_from_plug[:3, 3] = position
-
         tip_world = (
             world_from_plug @ np.r_[plug_frame.tip_local_m, 1.0]
         )[:3]
         nose_world = (
             world_from_plug[:3, :3] @ plug_frame.nose_axis_local
         )
+        nose_norm = float(np.linalg.norm(nose_world))
+        if nose_norm <= 1.0e-12:
+            raise RuntimeError("Live plug nose axis has zero length")
+        return tip_world, nose_world / nose_norm
+
+    def _sample_mount_validation_live(self, runtime) -> tuple[float, float]:
+        self._base_mount_sample_validation(runtime)
+
+        tip_world, nose_world = self._physx_plug_tip_and_axis()
+        nose_norm = float(np.linalg.norm(nose_world))
+        if nose_norm > 1.0e-12:
+            nose_world = nose_world / nose_norm
 
         tool_position, tool_orientation = self._tool_pose_from_articulation()
         tool_axis = quaternion_wxyz_to_matrix(tool_orientation)[:, 2]

@@ -18,139 +18,191 @@ import traceback
 from pathlib import Path
 
 from config import CONFIG
+print("[DEBUG] main.py: config import done", flush=True)
 from head_detector import YOLOEHeadDetector
+print("[DEBUG] main.py: head_detector import done", flush=True)
 from logging_tee import RunOutputTee
+print("[DEBUG] main.py: logging_tee import done", flush=True)
 from perception import process_stereo_cable
+print("[DEBUG] main.py: perception import done", flush=True)
 from run_logger import RunLogger
+print("[DEBUG] main.py: run_logger import done", flush=True)
 
 
-run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
-run_output_tee = RunOutputTee(run_output_path)
-run_output_tee.start()
+def run_pickup_phase(
+    simulation_app,
+    close_app_when_done: bool = True,
+    stop_timeline: bool = True,
+) -> RunLogger:
+    run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
+    run_output_tee = RunOutputTee(run_output_path)
+    run_output_tee.start()
 
-simulation_app = None
-runtime = None
-logger = None
-run_failed = False
+    runtime = None
+    logger = None
+    run_failed = False
 
-try:
-    print(
-        f"[LOG] Saving complete run output to: {run_output_path}",
-        flush=True,
-    )
-
-    # Isaac Sim must start before importing modules that use omni/pxr APIs.
-    from isaacsim import SimulationApp
-
-    simulation_app = SimulationApp(
-        {
-            "headless": CONFIG.app.headless,
-            "width": CONFIG.app.width,
-            "height": CONFIG.app.height,
-        }
-    )
-
-    logger = RunLogger(
-        output_dir=Path("run_logs"),
-        pipeline="esha",
-        task="grasp_and_carry",
-    )
-
-    from debug import DebugOutputs
-    from sim import SimulationRuntime, warn
-
-    runtime = SimulationRuntime(
-        simulation_app=simulation_app,
-        cfg=CONFIG,
-        run_logger=logger,
-    )
-    debug = DebugOutputs(CONFIG)
-
-    head_detector = YOLOEHeadDetector(CONFIG.cable_head_yoloe)
-    head_detector.initialize()
-
-    capture_index = 0
-
-    while runtime.is_running():
-        runtime.step()
-
-        try:
-            runtime.update_ik()
-            runtime.update_visual_servo_completion()
-        except Exception as exc:
-            warn(f"Motion/IK update failed: {exc}")
-
-        try:
-            runtime.update_pre_grasp()
-        except Exception as exc:
-            warn(f"Pre-grasp update failed: {exc}")
-
-        if not runtime.capture_due():
-            continue
-
-        capture_index += 1
-
-        try:
-            frame = runtime.capture()
-            debug.save_raw(frame)
-            if capture_index % 10 == 0:  # tune this — one every 10 captures
-                debug.save_reference_candidate(frame, capture_index)
-            previous_left, previous_right = (
-                runtime.visual_servo_references()
-            )
-            observation = process_stereo_cable(
-                frame=frame,
-                cfg=CONFIG.perception,
-                desired_cable_virtual_camera_usd=(
-                    runtime.desired_cable_virtual_camera_usd
-                ),
-                previous_left=previous_left,
-                previous_right=previous_right,
-                head_detector=head_detector,
-            )
-            runtime.observe_visual_servo(observation)
-            debug.handle(
-                frame,
-                observation,
-                capture_index,
-            )
-        except Exception as exc:
-            # A rejected stereo pair holds the current target; repeated misses
-            # trigger a clean image-space reacquisition.
-            runtime.note_perception_failure()
-            if "frame" in locals():
-                try:
-                    debug.save_failure_snapshot(frame, capture_index, str(exc))
-                except Exception as snapshot_exc:
-                    warn(f"Could not save failure snapshot: {snapshot_exc}")
-            warn(
-                f"RGB stereo capture {capture_index} skipped: {exc}"
-            )
-
-except Exception:
-    run_failed = True
-    print(
-        "\n[CABLE GRASP RGB STEREO SERVO] FATAL ERROR\n"
-        + traceback.format_exc(),
-        flush=True,
-    )
-    raise
-
-finally:
-    if logger is not None:
-        try:
-            logger.finalize("failure" if run_failed else "success")
-        except Exception:
-            pass
     try:
-        if runtime is not None:
-            runtime.stop()
-
-        if simulation_app is not None:
-            simulation_app.close()
-    finally:
         print(
-            f"[LOG] Run output saved to: {run_output_path}",
+            f"[LOG] Saving complete run output to: {run_output_path}",
             flush=True,
         )
-        run_output_tee.stop()
+
+        logger = RunLogger(
+            output_dir=Path("run_logs"),
+            pipeline="esha",
+            task="grasp_and_carry",
+        )
+
+        from debug import DebugOutputs
+        from sim import SimulationRuntime, warn
+
+        runtime = SimulationRuntime(
+            simulation_app=simulation_app,
+            cfg=CONFIG,
+            run_logger=logger,
+        )
+        debug = DebugOutputs(CONFIG)
+
+        head_detector = YOLOEHeadDetector(CONFIG.cable_head_yoloe)
+        head_detector.initialize()
+
+        capture_index = 0
+
+        # TEMP: world-space bounding-box dimensions (X, Y, Z) sanity check.
+        try:
+            def _bbox_dims(path: str):
+                minimum, maximum = runtime._world_bounds(path)
+                return maximum - minimum
+
+            franka_dims = _bbox_dims(CONFIG.scene.franka_path)
+            datahall_dims = _bbox_dims(CONFIG.scene.datahall_prim_path)
+            print("ETHERNET PICKUP", flush=True)
+            print(
+                f"Franka:  X={franka_dims[0]:.4f} "
+                f"Y={franka_dims[1]:.4f} Z={franka_dims[2]:.4f}",
+                flush=True,
+            )
+            print(
+                f"DataHall: X={datahall_dims[0]:.4f} "
+                f"Y={datahall_dims[1]:.4f} Z={datahall_dims[2]:.4f}",
+                flush=True,
+            )
+
+            import omni.usd
+            from pxr import UsdGeom
+
+            stage = omni.usd.get_context().get_stage()
+            franka = stage.GetPrimAtPath("/World/Franka")
+            if franka.IsValid():
+                xform = UsdGeom.Xformable(franka)
+                print("FrankA local transform ops:", flush=True)
+                for op in xform.GetOrderedXformOps():
+                    print(op.GetOpName(), op.Get(), flush=True)
+        except Exception as exc:
+            print(f"[TEMP bbox] failed: {exc}", flush=True)
+
+        while runtime.is_running() and runtime.pre_grasp.phase != "done":
+            runtime.step()
+
+            try:
+                runtime.update_ik()
+                runtime.update_visual_servo_completion()
+            except Exception as exc:
+                warn(f"Motion/IK update failed: {exc}")
+
+            try:
+                runtime.update_pre_grasp()
+            except Exception as exc:
+                warn(f"Pre-grasp update failed: {exc}")
+
+            if not runtime.capture_due():
+                continue
+
+            capture_index += 1
+
+            try:
+                frame = runtime.capture()
+                debug.save_raw(frame)
+                if capture_index % 10 == 0:  # tune this — one every 10 captures
+                    debug.save_reference_candidate(frame, capture_index)
+                previous_left, previous_right = (
+                    runtime.visual_servo_references()
+                )
+                observation = process_stereo_cable(
+                    frame=frame,
+                    cfg=CONFIG.perception,
+                    desired_cable_virtual_camera_usd=(
+                        runtime.desired_cable_virtual_camera_usd
+                    ),
+                    previous_left=previous_left,
+                    previous_right=previous_right,
+                    head_detector=head_detector,
+                )
+                runtime.observe_visual_servo(observation)
+                debug.handle(
+                    frame,
+                    observation,
+                    capture_index,
+                )
+            except Exception as exc:
+                # A rejected stereo pair holds the current target; repeated misses
+                # trigger a clean image-space reacquisition.
+                runtime.note_perception_failure()
+                if "frame" in locals():
+                    try:
+                        debug.save_failure_snapshot(frame, capture_index, str(exc))
+                    except Exception as snapshot_exc:
+                        warn(f"Could not save failure snapshot: {snapshot_exc}")
+                warn(
+                    f"RGB stereo capture {capture_index} skipped: {exc}"
+                )
+
+    except Exception:
+        run_failed = True
+        print(
+            "\n[CABLE GRASP RGB STEREO SERVO] FATAL ERROR\n"
+            + traceback.format_exc(),
+            flush=True,
+        )
+        raise
+
+    finally:
+        if logger is not None:
+            try:
+                print("[DEBUG] about to call logger.finalize()", flush=True)
+                logger.finalize("failure" if run_failed else "success")
+                print("[DEBUG] logger.finalize() returned", flush=True)
+            except Exception:
+                pass
+        try:
+            if runtime is not None and stop_timeline:
+                print("[DEBUG] about to call runtime.stop()", flush=True)
+                runtime.stop()
+                print("[DEBUG] runtime.stop() returned", flush=True)
+            elif runtime is not None:
+                print("[DEBUG] runtime.stop() skipped (stop_timeline=False)", flush=True)
+
+            if simulation_app is not None and close_app_when_done:
+                print("[DEBUG] about to call simulation_app.close()", flush=True)
+                simulation_app.close()
+                print("[DEBUG] simulation_app.close() returned", flush=True)
+            else:
+                print("[DEBUG] simulation_app.close() skipped", flush=True)
+        finally:
+            print(
+                f"[LOG] Run output saved to: {run_output_path}",
+                flush=True,
+            )
+            print("[DEBUG] about to call run_output_tee.stop()", flush=True)
+            run_output_tee.stop()
+            print("[DEBUG] run_output_tee.stop() returned", flush=True)
+
+    return logger
+
+
+if __name__ == "__main__":
+    from isaacsim import SimulationApp
+
+    simulation_app = SimulationApp({"headless": False})
+    run_pickup_phase(simulation_app)

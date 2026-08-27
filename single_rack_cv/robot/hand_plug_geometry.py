@@ -136,6 +136,7 @@ def compute_angled_hand_pose_preserving_tool(
     base_hand_from_tool_rotation: np.ndarray,
     tool_position_hand_m: np.ndarray,
     downward_pitch_deg: float,
+    hand_from_tool_override: np.ndarray | None = None,
 ) -> AngledHandPose:
     """
     Solve a downward hand pose around the exact existing world tool pose.
@@ -156,10 +157,21 @@ def compute_angled_hand_pose_preserving_tool(
         base_hand_rotation_world,
         label="base_hand_rotation_world",
     )
-    base_hand_from_tool = _rotation3(
-        base_hand_from_tool_rotation,
-        label="base_hand_from_tool_rotation",
-    )
+    if hand_from_tool_override is not None:
+        override = np.asarray(hand_from_tool_override, dtype=np.float64)
+        if override.shape == (4, 4):
+            override_rotation = override[:3, :3]
+        else:
+            override_rotation = override
+        base_hand_from_tool = _rotation3(
+            override_rotation,
+            label="hand_from_tool_override",
+        )
+    else:
+        base_hand_from_tool = _rotation3(
+            base_hand_from_tool_rotation,
+            label="base_hand_from_tool_rotation",
+        )
     tool_position_hand = _vector3(
         tool_position_hand_m,
         label="tool_position_hand_m",
@@ -238,6 +250,203 @@ def compute_angled_hand_pose_preserving_tool(
     )
 
 
+def _rotation_mapping_pair(
+    source_a: np.ndarray,
+    source_b: np.ndarray,
+    dest_a: np.ndarray,
+    dest_b: np.ndarray,
+) -> np.ndarray:
+    """Return R in SO(3) with R@source_a≈dest_a and R@source_b≈dest_b."""
+
+    a0 = _axis3(source_a, label="source_a")
+    a1 = _axis3(source_b, label="source_b")
+    b0 = _axis3(dest_a, label="dest_a")
+    b1 = _axis3(dest_b, label="dest_b")
+    source_angle = math.degrees(
+        math.acos(float(np.clip(np.dot(a0, a1), -1.0, 1.0)))
+    )
+    dest_angle = math.degrees(
+        math.acos(float(np.clip(np.dot(b0, b1), -1.0, 1.0)))
+    )
+    if abs(source_angle - dest_angle) > 1.0e-3:
+        raise ValueError(
+            "cannot map vector pair: angle mismatch "
+            f"{source_angle:.6f} deg vs {dest_angle:.6f} deg"
+        )
+
+    f1 = a0
+    f2 = _axis3(a1 - float(np.dot(a1, f1)) * f1, label="source_frame_y")
+    f3 = np.cross(f1, f2)
+    F = np.column_stack((f1, f2, f3))
+
+    g1 = b0
+    g2 = _axis3(b1 - float(np.dot(b1, g1)) * g1, label="dest_frame_y")
+    g3 = np.cross(g1, g2)
+    G = np.column_stack((g1, g2, g3))
+
+    rotation = G @ F.T
+    if float(np.linalg.det(rotation)) < 0.0:
+        G = np.column_stack((g1, g2, -g3))
+        rotation = G @ F.T
+    return _rotation3(rotation, label="rotation_mapping_pair")
+
+
+def compute_angled_hand_pose_from_fixed_grasp(
+    *,
+    base_hand_position_m: np.ndarray,
+    base_hand_rotation_world: np.ndarray,
+    hand_from_plug_frozen: np.ndarray,
+    plug_from_tip: np.ndarray,
+    downward_pitch_deg: float,
+    pitch_tolerance_deg: float = 0.5,
+) -> AngledHandPose:
+    """
+    Solve a downward hand pose under a physically fixed hand-to-tip relative.
+
+    Unlike compute_angled_hand_pose_preserving_tool(), this does NOT invent a
+    new hand-to-tool relative. The relative
+    (hand_from_plug_frozen @ plug_from_tip) is fixed by the real grasp.
+
+    Geometric criterion (same as the original step-3 pitch):
+      hand_forward = rotate(plug_axis, about=camera_baseline(plug_axis),
+                            by=-pitch)
+    with plug_axis = (hand_R @ hand_from_tool_frozen)[:, 2] and
+    hand_forward = hand_R[:, 2]. The world plug axis is taken from the current
+    base hand composition (base_hand_R @ frozen_nose_in_hand), then hand_R is
+    solved by inverting through the frozen relative so that criterion holds
+    exactly. Tip world position is preserved; hand position follows.
+    """
+
+    base_hand_position = _vector3(
+        base_hand_position_m,
+        label="base_hand_position_m",
+    )
+    base_hand_rotation = _rotation3(
+        base_hand_rotation_world,
+        label="base_hand_rotation_world",
+    )
+    hand_from_plug = np.asarray(hand_from_plug_frozen, dtype=np.float64)
+    tip_from_plug = np.asarray(plug_from_tip, dtype=np.float64)
+    if hand_from_plug.shape == (4, 4):
+        hand_from_plug_R = _rotation3(
+            hand_from_plug[:3, :3],
+            label="hand_from_plug_frozen",
+        )
+        hand_from_plug_t = _vector3(
+            hand_from_plug[:3, 3],
+            label="hand_from_plug_frozen_translation",
+        )
+    elif hand_from_plug.shape == (3, 3):
+        hand_from_plug_R = _rotation3(
+            hand_from_plug,
+            label="hand_from_plug_frozen",
+        )
+        hand_from_plug_t = np.zeros(3, dtype=np.float64)
+    else:
+        raise ValueError("hand_from_plug_frozen must be 3x3 or 4x4")
+    if tip_from_plug.shape != (4, 4):
+        raise ValueError("plug_from_tip must be a 4x4 transform")
+    plug_from_tip_R = _rotation3(
+        tip_from_plug[:3, :3],
+        label="plug_from_tip_rotation",
+    )
+    tip_in_plug = _vector3(
+        tip_from_plug[:3, 3],
+        label="plug_from_tip_translation",
+    )
+
+    configured_pitch_deg = validate_downward_hand_pitch_deg(
+        downward_pitch_deg
+    )
+    hand_from_tool = _rotation3(
+        hand_from_plug_R @ plug_from_tip_R,
+        label="hand_from_tool_frozen",
+    )
+    tip_in_hand = hand_from_plug_R @ tip_in_plug + hand_from_plug_t
+    nose_in_hand = _axis3(
+        hand_from_tool[:, 2],
+        label="frozen_nose_in_hand",
+    )
+    hand_forward_local = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    inherent_pitch_rad = math.acos(
+        float(np.clip(np.dot(nose_in_hand, hand_forward_local), -1.0, 1.0))
+    )
+    inherent_pitch_deg = math.degrees(inherent_pitch_rad)
+    if abs(inherent_pitch_deg - configured_pitch_deg) > float(
+        pitch_tolerance_deg
+    ):
+        raise RuntimeError(
+            "fixed-grasp inherent hand-to-plug pitch is incompatible with "
+            f"configured pitch: inherent={inherent_pitch_deg:.6f} deg, "
+            f"configured={configured_pitch_deg:.6f} deg, "
+            f"tolerance={float(pitch_tolerance_deg):.6f} deg"
+        )
+
+    # Lock the world plug axis to the current physical composition, then apply
+    # the same pitch-about-baseline criterion the preserving-tool solver uses.
+    # Use the inherent angle so the frozen relative maps exactly.
+    plug_axis_world = _axis3(
+        base_hand_rotation @ nose_in_hand,
+        label="plug_axis_world",
+    )
+    camera_baseline_world = expected_camera_baseline_axis_world(
+        plug_axis_world
+    )
+    hand_forward_world = _rotate_axis_about_axis(
+        plug_axis_world,
+        camera_baseline_world,
+        -inherent_pitch_rad,
+    )
+    hand_rotation_world = _rotation_mapping_pair(
+        nose_in_hand,
+        hand_forward_local,
+        plug_axis_world,
+        hand_forward_world,
+    )
+
+    tool_position_world = base_hand_position + base_hand_rotation @ tip_in_hand
+    hand_position_world = (
+        tool_position_world - hand_rotation_world @ tip_in_hand
+    )
+    tool_rotation_world = _rotation3(
+        hand_rotation_world @ hand_from_tool,
+        label="tool_rotation_world",
+    )
+
+    reconstructed_nose = _axis3(
+        hand_rotation_world @ nose_in_hand,
+        label="reconstructed_nose",
+    )
+    if not np.allclose(reconstructed_nose, plug_axis_world, atol=1.0e-9):
+        raise RuntimeError(
+            "fixed-grasp solve did not preserve plug axis through frozen relative"
+        )
+    if not np.allclose(
+        hand_rotation_world[:, 2],
+        hand_forward_world,
+        atol=1.0e-9,
+    ):
+        raise RuntimeError(
+            "fixed-grasp solve did not achieve pitched hand forward"
+        )
+    if not np.allclose(
+        tool_rotation_world[:, 2],
+        reconstructed_nose,
+        atol=1.0e-9,
+    ):
+        raise RuntimeError(
+            "fixed-grasp tool Z does not match hand @ frozen nose"
+        )
+
+    return AngledHandPose(
+        hand_position_world_m=hand_position_world,
+        hand_rotation_world=hand_rotation_world,
+        hand_from_tool_rotation=hand_from_tool,
+        tool_position_world_m=tool_position_world,
+        tool_rotation_world=tool_rotation_world,
+    )
+
+
 @dataclass(frozen=True)
 class HandPlugGeometryMetrics:
     relative_pitch_deg: float
@@ -281,6 +490,19 @@ def measure_hand_plug_geometry(
     direction_ok = (
         wrist_above_tip_m > 0.0
         and hand_forward[2] < plug_axis[2]
+    )
+    print(
+        "[DEBUG] measure_hand_plug_geometry direction_ok check:\n"
+        f"  wrist_above_tip_m={wrist_above_tip_m:.6f} "
+        f"(pass={wrist_above_tip_m > 0.0})\n"
+        f"  hand_forward={np.round(hand_forward, 6).tolist()}\n"
+        f"  plug_axis={np.round(plug_axis, 6).tolist()}\n"
+        f"  compare hand_forward[2] < plug_axis[2]: "
+        f"{hand_forward[2]:.6f} < {plug_axis[2]:.6f} "
+        f"-> {bool(hand_forward[2] < plug_axis[2])}\n"
+        f"  direction_ok={direction_ok}\n"
+        f"  relative_pitch_deg={relative_pitch_deg:.6f}",
+        flush=True,
     )
     camera_baseline_error_deg = _directional_axis_error_deg(
         camera_baseline,

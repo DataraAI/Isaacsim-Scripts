@@ -50,7 +50,9 @@ class CableHeadYOLOEConfig:
     than the port's does."""
 
     model_name: str = "yoloe-26l-seg.pt"
-    reference_image_path: str = "yoloe_prompts/yoloe_reference_head_atlas.png"
+    reference_image_path: str = str(
+        Path(__file__).resolve().parent / "yoloe_prompts" / "yoloe_reference_head_atlas.png"
+    )
     reference_boxes_xyxy: tuple[tuple[float, float, float, float], ...] = (
         (20.0, 20.0, 81.0, 114.0),
         (124.0, 20.0, 188.0, 121.0),
@@ -93,7 +95,7 @@ class SceneConfig:
 
     # Uniform scale applied to the cable root prim after referencing.
     # Applied before placement so bbox-based positioning accounts for it.
-    cable_scale: float = 2.0
+    cable_scale: float = 1.0
 
     # Where the tracked connector should sit in XY.
     # +240 mm in X vs the original (0.5, 0).
@@ -111,8 +113,8 @@ class SceneConfig:
     # kept slightly under the ~22 mm connector/cable thickness so the plug
     # overhangs the pedestal a bit for finger access. Z is stand height.
     cable_support_size_m: tuple[float, float, float] = (
-        0.080,
-        0.018,
+        0.060,
+        0.009,
         0.040,
     )
     # Warm orange — clear against the gray ground, not blue.
@@ -386,12 +388,32 @@ class PreGraspConfig:
     carry_offset_m: tuple[float, float, float] = (-0.40, -0.20, 0.40) #change target location
     # Post-weld carry; fixed joint allows a slightly larger step.
     carry_step_m: float = 0.035
+    # Final handoff pose for single_rack_cv's insertion phase: exact
+    # panda_hand world position/orientation single_rack_cv's angled-hand
+    # IK expects at startup (captured via a debug print in
+    # single_rack_cv/runtime/angled_hand_runtime.py's ANGLED HAND RUNTIME
+    # ACTIVE log). This is NOT esha's own tool_center convention — it must
+    # be converted via hand_pose_to_tool_pose() before use as an IK_Target.
+    handoff_hand_target_position_m: tuple[float, float, float] = (
+        0.891166,
+        -0.1375,
+        1.351046,
+    )
+    handoff_hand_target_orientation_wxyz: tuple[
+        float, float, float, float
+    ] = (
+        0.5,
+        0.0,
+        -0.8660254037844386,
+        0.0,
+    )
+    handoff_step_m: float = 0.035
     # Extra open gap per side beyond measured cable half-thickness.
     side_allowance_m: float = 0.002
     # Never approach with less than this opening per finger.
-    minimum_open_half_gap_m: float = 0.018
+    minimum_open_half_gap_m: float = 0.009
     # Fallback half of short-axis thickness if stereo height is unavailable.
-    fallback_cable_half_width_m: float = 0.011
+    fallback_cable_half_width_m: float = 0.0055
     finger_joint_names: tuple[str, str] = (
         "panda_finger_joint1",
         "panda_finger_joint2",

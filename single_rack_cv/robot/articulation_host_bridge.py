@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""CUDA-safe articulation adapter for legacy NumPy-only consumers."""
+"""Backend-adaptive articulation adapter for finger setup.
+
+The articulation view locks its tensor backend at construction
+(``_backend`` / ``_backend_utils``). Merged pickup+insertion often leaves
+that view numpy-native; standalone warmup leaves it torch-native. Callers
+must emit arrays that match the view, not SimulationManager's current flag.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ from robot.host_array_bridge import to_numpy_cpu
 
 
 class HostSafeDofPropertiesArticulation:
-    """Bridge legacy NumPy finger setup to a CUDA-backed articulation view."""
+    """Bridge finger setup to whatever backend the articulation view locked in."""
 
     def __init__(self, articulation) -> None:
         self._articulation = articulation
@@ -25,45 +31,67 @@ class HostSafeDofPropertiesArticulation:
             raise RuntimeError("Articulation view is unavailable")
         return view
 
-    def _float_tensor(self, values):
-        return torch.as_tensor(
-            values,
-            dtype=torch.float32,
-            device=self._articulation._device,
-        )
+    def _locked_backend(self) -> str:
+        """Return the backend the view was constructed with.
 
-    def _index_tensor(self, values):
-        if values is None:
-            return None
-        return torch.as_tensor(
-            values,
-            dtype=torch.int64,
-            device=self._articulation._device,
-        )
+        Prefer ``_view._backend`` (what ``set_joint_positions`` /
+        ``_backend_utils`` actually use). Fall back to the wrapped
+        articulation's ``_backend``. Do not read
+        ``SimulationManager.get_backend()`` — that flag can be flipped
+        after the view already locked a different utils module.
+        """
 
-    def _batched_positions(self, values):
-        tensor = self._float_tensor(values)
-        if tensor.ndim != 1:
+        view = self._view
+        backend = getattr(view, "_backend", None)
+        if backend is None:
+            backend = getattr(self._articulation, "_backend", None)
+        if backend is None:
+            raise RuntimeError(
+                "Articulation view has no locked _backend; cannot choose "
+                "numpy vs torch finger command arrays"
+            )
+        return str(backend)
+
+    def _float_batch(self, values):
+        array = np.asarray(values, dtype=np.float32)
+        if array.ndim != 1:
             raise ValueError(
                 "Finger positions must be one-dimensional, "
-                f"got {tuple(tensor.shape)}"
+                f"got {tuple(array.shape)}"
             )
-        return tensor.unsqueeze(0)
+        if self._locked_backend() == "torch":
+            return torch.as_tensor(
+                array,
+                dtype=torch.float32,
+                device=self._articulation._device,
+            ).unsqueeze(0)
+        return array[np.newaxis, :]
+
+    def _index_batch(self, values):
+        if values is None:
+            return None
+        if self._locked_backend() == "torch":
+            return torch.as_tensor(
+                values,
+                dtype=torch.int64,
+                device=self._articulation._device,
+            )
+        return np.asarray(values, dtype=np.int64)
 
     def set_joint_positions(self, positions, joint_indices=None):
-        """Write immediate positions through the GPU-capable articulation view."""
+        """Write immediate positions using arrays matching the view backend."""
 
         return self._view.set_joint_positions(
-            self._batched_positions(positions),
-            joint_indices=self._index_tensor(joint_indices),
+            self._float_batch(positions),
+            joint_indices=self._index_batch(joint_indices),
         )
 
     def set_joint_position_targets(self, positions, joint_indices=None):
-        """Write PD targets through the GPU-capable articulation view."""
+        """Write PD targets using arrays matching the view backend."""
 
         return self._view.set_joint_position_targets(
-            self._batched_positions(positions),
-            joint_indices=self._index_tensor(joint_indices),
+            self._float_batch(positions),
+            joint_indices=self._index_batch(joint_indices),
         )
 
     @property

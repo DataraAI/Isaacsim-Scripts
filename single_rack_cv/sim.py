@@ -73,6 +73,13 @@ def _normalize_quaternion_wxyz(
     return quaternion / norm
 
 
+def _rotate_z(vec: np.ndarray, angle_rad: float) -> np.ndarray:
+    """Rotate a 3D vector about the world Z axis."""
+    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+    x, y, z = vec
+    return np.array([cos_a * x - sin_a * y, sin_a * x + cos_a * y, z])
+
+
 def quaternion_wxyz_to_matrix(
     quaternion_wxyz: np.ndarray,
 ) -> np.ndarray:
@@ -968,7 +975,8 @@ class SimulationRuntime:
             )
 
         log("Creating stage")
-        omni.usd.get_context().new_stage()
+        if not self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            omni.usd.get_context().new_stage()
         self._update_app(5)
 
         stage = omni.usd.get_context().get_stage()
@@ -1612,6 +1620,59 @@ class SimulationRuntime:
         if descendants <= 0:
             raise RuntimeError(f"Reference has no descendants: {prim_path}")
 
+    @staticmethod
+    def _set_xform_translate_orient(
+        xform: UsdGeom.Xformable,
+        *,
+        translation: np.ndarray,
+        yaw_rad: float,
+    ) -> None:
+        """Set translate+orient ops on an xformable (Quatf or Quatd)."""
+
+        quat_d = Gf.Quatd(
+            math.cos(yaw_rad / 2.0),
+            Gf.Vec3d(0.0, 0.0, math.sin(yaw_rad / 2.0)),
+        )
+        quat_f = Gf.Quatf(
+            float(quat_d.GetReal()),
+            Gf.Vec3f(
+                float(quat_d.GetImaginary()[0]),
+                float(quat_d.GetImaginary()[1]),
+                float(quat_d.GetImaginary()[2]),
+            ),
+        )
+        wrote_orient = False
+        wrote_translate = False
+        for op in xform.GetOrderedXformOps():
+            if (
+                not wrote_orient
+                and op.GetOpType() == UsdGeom.XformOp.TypeOrient
+            ):
+                current = op.Get()
+                if isinstance(current, Gf.Quatf):
+                    op.Set(quat_f)
+                else:
+                    op.Set(quat_d)
+                wrote_orient = True
+            elif (
+                not wrote_translate
+                and op.GetOpType() == UsdGeom.XformOp.TypeTranslate
+            ):
+                current = op.Get()
+                if isinstance(current, Gf.Vec3f):
+                    op.Set(
+                        Gf.Vec3f(
+                            float(translation[0]),
+                            float(translation[1]),
+                            float(translation[2]),
+                        )
+                    )
+                else:
+                    op.Set(Gf.Vec3d(*translation.tolist()))
+                wrote_translate = True
+        if not wrote_translate:
+            raise RuntimeError("Xformable has no translation op.")
+
     def _center_rack(self) -> None:
         scene = self.cfg.scene
 
@@ -1623,34 +1684,255 @@ class SimulationRuntime:
         # Read the Asset prim's actual current world position (its local
         # origin in world space) and cancel it so that origin lands at
         # (0, 0, 0), matching where the rack sat on main with the old asset.
+        # ALWAYS read Rack_42U_01 / rack_asset_path — never DataHall — so
+        # correction amounts stay identical to the pre-DataHall-apply path.
         current_world_position, _ = self._get_world_pose(
             scene.rack_asset_path
         )
-        correction = np.array(
-            scene.rack_position_correction_m,
-            dtype=np.float64,
+
+        # Re-derive the rack correction relative to the robot's actual base
+        # pose. rack_position_correction_m was tuned against a fixed
+        # reference Franka pose; if the robot is placed elsewhere (e.g. the
+        # merged pickup+insertion demo), rotate and translate the correction
+        # so the rack keeps the same pose relative to the robot.
+        robot_position = np.array(scene.franka_position, dtype=np.float64)
+        robot_yaw_rad = math.radians(scene.franka_yaw_deg)
+
+        reference_position = np.array(
+            scene.reference_franka_position, dtype=np.float64
         )
+        reference_yaw_rad = math.radians(scene.reference_franka_yaw_deg)
+
+        correction_world = np.array(
+            scene.rack_position_correction_m, dtype=np.float64
+        )
+        delta_yaw_rad = robot_yaw_rad - reference_yaw_rad
+        relative_offset = correction_world - reference_position
+        rotated_offset = _rotate_z(relative_offset, delta_yaw_rad)
+        correction = robot_position + rotated_offset
+
         translation = -current_world_position + correction
 
+        new_rack_yaw_deg = scene.rack_yaw_deg + math.degrees(delta_yaw_rad)
+        new_rack_yaw_rad = math.radians(new_rack_yaw_deg)
+
         stage = omni.usd.get_context().get_stage()
-        xform = UsdGeom.Xformable(
-            stage.GetPrimAtPath(scene.rack_path)
+        rack_prim = stage.GetPrimAtPath(scene.rack_path)
+        rack_xform = UsdGeom.Xformable(rack_prim)
+
+        datahall_path = "/World/DataHall"
+        datahall_prim = stage.GetPrimAtPath(datahall_path)
+        apply_on_datahall = bool(
+            self.cfg.cable_mount.already_grasped_by_pickup_pipeline
+            and datahall_prim.IsValid()
+            and datahall_prim.IsA(UsdGeom.Xformable)
         )
 
-        for op in xform.GetOrderedXformOps():
-            if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
-                op.Set(Gf.Vec3d(*translation.tolist()))
-                self._update_app(10)
-                log(
-                    "Rack aligned: "
-                    f"current_world_position="
-                    f"{np.round(current_world_position, 4).tolist()} "
-                    f"correction={np.round(correction, 4).tolist()} "
-                    f"=> translation={np.round(translation, 4).tolist()}"
-                )
-                return
+        if not apply_on_datahall:
+            # Standalone: author translate+orient on the rack container.
+            self._set_xform_translate_orient(
+                rack_xform,
+                translation=translation,
+                yaw_rad=new_rack_yaw_rad,
+            )
+            self._update_app(10)
+            log(
+                "Rack aligned: "
+                f"current_world_position="
+                f"{np.round(current_world_position, 4).tolist()} "
+                f"correction={np.round(correction, 4).tolist()} "
+                f"=> translation={np.round(translation, 4).tolist()} "
+                f"robot_position={np.round(robot_position, 4).tolist()} "
+                f"robot_yaw_deg={math.degrees(robot_yaw_rad):.3f} "
+                f"delta_yaw_deg={math.degrees(delta_yaw_rad):.3f} "
+                f"new_rack_yaw_deg={new_rack_yaw_deg:.3f}"
+            )
+            return
 
-        raise RuntimeError("Rack container has no translation op.")
+        # Merged DataHall asset: equipment siblings are NOT under Rack_42U_01.
+        # Compute the same rack-local authoring as standalone to obtain the
+        # desired rack WORLD pose, restore the rack, then apply the rigid
+        # delta to /World/DataHall so rack+equipment move as one unit.
+        saved_ops = [
+            (op, op.Get()) for op in rack_xform.GetOrderedXformOps()
+        ]
+        W_rack_before = rack_xform.ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        rack_pos_before = np.asarray(
+            W_rack_before.ExtractTranslation(), dtype=np.float64
+        )
+
+        self._set_xform_translate_orient(
+            rack_xform,
+            translation=translation,
+            yaw_rad=new_rack_yaw_rad,
+        )
+        W_rack_desired = rack_xform.ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        rack_pos_desired = np.asarray(
+            W_rack_desired.ExtractTranslation(), dtype=np.float64
+        )
+
+        for op, value in saved_ops:
+            if value is not None:
+                op.Set(value)
+
+        equipment_paths = (
+            "/World/DataHall/DGX_Servers/DGX_A100_01",
+            "/World/DataHall/Blank_Panels/Blank_1U_BlackGold",
+            "/World/DataHall/Network_Switches/AS4610_01",
+            "/World/DataHall/Network_Switches/AS4610_Ethernet_Row_Top",
+            "/World/DataHall/CPU_Servers/Server_1U_A_01",
+            "/World/DataHall/Power/rPDU_A_01",
+            "/World/DataHall/Patch/Fiber_Patch_Panel_1U_A_01",
+        )
+        equip_before = {}
+        for path in equipment_paths:
+            prim = stage.GetPrimAtPath(path)
+            if prim.IsValid() and prim.IsA(UsdGeom.Xformable):
+                equip_before[path] = np.asarray(
+                    UsdGeom.Xformable(prim)
+                    .ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                    .ExtractTranslation(),
+                    dtype=np.float64,
+                )
+
+        D = W_rack_desired * W_rack_before.GetInverse()
+        datahall_xform = UsdGeom.Xformable(datahall_prim)
+        W_datahall = datahall_xform.ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        W_datahall_new = D * W_datahall
+
+        parent = datahall_prim.GetParent()
+        if parent.IsValid() and parent.IsA(UsdGeom.Xformable):
+            W_parent = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()
+            )
+        else:
+            W_parent = Gf.Matrix4d(1.0)
+        local_datahall = W_parent.GetInverse() * W_datahall_new
+
+        local_t = local_datahall.ExtractTranslation()
+        local_q = local_datahall.ExtractRotationQuat()
+        imag = local_q.GetImaginary()
+        wrote_t = False
+        wrote_o = False
+        for op in datahall_xform.GetOrderedXformOps():
+            if (
+                not wrote_t
+                and op.GetOpType() == UsdGeom.XformOp.TypeTranslate
+            ):
+                current = op.Get()
+                if isinstance(current, Gf.Vec3f):
+                    op.Set(
+                        Gf.Vec3f(
+                            float(local_t[0]),
+                            float(local_t[1]),
+                            float(local_t[2]),
+                        )
+                    )
+                else:
+                    op.Set(
+                        Gf.Vec3d(
+                            float(local_t[0]),
+                            float(local_t[1]),
+                            float(local_t[2]),
+                        )
+                    )
+                wrote_t = True
+            elif (
+                not wrote_o
+                and op.GetOpType() == UsdGeom.XformOp.TypeOrient
+            ):
+                current = op.Get()
+                quat_d = Gf.Quatd(
+                    float(local_q.GetReal()),
+                    Gf.Vec3d(
+                        float(imag[0]),
+                        float(imag[1]),
+                        float(imag[2]),
+                    ),
+                )
+                if isinstance(current, Gf.Quatf):
+                    op.Set(
+                        Gf.Quatf(
+                            float(quat_d.GetReal()),
+                            Gf.Vec3f(
+                                float(quat_d.GetImaginary()[0]),
+                                float(quat_d.GetImaginary()[1]),
+                                float(quat_d.GetImaginary()[2]),
+                            ),
+                        )
+                    )
+                else:
+                    op.Set(quat_d)
+                wrote_o = True
+        if not wrote_t or not wrote_o:
+            raise RuntimeError(
+                "/World/DataHall is missing translate/orient xformOps "
+                "required to apply the merged rack correction"
+            )
+
+        self._update_app(10)
+        rack_pos_after = np.asarray(
+            rack_xform.ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()
+            ).ExtractTranslation(),
+            dtype=np.float64,
+        )
+        rack_delta = rack_pos_after - rack_pos_before
+        pose_err = float(np.linalg.norm(rack_pos_after - rack_pos_desired))
+        print(
+            "[DEBUG] _center_rack DataHall-apply verification:\n"
+            f"  apply_root={datahall_path}\n"
+            f"  correction_translation(op amounts)="
+            f"{np.round(translation, 4).tolist()}\n"
+            f"  rack_world_before={np.round(rack_pos_before, 6).tolist()}\n"
+            f"  rack_world_desired(old-authoring)="
+            f"{np.round(rack_pos_desired, 6).tolist()}\n"
+            f"  rack_world_after={np.round(rack_pos_after, 6).tolist()}\n"
+            f"  rack_world_match_err={pose_err:.9e}\n"
+            f"  rack_world_delta={np.round(rack_delta, 4).tolist()} "
+            f"|delta|={np.linalg.norm(rack_delta):.4f}",
+            flush=True,
+        )
+        if pose_err > 1.0e-6:
+            raise RuntimeError(
+                "DataHall-apply broke fix #6: Rack_42U_01 world position "
+                f"differs from old rack-authoring target by {pose_err:.9e} m"
+            )
+
+        for path, before in equip_before.items():
+            after = np.asarray(
+                UsdGeom.Xformable(stage.GetPrimAtPath(path))
+                .ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                .ExtractTranslation(),
+                dtype=np.float64,
+            )
+            delta = after - before
+            print(
+                f"[DEBUG] equipment move {path}: "
+                f"delta={np.round(delta, 4).tolist()} "
+                f"|delta|={np.linalg.norm(delta):.4f} "
+                f"matches_rack={np.allclose(delta, rack_delta, atol=1e-4)}",
+                flush=True,
+            )
+
+        log(
+            "Rack aligned (via /World/DataHall): "
+            f"current_world_position="
+            f"{np.round(current_world_position, 4).tolist()} "
+            f"correction={np.round(correction, 4).tolist()} "
+            f"=> translation={np.round(translation, 4).tolist()} "
+            f"robot_position={np.round(robot_position, 4).tolist()} "
+            f"robot_yaw_deg={math.degrees(robot_yaw_rad):.3f} "
+            f"delta_yaw_deg={math.degrees(delta_yaw_rad):.3f} "
+            f"new_rack_yaw_deg={new_rack_yaw_deg:.3f} "
+            f"rack_world_after={np.round(rack_pos_after, 4).tolist()}"
+        )
 
     def _world_bounds(self, path: str) -> tuple[np.ndarray, np.ndarray]:
         stage = omni.usd.get_context().get_stage()

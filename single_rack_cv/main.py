@@ -116,21 +116,223 @@ class RunOutputTee:
         self._started = False
 
 
-run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
-run_output_tee = RunOutputTee(run_output_path)
-run_output_tee.start()
+def run_insertion_phase(simulation_app) -> RunLogger:
+    run_output_path = CONFIG.camera.output_dir / "run_output_latest.txt"
+    run_output_tee = RunOutputTee(run_output_path)
+    run_output_tee.start()
 
-simulation_app = None
-runtime = None
-logger = None
-run_failed = False
+    runtime = None
+    logger = None
+    run_failed = False
 
-try:
-    print(
-        f"[LOG] Saving complete run output to: {run_output_path}",
-        flush=True,
-    )
+    try:
+        print(
+            f"[LOG] Saving complete run output to: {run_output_path}",
+            flush=True,
+        )
 
+        logger = RunLogger(
+            output_dir=Path("run_logs"),
+            pipeline="single_rack_cv",
+            task="port_insertion",
+        )
+
+        from runtime.full_insertion_runtime import (
+            AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
+        )
+        from debug import DebugOutputs
+        from vision.live_control_projective import refine_live_observation
+        from vision.perception import YOLOEPortDetector, process_stereo_port
+        from sim import warn
+
+        runtime = CableMountedSimulationRuntime(
+            simulation_app=simulation_app,
+            cfg=CONFIG,
+        )
+        runtime.run_logger = logger
+        runtime.prepare_for_perception()
+
+        if (
+            runtime.cable_mount is not None
+            and getattr(runtime.cable_mount, "tcp_probe_only", False)
+        ):
+            print(
+                "[CONNECTOR TCP PROBE] MOTION LOCKED\n"
+                "  red marker: legacy full-bounds tip\n"
+                "  cyan marker: mesh-derived insertion TCP\n"
+                "  inspect the markers on the RJ45 nose, then close Isaac Sim\n"
+                "  YOLOE, visual servo, handoff, and insertion are disabled",
+                flush=True,
+            )
+            while runtime.is_running():
+                runtime.step()
+                runtime.update_ik()
+            raise SystemExit(0)
+
+        debug = DebugOutputs(CONFIG)
+        detector = YOLOEPortDetector(CONFIG.yoloe)
+        detector.initialize()
+        print(
+            "[YOLOE] Visual prompt initialized once; "
+            "full-frame stereo inference is active.",
+            flush=True,
+        )
+        logger.log_event(0, "yoloe_initialized")
+        if CONFIG.front_plane.enabled:
+            print(
+                "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
+                "no manual depth offset and no RTX/USD ground truth in runtime.\n"
+                f"  visible front-lip validation: "
+                f"{VISIBLE_FRONT_LIP_WIDTH_M * 1000.0:.3f} x "
+                f"{VISIBLE_FRONT_LIP_HEIGHT_M * 1000.0:.3f} mm\n"
+                f"  side-edge localization width: "
+                f"{VISIBLE_FRONT_LIP_SEARCH_WIDTH_M * 1000.0:.3f} mm",
+                flush=True,
+            )
+
+        capture_index = 0
+
+        # TEMP: world-space bounding-box dimensions (X, Y, Z) sanity check.
+        try:
+            def _bbox_dims(path: str):
+                minimum, maximum = runtime._world_bounds(path)
+                return maximum - minimum
+
+            franka_dims = _bbox_dims(CONFIG.scene.franka_path)
+            rack_dims = _bbox_dims(CONFIG.scene.rack_path)
+            print("SINGLE RACK CV", flush=True)
+            print(
+                f"Franka:  X={franka_dims[0]:.4f} "
+                f"Y={franka_dims[1]:.4f} Z={franka_dims[2]:.4f}",
+                flush=True,
+            )
+            print(
+                f"Rack:    X={rack_dims[0]:.4f} "
+                f"Y={rack_dims[1]:.4f} Z={rack_dims[2]:.4f}",
+                flush=True,
+            )
+
+            import omni.usd
+            from pxr import UsdGeom
+
+            stage = omni.usd.get_context().get_stage()
+            franka = stage.GetPrimAtPath("/World/Franka")
+            if franka.IsValid():
+                xform = UsdGeom.Xformable(franka)
+                print("FrankA local transform ops:", flush=True)
+                for op in xform.GetOrderedXformOps():
+                    print(op.GetOpName(), op.Get(), flush=True)
+        except Exception as exc:
+            print(f"[TEMP bbox] failed: {exc}", flush=True)
+
+        while runtime.is_running():
+            runtime.step()
+            try:
+                runtime.update_ik()
+                runtime.update_visual_servo_completion()
+                runtime.update_partial_insertion()
+            except Exception as exc:
+                warn(f"Motion/IK update failed: {exc}")
+
+            if not runtime.capture_due():
+                continue
+            capture_index += 1
+
+            try:
+                frame = runtime.capture()
+                debug.save_raw(frame)
+                previous_left, previous_right = (
+                    runtime.visual_servo_references()
+                )
+                observation = process_stereo_port(
+                    frame=frame,
+                    cfg=CONFIG.perception,
+                    desired_port_virtual_camera_usd=(
+                        runtime.desired_port_virtual_camera_usd
+                    ),
+                    previous_left=previous_left,
+                    previous_right=previous_right,
+                    detector=detector,
+                )
+                if CONFIG.front_plane.enabled:
+                    observation, front_plane = refine_live_observation(
+                        frame=frame,
+                        observation=observation,
+                        desired_port_virtual_camera_usd=(
+                            runtime.desired_port_virtual_camera_usd
+                        ),
+                        aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
+                        aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
+                        search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
+                    )
+                    print(
+                        "[LIVE FRONT PLANE] "
+                        f"capture={capture_index} "
+                        f"cavity_range={front_plane.cavity_range_m * 1000.0:.2f}mm "
+                        f"opening_range={front_plane.opening_range_m * 1000.0:.2f}mm "
+                        f"recess={front_plane.recess_depth_m * 1000.0:+.2f}mm "
+                        f"center={list(np.round(front_plane.aperture_center_world_m, 6))} "
+                        f"center_pair={front_plane.aperture_center_disagreement_m * 1000.0:.3f}mm "
+                        f"plane_residual={front_plane.plane_residual_m * 1000.0:.3f}mm "
+                        f"ray_gap={front_plane.max_ray_gap_m * 1000.0:.3f}mm "
+                        f"dense={front_plane.consistent_disparity_count}/"
+                        f"{front_plane.valid_disparity_count} "
+                        f"ring={front_plane.ring_candidate_count} "
+                        f"triangulated={front_plane.triangulated_count} "
+                        f"cluster={front_plane.cluster_count} "
+                        f"sides={front_plane.side_support_counts}",
+                        flush=True,
+                    )
+                    logger.log_frame(
+                        capture_index,
+                        cavity_range_mm=front_plane.cavity_range_m * 1000.0,
+                        opening_range_mm=front_plane.opening_range_m * 1000.0,
+                        recess_depth_mm=front_plane.recess_depth_m * 1000.0,
+                        plane_residual_mm=front_plane.plane_residual_m * 1000.0,
+                        yoloe_conf_left=observation.left.detection.shape_score,
+                        yoloe_conf_right=observation.right.detection.shape_score,
+                        phase=runtime.current_phase(),
+                    )
+                runtime.observe_visual_servo(observation)
+                frozen_port_point = runtime.frozen_port_point_world_m
+                if frozen_port_point is not None:
+                    debug.update_frozen_port_point(frozen_port_point)
+                debug.handle(frame, observation, capture_index)
+            except Exception as exc:
+                runtime.note_perception_failure()
+                warn(f"RGB stereo capture {capture_index} skipped: {exc}")
+
+    except Exception:
+        run_failed = True
+        print(
+            "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n"
+            + traceback.format_exc(),
+            flush=True,
+        )
+        raise
+
+    finally:
+        if logger is not None:
+            try:
+                logger.finalize("failure" if run_failed else "success")
+            except Exception:
+                pass
+        try:
+            if runtime is not None:
+                runtime.stop()
+            if simulation_app is not None:
+                simulation_app.close()
+        finally:
+            print(
+                f"[LOG] Run output saved to: {run_output_path}",
+                flush=True,
+            )
+            run_output_tee.stop()
+
+    return logger
+
+
+if __name__ == "__main__":
     # Isaac Sim must start before importing modules that use omni/pxr APIs.
     from isaacsim import SimulationApp
 
@@ -141,167 +343,4 @@ try:
             "height": CONFIG.app.height,
         }
     )
-
-    logger = RunLogger(
-        output_dir=Path("run_logs"),
-        pipeline="single_rack_cv",
-        task="port_insertion",
-    )
-
-    from runtime.full_insertion_runtime import (
-        AngledHandStereoHandoffRuntime as CableMountedSimulationRuntime,
-    )
-    from debug import DebugOutputs
-    from vision.live_control_projective import refine_live_observation
-    from vision.perception import YOLOEPortDetector, process_stereo_port
-    from sim import warn
-
-    runtime = CableMountedSimulationRuntime(
-        simulation_app=simulation_app,
-        cfg=CONFIG,
-    )
-    runtime.run_logger = logger
-    runtime.prepare_for_perception()
-
-    if (
-        runtime.cable_mount is not None
-        and getattr(runtime.cable_mount, "tcp_probe_only", False)
-    ):
-        print(
-            "[CONNECTOR TCP PROBE] MOTION LOCKED\n"
-            "  red marker: legacy full-bounds tip\n"
-            "  cyan marker: mesh-derived insertion TCP\n"
-            "  inspect the markers on the RJ45 nose, then close Isaac Sim\n"
-            "  YOLOE, visual servo, handoff, and insertion are disabled",
-            flush=True,
-        )
-        while runtime.is_running():
-            runtime.step()
-            runtime.update_ik()
-        raise SystemExit(0)
-
-    debug = DebugOutputs(CONFIG)
-    detector = YOLOEPortDetector(CONFIG.yoloe)
-    detector.initialize()
-    print(
-        "[YOLOE] Visual prompt initialized once; "
-        "full-frame stereo inference is active.",
-        flush=True,
-    )
-    logger.log_event(0, "yoloe_initialized")
-    if CONFIG.front_plane.enabled:
-        print(
-            "[LIVE FRONT PLANE] automatic refined local SGBM control enabled; "
-            "no manual depth offset and no RTX/USD ground truth in runtime.\n"
-            f"  visible front-lip validation: "
-            f"{VISIBLE_FRONT_LIP_WIDTH_M * 1000.0:.3f} x "
-            f"{VISIBLE_FRONT_LIP_HEIGHT_M * 1000.0:.3f} mm\n"
-            f"  side-edge localization width: "
-            f"{VISIBLE_FRONT_LIP_SEARCH_WIDTH_M * 1000.0:.3f} mm",
-            flush=True,
-        )
-
-    capture_index = 0
-    while runtime.is_running():
-        runtime.step()
-        try:
-            runtime.update_ik()
-            runtime.update_visual_servo_completion()
-            runtime.update_partial_insertion()
-        except Exception as exc:
-            warn(f"Motion/IK update failed: {exc}")
-
-        if not runtime.capture_due():
-            continue
-        capture_index += 1
-
-        try:
-            frame = runtime.capture()
-            debug.save_raw(frame)
-            previous_left, previous_right = (
-                runtime.visual_servo_references()
-            )
-            observation = process_stereo_port(
-                frame=frame,
-                cfg=CONFIG.perception,
-                desired_port_virtual_camera_usd=(
-                    runtime.desired_port_virtual_camera_usd
-                ),
-                previous_left=previous_left,
-                previous_right=previous_right,
-                detector=detector,
-            )
-            if CONFIG.front_plane.enabled:
-                observation, front_plane = refine_live_observation(
-                    frame=frame,
-                    observation=observation,
-                    desired_port_virtual_camera_usd=(
-                        runtime.desired_port_virtual_camera_usd
-                    ),
-                    aperture_width_m=VISIBLE_FRONT_LIP_WIDTH_M,
-                    aperture_height_m=VISIBLE_FRONT_LIP_HEIGHT_M,
-                    search_width_m=VISIBLE_FRONT_LIP_SEARCH_WIDTH_M,
-                )
-                print(
-                    "[LIVE FRONT PLANE] "
-                    f"capture={capture_index} "
-                    f"cavity_range={front_plane.cavity_range_m * 1000.0:.2f}mm "
-                    f"opening_range={front_plane.opening_range_m * 1000.0:.2f}mm "
-                    f"recess={front_plane.recess_depth_m * 1000.0:+.2f}mm "
-                    f"center={list(np.round(front_plane.aperture_center_world_m, 6))} "
-                    f"center_pair={front_plane.aperture_center_disagreement_m * 1000.0:.3f}mm "
-                    f"plane_residual={front_plane.plane_residual_m * 1000.0:.3f}mm "
-                    f"ray_gap={front_plane.max_ray_gap_m * 1000.0:.3f}mm "
-                    f"dense={front_plane.consistent_disparity_count}/"
-                    f"{front_plane.valid_disparity_count} "
-                    f"ring={front_plane.ring_candidate_count} "
-                    f"triangulated={front_plane.triangulated_count} "
-                    f"cluster={front_plane.cluster_count} "
-                    f"sides={front_plane.side_support_counts}",
-                    flush=True,
-                )
-                logger.log_frame(
-                    capture_index,
-                    cavity_range_mm=front_plane.cavity_range_m * 1000.0,
-                    opening_range_mm=front_plane.opening_range_m * 1000.0,
-                    recess_depth_mm=front_plane.recess_depth_m * 1000.0,
-                    plane_residual_mm=front_plane.plane_residual_m * 1000.0,
-                    yoloe_conf_left=observation.left.detection.shape_score,
-                    yoloe_conf_right=observation.right.detection.shape_score,
-                    phase=runtime.current_phase(),
-                )
-            runtime.observe_visual_servo(observation)
-            frozen_port_point = runtime.frozen_port_point_world_m
-            if frozen_port_point is not None:
-                debug.update_frozen_port_point(frozen_port_point)
-            debug.handle(frame, observation, capture_index)
-        except Exception as exc:
-            runtime.note_perception_failure()
-            warn(f"RGB stereo capture {capture_index} skipped: {exc}")
-
-except Exception:
-    run_failed = True
-    print(
-        "\n[SINGLE RACK RGB STEREO SERVO] FATAL ERROR\n"
-        + traceback.format_exc(),
-        flush=True,
-    )
-    raise
-
-finally:
-    if logger is not None:
-        try:
-            logger.finalize("failure" if run_failed else "success")
-        except Exception:
-            pass
-    try:
-        if runtime is not None:
-            runtime.stop()
-        if simulation_app is not None:
-            simulation_app.close()
-    finally:
-        print(
-            f"[LOG] Run output saved to: {run_output_path}",
-            flush=True,
-        )
-        run_output_tee.stop()
+    run_insertion_phase(simulation_app)
