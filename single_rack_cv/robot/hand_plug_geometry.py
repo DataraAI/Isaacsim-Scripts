@@ -136,6 +136,7 @@ def compute_angled_hand_pose_preserving_tool(
     base_hand_from_tool_rotation: np.ndarray,
     tool_position_hand_m: np.ndarray,
     downward_pitch_deg: float,
+    hand_from_tool_override: np.ndarray | None = None,
 ) -> AngledHandPose:
     """
     Solve a downward hand pose around the exact existing world tool pose.
@@ -156,10 +157,21 @@ def compute_angled_hand_pose_preserving_tool(
         base_hand_rotation_world,
         label="base_hand_rotation_world",
     )
-    base_hand_from_tool = _rotation3(
-        base_hand_from_tool_rotation,
-        label="base_hand_from_tool_rotation",
-    )
+    if hand_from_tool_override is not None:
+        override = np.asarray(hand_from_tool_override, dtype=np.float64)
+        if override.shape == (4, 4):
+            override_rotation = override[:3, :3]
+        else:
+            override_rotation = override
+        base_hand_from_tool = _rotation3(
+            override_rotation,
+            label="hand_from_tool_override",
+        )
+    else:
+        base_hand_from_tool = _rotation3(
+            base_hand_from_tool_rotation,
+            label="base_hand_from_tool_rotation",
+        )
     tool_position_hand = _vector3(
         tool_position_hand_m,
         label="tool_position_hand_m",
@@ -281,6 +293,19 @@ def measure_hand_plug_geometry(
     direction_ok = (
         wrist_above_tip_m > 0.0
         and hand_forward[2] < plug_axis[2]
+    )
+    print(
+        "[DEBUG] measure_hand_plug_geometry direction_ok check:\n"
+        f"  wrist_above_tip_m={wrist_above_tip_m:.6f} "
+        f"(pass={wrist_above_tip_m > 0.0})\n"
+        f"  hand_forward={np.round(hand_forward, 6).tolist()}\n"
+        f"  plug_axis={np.round(plug_axis, 6).tolist()}\n"
+        f"  compare hand_forward[2] < plug_axis[2]: "
+        f"{hand_forward[2]:.6f} < {plug_axis[2]:.6f} "
+        f"-> {bool(hand_forward[2] < plug_axis[2])}\n"
+        f"  direction_ok={direction_ok}\n"
+        f"  relative_pitch_deg={relative_pitch_deg:.6f}",
+        flush=True,
     )
     camera_baseline_error_deg = _directional_axis_error_deg(
         camera_baseline,

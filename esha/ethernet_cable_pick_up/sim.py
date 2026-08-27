@@ -1120,7 +1120,10 @@ class SimulationRuntime:
                     carry_offset_m=np.round(cfg.carry_offset_m, 4).tolist(),
                     ik_target=np.round(target_position, 4).tolist(),
                 )
-            self._begin_handoff_reorient()
+            # Temporary: skip handoff reorient/move so phase 1 ends at the
+            # normal GRASP CARRY DONE pose while we verify single_rack_cv's
+            # corrected target. Keep _begin_handoff_* helpers/config intact.
+            state.phase = "done"
             return
 
         if state.phase == "handoff_reorient":

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
+
 import numpy as np
+from pxr import UsdPhysics
 
 from robot.angled_grasp_centering import (
     RearCenteredGraspCalibration,
@@ -24,6 +27,7 @@ from control.plug_axis_insertion import ExplicitInsertionAxisAdapter
 from sim import (
     log,
     matrix_to_quaternion_wxyz,
+    _rotate_z,
     quaternion_wxyz_to_matrix,
 )
 
@@ -56,6 +60,43 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
                 dtype=np.float64,
             )
         )
+
+        robot_position = np.asarray(cfg.scene.franka_position, dtype=np.float64)
+        robot_yaw_rad = math.radians(cfg.scene.franka_yaw_deg)
+        reference_position = np.asarray(
+            cfg.scene.reference_franka_position, dtype=np.float64
+        )
+        reference_yaw_rad = math.radians(cfg.scene.reference_franka_yaw_deg)
+        delta_yaw_rad = robot_yaw_rad - reference_yaw_rad
+
+        relative_position = original_base_hand_position - reference_position
+        rotated_position = _rotate_z(relative_position, delta_yaw_rad)
+        original_base_hand_position = robot_position + rotated_position
+
+        cos_delta = math.cos(delta_yaw_rad)
+        sin_delta = math.sin(delta_yaw_rad)
+        yaw_correction_matrix = np.array(
+            [
+                [cos_delta, -sin_delta, 0.0],
+                [sin_delta, cos_delta, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        base_hand_rotation = yaw_correction_matrix @ base_hand_rotation
+
+        print(
+            f"[DEBUG] yaw correction: robot_yaw_deg={cfg.scene.franka_yaw_deg} "
+            f"reference_yaw_deg={cfg.scene.reference_franka_yaw_deg} "
+            f"delta_yaw_rad={delta_yaw_rad:.6f} "
+            f"robot_position={robot_position.tolist()} "
+            f"reference_position={reference_position.tolist()} "
+            f"corrected_base_hand_position={original_base_hand_position.tolist()} "
+            f"corrected_base_hand_orientation_wxyz="
+            f"{matrix_to_quaternion_wxyz(base_hand_rotation).tolist()}",
+            flush=True,
+        )
+
         base_hand_from_tool = quaternion_wxyz_to_matrix(
             np.asarray(
                 cfg.ik.tool_center_local_orientation_wxyz,
@@ -141,6 +182,7 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
 
         self._angled_cfg = angled_cfg
         self._configured_hand_pitch_deg = pitch_deg
+        self._ik_recompute_base_hand_rotation = base_hand_rotation
         self._angled_pose: AngledHandPose = angled_pose
         self._grasp_calibration: RearCenteredGraspCalibration = (
             grasp_calibration
@@ -174,6 +216,120 @@ class AngledHandCableRuntime(CableMountedSimulationRuntime):
             f"[DEBUG] exact hand target for esha carry match: "
             f"position={np.round(angled_pose.hand_position_world_m, 6).tolist()} "
             f"orientation_wxyz={list(angled_hand_orientation)}",
+            flush=True,
+        )
+
+    def _maybe_recompute_ik_target(self) -> None:
+        if not self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            return
+        if self.cable_mount is None or self.cable_mount.plug_frame is None:
+            raise RuntimeError(
+                "Merged IK target recompute requires cable_mount.plug_frame "
+                "from author_from_existing_grasp()"
+            )
+        stage = self.cable_mount.stage
+        if stage is None:
+            raise RuntimeError(
+                "Merged IK target recompute requires cable_mount.stage"
+            )
+
+        joint_prim = stage.GetPrimAtPath(
+            self.cfg.cable_mount.fixed_joint_path
+        )
+        if not joint_prim.IsValid() or not joint_prim.IsA(
+            UsdPhysics.FixedJoint
+        ):
+            raise RuntimeError(
+                "Merged grasp fixed joint is missing or invalid: "
+                f"{self.cfg.cable_mount.fixed_joint_path}"
+            )
+
+        joint = UsdPhysics.FixedJoint(joint_prim)
+        local_pos0 = joint.GetLocalPos0Attr().Get()
+        local_rot0 = joint.GetLocalRot0Attr().Get()
+        if local_pos0 is None or local_rot0 is None:
+            raise RuntimeError(
+                "Merged grasp fixed joint is missing LocalPos0/LocalRot0: "
+                f"{self.cfg.cable_mount.fixed_joint_path}"
+            )
+
+        rotation_imag = local_rot0.GetImaginary()
+        hand_from_plug = np.eye(4, dtype=np.float64)
+        hand_from_plug[:3, :3] = quaternion_wxyz_to_matrix(
+            np.asarray(
+                [
+                    float(local_rot0.GetReal()),
+                    float(rotation_imag[0]),
+                    float(rotation_imag[1]),
+                    float(rotation_imag[2]),
+                ],
+                dtype=np.float64,
+            )
+        )
+        hand_from_plug[:3, 3] = np.asarray(
+            [float(local_pos0[0]), float(local_pos0[1]), float(local_pos0[2])],
+            dtype=np.float64,
+        )
+
+        plug_from_tip = np.asarray(
+            self.cable_mount.plug_frame.plug_from_tip,
+            dtype=np.float64,
+        )
+        hand_from_tip = hand_from_plug @ plug_from_tip
+
+        angled_pose = compute_angled_hand_pose_preserving_tool(
+            base_hand_position_m=(
+                self._grasp_calibration.base_hand_position_world_m
+            ),
+            base_hand_rotation_world=self._ik_recompute_base_hand_rotation,
+            base_hand_from_tool_rotation=quaternion_wxyz_to_matrix(
+                np.asarray(
+                    self.cfg.ik.tool_center_local_orientation_wxyz,
+                    dtype=np.float64,
+                )
+            ),
+            tool_position_hand_m=self._grasp_calibration.tool_position_hand_m,
+            downward_pitch_deg=self._configured_hand_pitch_deg,
+            hand_from_tool_override=hand_from_tip,
+        )
+        corrected_orientation = tuple(
+            float(value)
+            for value in matrix_to_quaternion_wxyz(
+                angled_pose.hand_rotation_world
+            )
+        )
+        self.cfg = replace(
+            self.cfg,
+            ik=replace(
+                self.cfg.ik,
+                initial_position=tuple(
+                    float(value)
+                    for value in angled_pose.hand_position_world_m
+                ),
+                initial_orientation_wxyz=corrected_orientation,
+            ),
+        )
+        self._angled_pose = angled_pose
+
+        plug_axis = angled_pose.tool_rotation_world[:, 2]
+        metrics = measure_hand_plug_geometry(
+            hand_position_m=angled_pose.hand_position_world_m,
+            hand_rotation_world=angled_pose.hand_rotation_world,
+            plug_tip_position_m=angled_pose.tool_position_world_m,
+            plug_axis_world=plug_axis,
+        )
+        print(
+            "[DEBUG] merged IK target recomputed from live FixedJoint grasp\n"
+            f"  fixed_joint_path={self.cfg.cable_mount.fixed_joint_path}\n"
+            f"  corrected initial_position="
+            f"{list(self.cfg.ik.initial_position)}\n"
+            f"  corrected initial_orientation_wxyz="
+            f"{list(self.cfg.ik.initial_orientation_wxyz)}\n"
+            f"  recomputed plug_axis={np.round(plug_axis, 6).tolist()}\n"
+            f"  plug_axis[2]={plug_axis[2]:.6f}\n"
+            f"  wrist_higher_fingertips_lower="
+            f"{metrics.wrist_higher_fingertips_lower}\n"
+            f"  relative_pitch_deg={metrics.relative_pitch_deg:.6f}",
             flush=True,
         )
 

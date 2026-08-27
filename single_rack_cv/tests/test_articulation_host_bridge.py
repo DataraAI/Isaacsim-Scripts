@@ -38,8 +38,9 @@ class _FakeCudaTensor:
 
 
 class _FakeArticulationView:
-    def __init__(self, limits):
+    def __init__(self, limits, backend: str = "torch"):
         self.limits = limits
+        self._backend = backend
         self.position_calls = []
         self.target_calls = []
 
@@ -59,8 +60,9 @@ class _FakeArticulationView:
 
 
 class _FakeArticulation:
-    def __init__(self, limits):
-        self._articulation_view = _FakeArticulationView(limits)
+    def __init__(self, limits, backend: str = "torch"):
+        self._articulation_view = _FakeArticulationView(limits, backend=backend)
+        self._backend = backend
         self._device = "cpu"
         self.marker = "delegated"
 
@@ -89,7 +91,8 @@ class HostSafeArticulationTests(unittest.TestCase):
 
     def test_numpy_finger_commands_use_batched_articulation_view_tensors(self):
         articulation = _FakeArticulation(
-            np.zeros((1, 9, 2), dtype=np.float32)
+            np.zeros((1, 9, 2), dtype=np.float32),
+            backend="torch",
         )
         wrapped = HostSafeDofPropertiesArticulation(articulation)
         positions = np.asarray([0.02, 0.02], dtype=np.float64)
@@ -116,6 +119,34 @@ class HostSafeArticulationTests(unittest.TestCase):
         np.testing.assert_array_equal(immediate_indices.numpy(), indices)
         np.testing.assert_allclose(target_positions.numpy()[0], positions)
         np.testing.assert_array_equal(target_indices.numpy(), indices)
+
+    def test_numpy_backend_finger_commands_use_host_arrays(self):
+        articulation = _FakeArticulation(
+            np.zeros((1, 9, 2), dtype=np.float32),
+            backend="numpy",
+        )
+        wrapped = HostSafeDofPropertiesArticulation(articulation)
+        positions = np.asarray([0.02, 0.02], dtype=np.float64)
+        indices = np.asarray([7, 8], dtype=np.int32)
+
+        wrapped.set_joint_positions(positions, joint_indices=indices)
+        wrapped.set_joint_position_targets(positions, joint_indices=indices)
+
+        immediate_positions, _, immediate_indices = (
+            articulation._articulation_view.position_calls[0]
+        )
+        target_positions, _, target_indices = (
+            articulation._articulation_view.target_calls[0]
+        )
+        self.assertIsInstance(immediate_positions, np.ndarray)
+        self.assertIsInstance(immediate_indices, np.ndarray)
+        self.assertEqual(immediate_positions.shape, (1, 2))
+        self.assertEqual(immediate_positions.dtype, np.float32)
+        self.assertEqual(immediate_indices.dtype, np.int64)
+        np.testing.assert_allclose(immediate_positions[0], positions)
+        np.testing.assert_array_equal(immediate_indices, indices)
+        np.testing.assert_allclose(target_positions[0], positions)
+        np.testing.assert_array_equal(target_indices, indices)
 
     def test_non_vector_finger_commands_are_rejected(self):
         articulation = _FakeArticulation(

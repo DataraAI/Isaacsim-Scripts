@@ -78,8 +78,14 @@ class SceneConfig:
 
     franka_path: str = "/World/Franka"
     franka_asset_path: str = "/World/Franka/Robot"
-    franka_position: tuple[float, float, float] = (1.35, 0.0, 1.0)
-    franka_yaw_deg: float = 180.0
+    franka_position: tuple[float, float, float] = (
+        float(os.environ.get("MERGED_FRANKA_POSITION_X", "1.35")),
+        float(os.environ.get("MERGED_FRANKA_POSITION_Y", "0.0")),
+        float(os.environ.get("MERGED_FRANKA_POSITION_Z", "1.0")),
+    )
+    franka_yaw_deg: float = float(
+        os.environ.get("MERGED_FRANKA_YAW_DEG", "180.0")
+    )
 
     physics_dt: float = 1.0 / 60.0
     device: str = "cuda:0"
@@ -234,7 +240,9 @@ class CableMountConfig:
     )
     root_path: str = "/World/NetworkCable"
     tracked_plug_path: str = "/World/NetworkCable/E_crystal_head1_45"
-    fixed_joint_path: str = "/World/CableMountFixedJoint"
+    fixed_joint_path: str = os.environ.get(
+        "MERGED_FIXED_JOINT_PATH", "/World/CableMountFixedJoint"
+    )
     hand_link_name: str = "panda_hand"
     finger_link_names: tuple[str, str] = (
         "panda_leftfinger",

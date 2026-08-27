@@ -83,6 +83,20 @@ def run_pickup_phase(simulation_app):
 
         return result
     finally:
+        os.environ["MERGED_FRANKA_POSITION_X"] = str(
+            config_module.CONFIG.scene.franka_position[0]
+        )
+        os.environ["MERGED_FRANKA_POSITION_Y"] = str(
+            config_module.CONFIG.scene.franka_position[1]
+        )
+        os.environ["MERGED_FRANKA_POSITION_Z"] = str(
+            config_module.CONFIG.scene.franka_position[2]
+        )
+        os.environ["MERGED_FRANKA_YAW_DEG"] = str(
+            config_module.CONFIG.scene.franka_yaw_deg
+        )
+        os.environ["MERGED_FIXED_JOINT_PATH"] = "/World/CableGraspFixedJoint"
+        os.environ["ALREADY_GRASPED_BY_PICKUP_PIPELINE"] = "1"
         print("[DEBUG] about to call sys.path.remove(ESHA_PATH)", flush=True)
         sys.path.remove(ESHA_PATH)
         print("[DEBUG] sys.path.remove(ESHA_PATH) returned", flush=True)
@@ -92,7 +106,6 @@ def run_pickup_phase(simulation_app):
 
 
 def run_insertion_phase(simulation_app):
-    os.environ["ALREADY_GRASPED_BY_PICKUP_PIPELINE"] = "1"
     sys.path.insert(0, SINGLE_RACK_PATH)
     try:
         single_rack_root = Path(SINGLE_RACK_PATH)
@@ -115,7 +128,10 @@ def run_insertion_phase(simulation_app):
 def main() -> None:
     from isaacsim import SimulationApp
 
-    simulation_app = SimulationApp({"headless": False})
+    simulation_app = SimulationApp({
+        "headless": False,
+        "renderer_settings": ["--/rtx/scenedb/maxHistoryTransformCount=4096"],
+    })
 
     pickup_logger = run_pickup_phase(simulation_app)
     print(f"[MERGED] Pickup phase complete: {pickup_logger.run_id}")

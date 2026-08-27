@@ -38,6 +38,13 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         self.physics_scene = None
         super().__init__(simulation_app=simulation_app, cfg=cfg)
 
+    def _maybe_recompute_ik_target(self) -> None:
+        """No-op by default. Overridden for the already_grasped case to
+        correct cfg.ik.initial_position/initial_orientation_wxyz using
+        the real measured grasp, instead of the fixed calibration
+        constant. Runs after author_from_existing_grasp() and before
+        _create_ik()."""
+
     def _create_ik(self, assets_root: str):
         original_set_robot_base_pose = (
             sim_module.LulaKinematicsSolver.set_robot_base_pose
@@ -342,6 +349,17 @@ class CableMountedSimulationRuntime(SimulationRuntime):
         print("[DEBUG] about to call app_utils.update_app(steps=30)", flush=True)
         app_utils.update_app(steps=30)
         print("[DEBUG] app_utils.update_app(steps=30) returned", flush=True)
+
+        self._maybe_recompute_ik_target()
+        if self.cfg.cable_mount.already_grasped_by_pickup_pipeline:
+            print(
+                "[DEBUG] cfg.ik.initial_position before _create_ik(): "
+                f"{list(self.cfg.ik.initial_position)} "
+                f"initial_orientation_wxyz="
+                f"{list(self.cfg.ik.initial_orientation_wxyz)} "
+                f"backend={SimulationManager.get_backend()!r}",
+                flush=True,
+            )
 
         print("[DEBUG] about to call _create_ik()", flush=True)
         self.ik = self._create_ik(assets_root)
