@@ -81,6 +81,35 @@ def run_pickup_phase(simulation_app):
         )
         print("[DEBUG] esha run_pickup_phase() returned", flush=True)
 
+        # Snapshot Franka base Z at end of pickup for merged handoff compare.
+        try:
+            import omni.usd
+            from pxr import UsdGeom, Usd
+
+            stage = omni.usd.get_context().get_stage()
+            for path in ("/World/Franka", "/World/Franka/Robot"):
+                prim = stage.GetPrimAtPath(path) if stage else None
+                if prim is None or not prim.IsValid():
+                    print(f"[DEBUG] esha end Franka path missing: {path}", flush=True)
+                    continue
+                mat = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(prim)
+                # gf is row-major; translation is the last row in Gf, last column after .T numpy
+                import numpy as np
+
+                T = np.asarray(mat, dtype=np.float64).T
+                print(
+                    f"[DEBUG] esha end-of-pickup {path} world_pos="
+                    f"{np.round(T[:3, 3], 6).tolist()} "
+                    f"cfg.franka_position={list(config_module.CONFIG.scene.franka_position)}",
+                    flush=True,
+                )
+        except Exception as error:
+            print(
+                f"[DEBUG] esha end Franka pose snapshot failed: "
+                f"{type(error).__name__}: {error}",
+                flush=True,
+            )
+
         return result
     finally:
         os.environ["MERGED_FRANKA_POSITION_X"] = str(
