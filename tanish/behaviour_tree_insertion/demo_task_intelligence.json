@@ -1,0 +1,82 @@
+{
+  "tree": {
+    "type": "sequence",
+    "name": "Thin connector lengthwise insert into slot",
+    "children": [
+      {
+        "type": "action",
+        "name": "Move to observation pose",
+        "primitive": "navigate_to_workspace",
+        "inputs": {"position": [0.40, 0.20, 0.42]},
+        "preconditions": ["robot_ready"],
+        "success_conditions": ["at_workspace"]
+      },
+      {
+        "type": "selector",
+        "name": "Find the connector",
+        "children": [
+          {"type": "condition", "name": "Use cached detection", "fact": "target_visible"},
+          {
+            "type": "retry",
+            "name": "Retry camera detection",
+            "max_attempts": 2,
+            "child": {
+              "type": "action",
+              "name": "Detect thin connector",
+              "primitive": "perceive_objects",
+              "inputs": {"fail_first_attempt": true},
+              "success_conditions": ["target_visible"]
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "name": "Acquire the connector",
+        "children": [
+          {"type": "condition", "name": "Connector already held", "fact": "connector_held"},
+          {
+            "type": "retry",
+            "name": "Retry physical grasp",
+            "max_attempts": 2,
+            "child": {
+              "type": "action",
+              "name": "Physically grasp and lift connector",
+              "primitive": "grasp_object",
+              "preconditions": ["target_visible"],
+              "success_conditions": ["connector_held"]
+            }
+          }
+        ]
+      },
+      {"type": "condition", "name": "Confirm grasp before insert", "fact": "connector_held"},
+      {
+        "type": "action",
+        "name": "Rotate and insert connector lengthwise into slot",
+        "primitive": "manipulate_object",
+        "preconditions": ["connector_held"],
+        "success_conditions": ["connector_inserted"]
+      },
+      {
+        "type": "parallel",
+        "name": "Final checks in parallel",
+        "children": [
+          {
+            "type": "action",
+            "name": "Verify connector in port",
+            "primitive": "verify_connector_at_port",
+            "preconditions": ["connector_inserted"],
+            "success_conditions": ["connector_at_port"]
+          },
+          {
+            "type": "action",
+            "name": "Verify robot state",
+            "primitive": "inspect_workspace",
+            "preconditions": ["connector_inserted"],
+            "success_conditions": ["robot_state_valid"]
+          }
+        ]
+      }
+    ]
+  }
+}
