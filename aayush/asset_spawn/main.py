@@ -1,4 +1,4 @@
-"""Load DataHall, work table, UR10e, cable support, and network cable in Isaac Sim.
+"""Load DataHall, work table, UR10e + Robotiq 2F-85, support block, and network cable.
 
     /home/aayush/isaacsim/python.sh aayush/asset_spawn/main.py
 """
@@ -24,9 +24,10 @@ DATAHALL_PRIM_PATH = "/World/DataHall"
 WORK_TABLE_PATH = "/World/WorkTable"
 UR10E_MOUNT_PATH = "/World/UR10eMount"
 UR10E_PRIM_PATH = f"{UR10E_MOUNT_PATH}/ur10e"
-CABLE_ROOT_PATH = "/World/NetworkCable"
-CABLE_PLUG_PATH = "/World/NetworkCable/E_crystal_head1_45"
 CABLE_SUPPORT_PATH = "/World/CableSupportBlock"
+NETWORK_CABLE_ROOT_PATH = "/World/NetworkCable"
+TRACKED_PLUG_PRIM_PATH = f"{NETWORK_CABLE_ROOT_PATH}/E_crystal_head1_45"
+OTHER_PLUG_PRIM_PATH = f"{NETWORK_CABLE_ROOT_PATH}/E_crystal_head2_39"
 
 TABLE_POSITION = np.array([0.42, -0.6, 1.0], dtype=np.float64)
 TABLE_ORIENTATION_EULER_DEG = np.array([0.0, 0.0, -90.0], dtype=np.float64)
@@ -35,26 +36,27 @@ TABLE_COLOR = np.array([0.55, 0.35, 0.18], dtype=np.float64)
 
 UR10E_POSITION = np.array([0.18, -0.085, 1.03], dtype=np.float64)
 
-CABLE_PLUG_TARGET_XY = np.array([0.45, -0.35], dtype=np.float64)
-CABLE_SUPPORT_HEIGHT_M = 0.040
+CABLE_SUPPORT_XY = np.array([0.45, -0.35], dtype=np.float64)
+# Y/Z kept; X is set from the span of both crystal heads at spawn.
+CABLE_SUPPORT_SIZE_M = np.array([0.22, 0.05, 0.10], dtype=np.float64)
 CABLE_SUPPORT_COLOR = np.array([0.85, 0.45, 0.15], dtype=np.float64)
 CABLE_PLUG_CLEARANCE_M = 0.004
-CABLE_SUPPORT_XY_MARGIN_M = 0.012
+CABLE_SUPPORT_XY_MARGIN_M = 0.01
 
 UR10E_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/UniversalRobots/ur10e/ur10e.usd"
-ROBOTIQ_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/Robotiq/2F-140/Robotiq_2F_140.usd"
+ROBOTIQ_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/Robotiq/2F-85/Robotiq_2F_85.usd"
 ROBOTIQ_USD_FALLBACK = Path(
     "/home/aayush/isaacsim/exts/isaacsim.asset.transformer.rules/data/tests/ur10e/"
-    "Robotiq/2F-140/Robotiq_2F_140_physics_edit.usd"
+    "Robotiq/2F-85/Robotiq_2F_85.usda"
 )
 GRIPPER_ASSEMBLY_NAMESPACE = "Gripper"
-GRIPPER_VARIANT_NAME = "Robotiq_2F_140"
-GRIPPER_PRIM_NAME = "robotiq_2f_140"
-# Tutorial Robot Assembler (URDF-imported gripper) uses robotiq_arg2f_base_link.
-# Isaac bundled Gripper variant payloads use robotiq_base_link instead.
+GRIPPER_VARIANT_NAME = "Robotiq_2F_85"
+GRIPPER_PRIM_NAME = "Robotiq_2F_85"
+# Bundled 2F-85 Gripper variant uses base_link under the Robotiq_2F_85 prim.
 GRIPPER_ATTACH_LINK_CANDIDATES = (
     "robotiq_arg2f_base_link",
     "robotiq_base_link",
+    "base_link",
 )
 WRIST_LINK_NAME = "wrist_3_link"
 
@@ -62,7 +64,7 @@ simulation_app = SimulationApp({"headless": False})
 
 import omni.usd
 from isaacsim.core.api import World
-from isaacsim.core.api.objects import FixedCuboid
+from isaacsim.core.api.objects import VisualCuboid
 from isaacsim.core.simulation_manager import SimulationManager
 from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -109,10 +111,21 @@ def find_descendant(root_path: str, name: str) -> str | None:
 
 
 def find_gripper_attach_link(root_path: str) -> str | None:
+    root = stage.GetPrimAtPath(root_path)
+    if not root or not root.IsValid():
+        return None
     for link_name in GRIPPER_ATTACH_LINK_CANDIDATES:
-        link_path = find_descendant(root_path, link_name)
-        if link_path:
-            return link_path
+        wanted = link_name.lower()
+        for prim in Usd.PrimRange(root):
+            if prim.GetName().lower() != wanted:
+                continue
+            path = str(prim.GetPath())
+            # Avoid matching the UR10e arm base_link when looking for 2F-85.
+            if wanted == "base_link":
+                lowered = path.lower()
+                if not any(token in lowered for token in ("robotiq", "2f_85", "2f-85")):
+                    continue
+            return path
     return None
 
 
@@ -169,32 +182,109 @@ def enable_gpu_dynamics() -> None:
         api.CreateSolverTypeAttr("TGS").Set("TGS")
     for scene in SimulationManager.get_physics_scenes():
         scene.set_enabled_gpu_dynamics(True)
-    print("[SPAWN] PhysX GPU dynamics enabled (required for soft cable)")
+    print("[SPAWN] PhysX GPU dynamics enabled")
 
 
-def disable_gravity_on_robot(root_path: str) -> None:
+def strip_physics_from_prim(prim_path: str) -> None:
+    """Remove rigid-body / collision so a visual prim stays suspended in air."""
+
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        return
+    count = 0
+    for child in Usd.PrimRange(prim):
+        try:
+            if child.HasAPI(UsdPhysics.CollisionAPI):
+                child.RemoveAPI(UsdPhysics.CollisionAPI)
+                count += 1
+        except Exception:
+            attr = child.GetAttribute("physics:collisionEnabled")
+            if attr and attr.IsValid():
+                attr.Set(False)
+                count += 1
+        try:
+            if child.HasAPI(UsdPhysics.RigidBodyAPI):
+                child.RemoveAPI(UsdPhysics.RigidBodyAPI)
+                count += 1
+        except Exception:
+            pass
+        for attr_name in ("physics:collisionEnabled", "physics:rigidBodyEnabled"):
+            attr = child.GetAttribute(attr_name)
+            if attr and attr.IsValid():
+                try:
+                    attr.Set(False)
+                except Exception:
+                    pass
+    print(f"[SPAWN] Stripped physics/collision from {prim_path} ({count} API change(s))")
+
+
+def configure_robot_physics(root_path: str) -> None:
+    """Enable link collision/physics; disable self-collision; keep gravity off.
+
+    Gravity stays disabled so the arm holds its mount pose (work table has no
+    collision and will not catch a falling robot).
+    """
+
     root = stage.GetPrimAtPath(root_path)
     if not root or not root.IsValid():
         return
-    count = 0
+
+    art_roots = 0
     for prim in Usd.PrimRange(root):
-        if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+        if not prim.HasAPI(UsdPhysics.ArticulationRootAPI):
             continue
-        PhysxSchema.PhysxRigidBodyAPI.Apply(prim).CreateDisableGravityAttr(True)
-        count += 1
-    print(f"[SPAWN] Disabled gravity on {count} UR10e rigid-body link(s)")
+        art_roots += 1
+        try:
+            PhysxSchema.PhysxArticulationAPI.Apply(prim).CreateEnabledSelfCollisionsAttr(False).Set(
+                False
+            )
+        except Exception:
+            attr = prim.GetAttribute("physxArticulation:enabledSelfCollisions")
+            if attr and attr.IsValid():
+                attr.Set(False)
+
+    collision_count = 0
+    rigid_count = 0
+    for prim in Usd.PrimRange(root):
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            try:
+                rb = UsdPhysics.RigidBodyAPI(prim)
+                rb.CreateRigidBodyEnabledAttr(True).Set(True)
+                PhysxSchema.PhysxRigidBodyAPI.Apply(prim).CreateDisableGravityAttr(True).Set(True)
+                rigid_count += 1
+            except Exception:
+                pass
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            try:
+                UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr(True).Set(True)
+                collision_count += 1
+            except Exception:
+                pass
+        else:
+            path = str(prim.GetPath()).lower()
+            if "collision" in path or prim.IsA(UsdGeom.Mesh):
+                try:
+                    UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(True).Set(True)
+                    collision_count += 1
+                except Exception:
+                    pass
+
+    print(
+        f"[SPAWN] Robot physics: articulation_roots={art_roots} "
+        f"rigid={rigid_count} collisions={collision_count} self_collision=False gravity=off"
+    )
 
 
 def resolve_robotiq_usd() -> str:
     for candidate in (ROBOTIQ_USD_LOCAL, ROBOTIQ_USD_FALLBACK):
         if candidate.is_file():
             path = str(candidate.resolve())
-            print(f"[SPAWN] Using Robotiq 2F-140 USD: {path}")
+            print(f"[SPAWN] Using Robotiq 2F-85 USD: {path}")
             return path
     assets_root = get_assets_root_path()
     if assets_root:
-        return assets_root + "/Isaac/Robots/Robotiq/2F-140/Robotiq_2F_140.usd"
-    raise RuntimeError("Could not find Robotiq 2F-140 USD.")
+        return assets_root + "/Isaac/Robots/Robotiq/2F-85/Robotiq_2F_85.usd"
+    raise RuntimeError("Could not find Robotiq 2F-85 USD.")
 
 
 def select_gripper_variant(robot_prim) -> str | None:
@@ -209,10 +299,10 @@ def select_gripper_variant(robot_prim) -> str | None:
     lowered = {name.lower(): name for name in names}
     for candidate in (
         GRIPPER_VARIANT_NAME,
-        "Robotiq_2f_140",
-        "robotiq_2f_140",
-        "2F_140",
-        "2F-140",
+        "Robotiq_2f_85",
+        "robotiq_2f_85",
+        "2F_85",
+        "2F-85",
     ):
         if candidate.lower() in lowered:
             chosen = lowered[candidate.lower()]
@@ -223,7 +313,7 @@ def select_gripper_variant(robot_prim) -> str | None:
 
 
 def assemble_robotiq_gripper(robot_prim_path: str, wrist_path: str) -> str:
-    """Attach Robotiq 2F-140 at wrist_3_link via Robot Assembler."""
+    """Attach Robotiq 2F-85 at wrist_3_link via Robot Assembler."""
 
     gripper_prim_path = f"{robot_prim_path}/{GRIPPER_PRIM_NAME}"
     add_reference_to_stage(usd_path=resolve_robotiq_usd(), prim_path=gripper_prim_path)
@@ -264,7 +354,9 @@ def assemble_robotiq_gripper(robot_prim_path: str, wrist_path: str) -> str:
     return gripper_base_path
 
 
-def attach_robotiq_gripper(robot_prim_path: str) -> tuple[str, str]:
+def attach_robotiq_2f85(robot_prim_path: str) -> tuple[str, str]:
+    """Ensure Robotiq 2F-85 is attached (Gripper variant, else assembler)."""
+
     wrist_path = find_descendant(robot_prim_path, WRIST_LINK_NAME)
     if not wrist_path:
         raise RuntimeError(f"Could not find {WRIST_LINK_NAME} under {robot_prim_path}")
@@ -343,7 +435,7 @@ def apply_mount_translate(mount_path: str, translation: np.ndarray) -> None:
 
 
 def finalize_ur10e_placement(robot, mount_path: str, base_link_path: str) -> None:
-    """Place the robot via mount world Xform; fall back to base_link on the table."""
+    """Place the robot via mount world Xform; fall back to base_link on the table top."""
 
     apply_mount_translate(mount_path, UR10E_POSITION)
     simulation_app.update()
@@ -378,86 +470,121 @@ def finalize_ur10e_placement(robot, mount_path: str, base_link_path: str) -> Non
     )
 
 
-def load_cable_reference() -> str:
-    if stage.GetPrimAtPath(CABLE_ROOT_PATH).IsValid():
-        stage.RemovePrim(Sdf.Path(CABLE_ROOT_PATH))
-    print(f"[SPAWN] Referencing network cable: {NETWORK_CABLE_USD}")
-    add_reference_to_stage(usd_path=NETWORK_CABLE_USD, prim_path=CABLE_ROOT_PATH)
-    wait_for_stage_loading()
-    plug_path = find_descendant(CABLE_ROOT_PATH, "E_crystal_head1_45") or CABLE_PLUG_PATH
-    if not stage.GetPrimAtPath(plug_path).IsValid():
-        raise RuntimeError(f"Cable is missing crystal head at {plug_path}")
-    return plug_path
+def create_cable_support_block(size_xyz: np.ndarray | None = None) -> float:
+    """Pedestal on the table top spanning both crystal heads along X."""
 
-
-def place_cable_plug_at_xy(plug_path: str, plug_xy: np.ndarray, support_top_z: float) -> None:
-    plug_min, _, plug_center = prim_bbox(plug_path)
-    root_position = world_translation(CABLE_ROOT_PATH)
-    desired_plug_min_z = support_top_z + CABLE_PLUG_CLEARANCE_M
-    delta = np.array(
-        [
-            float(plug_xy[0]) - plug_center[0],
-            float(plug_xy[1]) - plug_center[1],
-            desired_plug_min_z - plug_min[2],
-        ],
-        dtype=np.float64,
-    )
-    set_world_translate(CABLE_ROOT_PATH, root_position + delta)
-    wait_for_stage_loading()
-
-
-def cable_support_size_from_bbox() -> np.ndarray:
-    root_min, root_max, _ = prim_bbox(CABLE_ROOT_PATH)
-    dims = root_max - root_min
-    size_xy = dims[:2] + 2.0 * CABLE_SUPPORT_XY_MARGIN_M
-    return np.array(
-        [
-            max(0.08, float(size_xy[0])),
-            max(0.035, float(size_xy[1])),
-            CABLE_SUPPORT_HEIGHT_M,
-        ],
-        dtype=np.float64,
-    )
-
-
-def create_cable_support_block(size_xyz: np.ndarray) -> float:
     if stage.GetPrimAtPath(CABLE_SUPPORT_PATH).IsValid():
         stage.RemovePrim(Sdf.Path(CABLE_SUPPORT_PATH))
 
     top_z = table_top_z()
-    center = np.array(
-        [
-            CABLE_PLUG_TARGET_XY[0],
-            CABLE_PLUG_TARGET_XY[1],
-            top_z + 0.5 * size_xyz[2],
-        ],
-        dtype=np.float64,
+    size = CABLE_SUPPORT_SIZE_M if size_xyz is None else np.asarray(size_xyz, dtype=np.float64)
+    size_x, size_y, size_z = (float(v) for v in size)
+    center = Gf.Vec3d(
+        float(CABLE_SUPPORT_XY[0]),
+        float(CABLE_SUPPORT_XY[1]),
+        top_z + 0.5 * size_z,
     )
-    world.scene.add(
-        FixedCuboid(
-            name="cable_support_block",
-            prim_path=CABLE_SUPPORT_PATH,
-            position=center,
-            scale=size_xyz,
-            size=1.0,
-            color=CABLE_SUPPORT_COLOR,
-            visible=True,
-        )
+
+    cube = UsdGeom.Cube.Define(stage, Sdf.Path(CABLE_SUPPORT_PATH))
+    cube.CreateSizeAttr(1.0)
+    cube.CreateDisplayColorAttr(
+        [Gf.Vec3f(float(CABLE_SUPPORT_COLOR[0]), float(CABLE_SUPPORT_COLOR[1]), float(CABLE_SUPPORT_COLOR[2]))]
     )
-    block_top_z = float(top_z + size_xyz[2])
+    xform = UsdGeom.Xformable(cube.GetPrim())
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(center)
+    xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(size_x, size_y, size_z))
+    UsdPhysics.CollisionAPI.Apply(cube.GetPrim()).CreateCollisionEnabledAttr(True).Set(True)
+
+    block_top_z = float(center[2] + 0.5 * size_z)
     print(
-        f"[SPAWN] Cable support at {np.round(center, 4)} "
-        f"size={size_xyz.tolist()} top_z={block_top_z:.4f}"
+        f"[SPAWN] Cable support: center={np.round(np.array(center), 4)} "
+        f"size_m=({size_x:.3f}, {size_y:.3f}, {size_z:.3f}) "
+        f"table_top_z={top_z:.4f} block_top_z={block_top_z:.4f}"
     )
     return block_top_z
 
 
-def log_cable_plug(plug_path: str, block_top_z: float) -> None:
-    plug_min, _, plug_center = prim_bbox(plug_path)
+def load_network_cable() -> tuple[str, str]:
+    """Reference the network cable USD. Does not enable physics or collision."""
+
+    if stage.GetPrimAtPath(NETWORK_CABLE_ROOT_PATH).IsValid():
+        stage.RemovePrim(Sdf.Path(NETWORK_CABLE_ROOT_PATH))
+        for _ in range(10):
+            simulation_app.update()
+            time.sleep(0.01)
+
+    print(f"[SPAWN] Referencing network cable: {NETWORK_CABLE_USD}")
+    add_reference_to_stage(usd_path=NETWORK_CABLE_USD, prim_path=NETWORK_CABLE_ROOT_PATH)
+    wait_for_stage_loading()
+
+    path45 = find_descendant(NETWORK_CABLE_ROOT_PATH, "E_crystal_head1_45") or TRACKED_PLUG_PRIM_PATH
+    path39 = find_descendant(NETWORK_CABLE_ROOT_PATH, "E_crystal_head2_39") or OTHER_PLUG_PRIM_PATH
+    for path, label in ((path45, "E_crystal_head1_45"), (path39, "E_crystal_head2_39")):
+        if not stage.GetPrimAtPath(path).IsValid():
+            raise RuntimeError(f"Cable is missing {label} at {path}")
     print(
-        f"[SPAWN] Cable plug center={np.round(plug_center, 4)} "
-        f"plug_min_z={plug_min[2]:.4f} block_top={block_top_z:.4f}"
+        f"[SPAWN] Network cable loaded at {NETWORK_CABLE_ROOT_PATH} "
+        f"(physics/collision not enabled)"
     )
+    return path45, path39
+
+
+def support_size_for_both_heads(path45: str, path39: str) -> np.ndarray:
+    """Block X matches the authored span of both heads so each sits on an end."""
+
+    min45, max45, _ = prim_bbox(path45)
+    min39, max39, _ = prim_bbox(path39)
+    lo = np.minimum(min45, min39)
+    hi = np.maximum(max45, max39)
+    span = hi - lo
+    size_x = float(span[0]) + 2.0 * float(CABLE_SUPPORT_XY_MARGIN_M)
+    size_y = max(float(CABLE_SUPPORT_SIZE_M[1]), float(span[1]) + 2.0 * float(CABLE_SUPPORT_XY_MARGIN_M))
+    size_z = float(CABLE_SUPPORT_SIZE_M[2])
+    return np.array([size_x, size_y, size_z], dtype=np.float64)
+
+
+def place_crystal_heads_on_block_ends(
+    path45: str, path39: str, block_top_z: float
+) -> None:
+    """Translate only the cable root so head45 and head39 sit on opposite block ends."""
+
+    _block_min, _block_max, block_center = prim_bbox(CABLE_SUPPORT_PATH)
+    min45, max45, c45 = prim_bbox(path45)
+    min39, max39, c39 = prim_bbox(path39)
+
+    heads_mid_xy = 0.5 * (c45[:2] + c39[:2])
+    lowest_min_z = min(float(min45[2]), float(min39[2]))
+    desired_min_z = float(block_top_z) + float(CABLE_PLUG_CLEARANCE_M)
+
+    root_t = world_translation(NETWORK_CABLE_ROOT_PATH)
+    delta = np.array(
+        [
+            float(block_center[0]) - float(heads_mid_xy[0]),
+            float(block_center[1]) - float(heads_mid_xy[1]),
+            desired_min_z - lowest_min_z,
+        ],
+        dtype=np.float64,
+    )
+    set_world_translate(NETWORK_CABLE_ROOT_PATH, root_t + delta)
+    for _ in range(5):
+        simulation_app.update()
+
+    min45, max45, c45 = prim_bbox(path45)
+    min39, max39, c39 = prim_bbox(path39)
+    block_min, block_max, _ = prim_bbox(CABLE_SUPPORT_PATH)
+    print(
+        f"[SPAWN] Heads on block ends: "
+        f"head45_center={np.round(c45, 4)} head39_center={np.round(c39, 4)} "
+        f"block_x=[{block_min[0]:.4f}, {block_max[0]:.4f}] "
+        f"min_z45={min45[2]:.4f} min_z39={min39[2]:.4f} "
+        f"block_top_z={block_top_z:.4f}"
+    )
+    if abs(min(float(min45[2]), float(min39[2])) - desired_min_z) > 0.015:
+        print(
+            f"[SPAWN] WARNING: heads not seated on block "
+            f"(expected min_z ~{desired_min_z:.4f})"
+        )
 
 
 light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
@@ -468,9 +595,10 @@ add_reference_to_stage(usd_path=DATAHALL_USD, prim_path=DATAHALL_PRIM_PATH)
 wait_for_stage_loading()
 print(f"[SPAWN] DataHall loaded at {DATAHALL_PRIM_PATH}")
 
+# Visual-only table: suspended at TABLE_POSITION with no physics/collision.
 table_orientation = euler_angles_to_quats(np.radians(TABLE_ORIENTATION_EULER_DEG))
 world.scene.add(
-    FixedCuboid(
+    VisualCuboid(
         name="work_table",
         prim_path=WORK_TABLE_PATH,
         position=TABLE_POSITION,
@@ -481,21 +609,19 @@ world.scene.add(
         visible=True,
     )
 )
+strip_physics_from_prim(WORK_TABLE_PATH)
 print(
-    f"[SPAWN] Work table position={TABLE_POSITION.tolist()} "
+    f"[SPAWN] Work table (visual only, no physics) position={TABLE_POSITION.tolist()} "
     f"euler_deg={TABLE_ORIENTATION_EULER_DEG.tolist()} top_z={table_top_z():.4f}"
 )
 
 enable_gpu_dynamics()
 
-plug_path = load_cable_reference()
-place_cable_plug_at_xy(plug_path, CABLE_PLUG_TARGET_XY, table_top_z())
-support_size = cable_support_size_from_bbox()
-print(f"[SPAWN] Cable support size from cable bbox: {support_size.tolist()}")
-
-block_top_z = create_cable_support_block(support_size)
-place_cable_plug_at_xy(plug_path, CABLE_PLUG_TARGET_XY, block_top_z)
-log_cable_plug(plug_path, block_top_z)
+# Load cable first so the support can span both crystal heads.
+path45, path39 = load_network_cable()
+block_size = support_size_for_both_heads(path45, path39)
+block_top_z = create_cable_support_block(block_size)
+place_crystal_heads_on_block_ends(path45, path39, block_top_z)
 
 set_mount_world_translate(UR10E_MOUNT_PATH, UR10E_POSITION)
 
@@ -507,7 +633,7 @@ base_link_path = find_descendant(UR10E_PRIM_PATH, "base_link")
 if not base_link_path:
     raise RuntimeError(f"Could not find base_link under {UR10E_PRIM_PATH}")
 
-end_effector_path, wrist_path = attach_robotiq_gripper(UR10E_PRIM_PATH)
+end_effector_path, wrist_path = attach_robotiq_2f85(UR10E_PRIM_PATH)
 
 ur10e_robot = world.scene.add(
     SingleManipulator(
@@ -519,12 +645,12 @@ ur10e_robot = world.scene.add(
 
 world.reset()
 finalize_ur10e_placement(ur10e_robot, UR10E_MOUNT_PATH, base_link_path)
-disable_gravity_on_robot(UR10E_PRIM_PATH)
+configure_robot_physics(UR10E_PRIM_PATH)
+strip_physics_from_prim(WORK_TABLE_PATH)
+# Re-seat after reset so both heads stay on the block ends.
+place_crystal_heads_on_block_ends(path45, path39, block_top_z)
 
-place_cable_plug_at_xy(plug_path, CABLE_PLUG_TARGET_XY, block_top_z)
-log_cable_plug(plug_path, block_top_z)
-
-print(f"[SPAWN] UR10e wrist={wrist_path} end_effector={end_effector_path}")
+print(f"[SPAWN] UR10e + Robotiq 2F-85 wrist={wrist_path} end_effector={end_effector_path}")
 print("[SPAWN] Press Play to run physics. Isaac Sim will stay open until you quit.")
 
 simulation_app.update()
