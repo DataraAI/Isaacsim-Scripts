@@ -40,8 +40,9 @@ CABLE_SUPPORT_XY = np.array([0.45, -0.35], dtype=np.float64)
 # Y/Z kept; X is set from the span of both crystal heads at spawn.
 CABLE_SUPPORT_SIZE_M = np.array([0.22, 0.05, 0.10], dtype=np.float64)
 CABLE_SUPPORT_COLOR = np.array([0.85, 0.45, 0.15], dtype=np.float64)
-CABLE_PLUG_CLEARANCE_M = 0.004
 CABLE_SUPPORT_XY_MARGIN_M = 0.01
+# Absolute world Z for /World/NetworkCable after XY seating on the block.
+CABLE_ROOT_Z = 1.13
 
 UR10E_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/UniversalRobots/ur10e/ur10e.usd"
 ROBOTIQ_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/Robotiq/2F-85/Robotiq_2F_85.usd"
@@ -63,6 +64,7 @@ WRIST_LINK_NAME = "wrist_3_link"
 simulation_app = SimulationApp({"headless": False})
 
 import omni.usd
+import omni.timeline
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import VisualCuboid
 from isaacsim.core.simulation_manager import SimulationManager
@@ -223,7 +225,13 @@ def configure_robot_physics(root_path: str) -> None:
 
     Gravity stays disabled so the arm holds its mount pose (work table has no
     collision and will not catch a falling robot).
+
+    UR10e */collisions meshes are authored as triangle meshes. PhysX rejects
+    those on dynamic articulation links — set convexHull (and the matching
+    PhysX API) explicitly so Play does not spam fallback errors.
     """
+
+    from omni.physx.scripts import utils as physx_utils
 
     root = stage.GetPrimAtPath(root_path)
     if not root or not root.IsValid():
@@ -245,6 +253,7 @@ def configure_robot_physics(root_path: str) -> None:
 
     collision_count = 0
     rigid_count = 0
+    convex_count = 0
     for prim in Usd.PrimRange(root):
         if prim.HasAPI(UsdPhysics.RigidBodyAPI):
             try:
@@ -254,24 +263,51 @@ def configure_robot_physics(root_path: str) -> None:
                 rigid_count += 1
             except Exception:
                 pass
-        if prim.HasAPI(UsdPhysics.CollisionAPI):
-            try:
-                UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr(True).Set(True)
-                collision_count += 1
-            except Exception:
-                pass
-        else:
-            path = str(prim.GetPath()).lower()
-            if "collision" in path or prim.IsA(UsdGeom.Mesh):
-                try:
-                    UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(True).Set(True)
-                    collision_count += 1
-                except Exception:
-                    pass
+
+        path_l = str(prim.GetPath()).lower()
+        name_l = prim.GetName().lower()
+        is_collision_prim = (
+            prim.HasAPI(UsdPhysics.CollisionAPI)
+            or name_l == "collisions"
+            or "/collisions" in path_l
+            or (prim.IsA(UsdGeom.Mesh) and "collision" in path_l)
+        )
+        if not is_collision_prim:
+            continue
+
+        try:
+            UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(True).Set(True)
+            collision_count += 1
+        except Exception:
+            pass
+
+        # Prefer the PhysX helper when the prim is a mesh; otherwise author the
+        # same APIs onto UR */collisions prims (often not reported as Mesh).
+        try:
+            if prim.IsA(UsdGeom.Mesh) or prim.IsInstanceable():
+                physx_utils.setCollider(prim, UsdPhysics.Tokens.convexHull)
+            else:
+                PhysxSchema.PhysxCollisionAPI.Apply(prim)
+                mesh_api = UsdPhysics.MeshCollisionAPI.Apply(prim)
+                mesh_api.CreateApproximationAttr().Set(UsdPhysics.Tokens.convexHull)
+                for tri_api in (
+                    PhysxSchema.PhysxTriangleMeshCollisionAPI,
+                    PhysxSchema.PhysxTriangleMeshSimplificationCollisionAPI,
+                ):
+                    try:
+                        if prim.HasAPI(tri_api):
+                            prim.RemoveAPI(tri_api)
+                    except Exception:
+                        pass
+                PhysxSchema.PhysxConvexHullCollisionAPI.Apply(prim)
+            convex_count += 1
+        except Exception as exc:
+            print(f"[SPAWN] convexHull skip {prim.GetPath()}: {exc}")
 
     print(
         f"[SPAWN] Robot physics: articulation_roots={art_roots} "
-        f"rigid={rigid_count} collisions={collision_count} self_collision=False gravity=off"
+        f"rigid={rigid_count} collisions={collision_count} "
+        f"convexHull={convex_count} self_collision=False gravity=off"
     )
 
 
@@ -554,37 +590,54 @@ def place_crystal_heads_on_block_ends(
     min39, max39, c39 = prim_bbox(path39)
 
     heads_mid_xy = 0.5 * (c45[:2] + c39[:2])
-    lowest_min_z = min(float(min45[2]), float(min39[2]))
-    desired_min_z = float(block_top_z) + float(CABLE_PLUG_CLEARANCE_M)
-
     root_t = world_translation(NETWORK_CABLE_ROOT_PATH)
-    delta = np.array(
+    # XY: center heads on the block. Z: fixed world height for the cable root.
+    target = np.array(
         [
-            float(block_center[0]) - float(heads_mid_xy[0]),
-            float(block_center[1]) - float(heads_mid_xy[1]),
-            desired_min_z - lowest_min_z,
+            float(block_center[0]) - float(heads_mid_xy[0]) + float(root_t[0]),
+            float(block_center[1]) - float(heads_mid_xy[1]) + float(root_t[1]),
+            float(CABLE_ROOT_Z),
         ],
         dtype=np.float64,
     )
-    set_world_translate(NETWORK_CABLE_ROOT_PATH, root_t + delta)
+    set_world_translate(NETWORK_CABLE_ROOT_PATH, target)
     for _ in range(5):
         simulation_app.update()
 
     min45, max45, c45 = prim_bbox(path45)
     min39, max39, c39 = prim_bbox(path39)
     block_min, block_max, _ = prim_bbox(CABLE_SUPPORT_PATH)
+    root_z = float(world_translation(NETWORK_CABLE_ROOT_PATH)[2])
     print(
         f"[SPAWN] Heads on block ends: "
         f"head45_center={np.round(c45, 4)} head39_center={np.round(c39, 4)} "
         f"block_x=[{block_min[0]:.4f}, {block_max[0]:.4f}] "
         f"min_z45={min45[2]:.4f} min_z39={min39[2]:.4f} "
-        f"block_top_z={block_top_z:.4f}"
+        f"cable_root_z={root_z:.4f} block_top_z={block_top_z:.4f}"
     )
-    if abs(min(float(min45[2]), float(min39[2])) - desired_min_z) > 0.015:
-        print(
-            f"[SPAWN] WARNING: heads not seated on block "
-            f"(expected min_z ~{desired_min_z:.4f})"
-        )
+
+
+def rebind_cable_deformable() -> None:
+    """Rebuild PhysX after a cable-root translate so E_line_35 reattaches.
+
+    Translating /World/NetworkCable after the soft body is initialized leaves
+    the line mesh at the old pose while the crystal heads move with the root.
+    Pause → Stop → Play in the Isaac UI rebuilds the deformable from the
+    current USD; mirror that here and do not translate the cable afterward.
+    """
+
+    timeline = omni.timeline.get_timeline_interface()
+    if timeline.is_playing():
+        timeline.pause()
+    timeline.stop()
+    for _ in range(20):
+        simulation_app.update()
+        time.sleep(0.01)
+    timeline.play()
+    for _ in range(30):
+        simulation_app.update()
+        time.sleep(0.01)
+    print("[SPAWN] Timeline stop/play — soft cable rebound to crystal heads")
 
 
 light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
@@ -617,11 +670,11 @@ print(
 
 enable_gpu_dynamics()
 
-# Load cable first so the support can span both crystal heads.
+# Load cable to size the support from both heads (authored span). Do not seat
+# yet — a root translate after PhysX init detaches E_line_35 from the heads.
 path45, path39 = load_network_cable()
 block_size = support_size_for_both_heads(path45, path39)
 block_top_z = create_cable_support_block(block_size)
-place_crystal_heads_on_block_ends(path45, path39, block_top_z)
 
 set_mount_world_translate(UR10E_MOUNT_PATH, UR10E_POSITION)
 
@@ -643,12 +696,21 @@ ur10e_robot = world.scene.add(
     )
 )
 
+# Author convexHull before the first PhysX parse so Play does not fall back.
+configure_robot_physics(UR10E_PRIM_PATH)
 world.reset()
 finalize_ur10e_placement(ur10e_robot, UR10E_MOUNT_PATH, base_link_path)
 configure_robot_physics(UR10E_PRIM_PATH)
 strip_physics_from_prim(WORK_TABLE_PATH)
-# Re-seat after reset so both heads stay on the block ends.
+
+# Fresh cable, seat once, then rebuild PhysX so the soft line stays attached.
+path45, path39 = load_network_cable()
 place_crystal_heads_on_block_ends(path45, path39, block_top_z)
+configure_robot_physics(UR10E_PRIM_PATH)
+rebind_cable_deformable()
+finalize_ur10e_placement(ur10e_robot, UR10E_MOUNT_PATH, base_link_path)
+configure_robot_physics(UR10E_PRIM_PATH)
+strip_physics_from_prim(WORK_TABLE_PATH)
 
 print(f"[SPAWN] UR10e + Robotiq 2F-85 wrist={wrist_path} end_effector={end_effector_path}")
 print("[SPAWN] Press Play to run physics. Isaac Sim will stay open until you quit.")
