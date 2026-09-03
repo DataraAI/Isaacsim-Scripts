@@ -1,0 +1,53 @@
+{
+  "tree": {
+    "type": "sequence",
+    "name": "Grasp and lift ethernet cable head",
+    "children": [
+      {
+        "type": "action",
+        "name": "Move to observation pose",
+        "primitive": "navigate_to_workspace",
+        "preconditions": ["robot_ready"],
+        "success_conditions": ["at_workspace"]
+      },
+      {
+        "type": "selector",
+        "name": "Find grasp part on crystal head 45",
+        "children": [
+          {"type": "condition", "name": "Use cached detection", "fact": "target_visible"},
+          {
+            "type": "retry",
+            "name": "Retry detection",
+            "max_attempts": 3,
+            "child": {
+              "type": "action",
+              "name": "Detect E_part006_44",
+              "primitive": "perceive_objects",
+              "success_conditions": ["target_visible"]
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "name": "Acquire the cable",
+        "children": [
+          {"type": "condition", "name": "Cable already held", "fact": "cable_held"},
+          {
+            "type": "retry",
+            "name": "Retry physical grasp",
+            "max_attempts": 2,
+            "child": {
+              "type": "action",
+              "name": "Grasp and lift E_part006_44",
+              "primitive": "grasp_object",
+              "preconditions": ["target_visible"],
+              "success_conditions": ["cable_held"]
+            }
+          }
+        ]
+      },
+      {"type": "condition", "name": "Confirm grasp after lift", "fact": "cable_held"}
+    ]
+  }
+}

@@ -359,6 +359,14 @@ class FrankaMotionController(BaseController):
 
         self._joint_interp_start = start
         self._joint_interp_goal = goal
+        # When carrying an object, lock finger DOFs at the closed command so the
+        # IK goal cannot interpolate them open mid-ascent (common slip mode).
+        if cmd.get("hold_gripper"):
+            closed = np.asarray(self._gripper.joint_closed_positions, dtype=np.float64).flatten()
+            for finger_i, joint_i in enumerate(self._gripper_joint_indices(n_dof)):
+                if finger_i < len(closed) and 0 <= joint_i < n_dof:
+                    self._joint_interp_start[joint_i] = float(closed[finger_i])
+                    self._joint_interp_goal[joint_i] = float(closed[finger_i])
         self._joint_interp_steps = max(1, int(cmd.get("joint_steps", 120)))
         self._joint_interp_step = 0
 

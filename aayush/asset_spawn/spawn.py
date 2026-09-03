@@ -39,13 +39,24 @@ TABLE_COLOR = np.array([0.55, 0.35, 0.18], dtype=np.float64)
 
 UR10E_POSITION = np.array([0.18, -0.085, 1.03], dtype=np.float64)
 
-CABLE_SUPPORT_XY = np.array([0.45, -0.35], dtype=np.float64)
+CABLE_SUPPORT_XY = np.array([0.435, -0.35], dtype=np.float64)
 # Y/Z kept; X is set from the span of both crystal heads at spawn.
 CABLE_SUPPORT_SIZE_M = np.array([0.22, 0.05, 0.10], dtype=np.float64)
 CABLE_SUPPORT_COLOR = np.array([0.85, 0.45, 0.15], dtype=np.float64)
 CABLE_SUPPORT_XY_MARGIN_M = 0.01
 # Absolute world Z for /World/NetworkCable after XY seating on the block.
 CABLE_ROOT_Z = 1.13
+# Finger-clearance U-notch under crystal head 45 / E_part006_44 (top channel
+# with a floor for balance). Must sit on the head45 end, never head39.
+NOTCH_EXTRA_X_M = 0.030  # total extra beyond head X span (noticeable gap)
+NOTCH_DEPTH_Z_M = 0.045  # how deep the channel is from the top (~finger room)
+NOTCH_END_SHOULDER_M = 0.028  # keep a visible wall past the notch when part is at an end
+NOTCH_MIN_SEGMENT_X_M = 0.012
+GRASP_PART_NAME = "E_part006_44"
+# Final world X translations for the support walls (Isaac translate ops).
+# Tuned for CABLE_SUPPORT_XY[0] == 0.435 (shifted −15 mm from the prior 0.45 layout).
+SUPPORT_LEFT_X_M = 0.335
+SUPPORT_RIGHT_X_M = 0.60621
 
 UR10E_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/UniversalRobots/ur10e/ur10e.usd"
 ROBOTIQ_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/Robotiq/2F-85/Robotiq_2F_85.usd"
@@ -584,6 +595,144 @@ def create_cable_support_block(size_xyz: np.ndarray | None = None) -> float:
     return block_top_z
 
 
+def _support_cuboid(prim_path: str, center: np.ndarray, size_xyz: np.ndarray) -> None:
+    """Create one collision cuboid piece of the cable support."""
+
+    size_x, size_y, size_z = (float(v) for v in size_xyz)
+    cube = UsdGeom.Cube.Define(stage, Sdf.Path(prim_path))
+    cube.CreateSizeAttr(1.0)
+    cube.CreateDisplayColorAttr(
+        [Gf.Vec3f(float(CABLE_SUPPORT_COLOR[0]), float(CABLE_SUPPORT_COLOR[1]), float(CABLE_SUPPORT_COLOR[2]))]
+    )
+    xform = UsdGeom.Xformable(cube.GetPrim())
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(
+        Gf.Vec3d(float(center[0]), float(center[1]), float(center[2]))
+    )
+    xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(size_x, size_y, size_z))
+    UsdPhysics.CollisionAPI.Apply(cube.GetPrim()).CreateCollisionEnabledAttr(True).Set(True)
+
+
+def cut_grasp_notch_under_part(path45: str, path39: str) -> None:
+    """Cut a visible top U-channel under crystal head 45 (E_part006_44).
+
+    Rebuilds the support as Floor + Left + Right. The channel is forced onto the
+    head45 end of the block (closer to head45 than head39). Depth is enough for
+    finger clearance; a floor remains for cable balance. The block is extended
+    slightly past the notch so both walls stay visible.
+    """
+
+    if not stage.GetPrimAtPath(CABLE_SUPPORT_PATH).IsValid():
+        print("[SPAWN] Skip notch: cable support missing")
+        return
+    if not stage.GetPrimAtPath(path45).IsValid():
+        print(f"[SPAWN] Skip notch: head45 missing at {path45}")
+        return
+
+    part_path = find_descendant(path45, GRASP_PART_NAME)
+    # Prefer E_part006_44 when present; otherwise the whole head45 prim.
+    anchor_path = part_path if part_path and stage.GetPrimAtPath(part_path).IsValid() else path45
+
+    block_min, block_max, block_center = prim_bbox(CABLE_SUPPORT_PATH)
+    _amin, _amax, a_center = prim_bbox(anchor_path)
+    _h45min, _h45max, c45 = prim_bbox(path45)
+    c39 = None
+    if stage.GetPrimAtPath(path39).IsValid():
+        _h39min, _h39max, c39 = prim_bbox(path39)
+
+    # Always center on the head45 end. If the part bbox is closer to head39
+    # (bad detection), fall back to the head45 center.
+    notch_center_x = float(a_center[0])
+    if c39 is not None and abs(notch_center_x - float(c39[0])) < abs(notch_center_x - float(c45[0])):
+        print(
+            f"[SPAWN] Notch anchor {anchor_path} was closer to head39; "
+            f"forcing head45 center instead"
+        )
+        notch_center_x = float(c45[0])
+        anchor_path = path45
+        _amin, _amax, a_center = prim_bbox(anchor_path)
+
+    # Use head45 X span so the gap clearly covers the crystal head for grasping.
+    head_span_x = float(_h45max[0] - _h45min[0])
+    notch_half = 0.5 * (head_span_x + float(NOTCH_EXTRA_X_M))
+    notch_lo = notch_center_x - notch_half
+    notch_hi = notch_center_x + notch_half
+
+    # Extend the block past the notch so both shoulders stay visible.
+    x_lo = min(float(block_min[0]), notch_lo - float(NOTCH_END_SHOULDER_M))
+    x_hi = max(float(block_max[0]), notch_hi + float(NOTCH_END_SHOULDER_M))
+    notch_lo = max(notch_lo, x_lo + float(NOTCH_MIN_SEGMENT_X_M))
+    notch_hi = min(notch_hi, x_hi - float(NOTCH_MIN_SEGMENT_X_M))
+    if notch_hi <= notch_lo + 1e-4:
+        print("[SPAWN] Skip notch: computed gap is empty")
+        return
+
+    notch_mid = 0.5 * (notch_lo + notch_hi)
+    if c39 is not None and abs(notch_mid - float(c39[0])) < abs(notch_mid - float(c45[0])):
+        print(
+            f"[SPAWN] Skip notch: mid={notch_mid:.4f} still closer to head39 "
+            f"(c45={c45[0]:.4f} c39={c39[0]:.4f})"
+        )
+        return
+
+    size_y = float(block_max[1] - block_min[1])
+    size_z = float(block_max[2] - block_min[2])
+    depth = min(float(NOTCH_DEPTH_Z_M), size_z * 0.75)
+    floor_z = max(size_z - depth, 0.01)
+    cy = float(block_center[1])
+    z0 = float(block_min[2])
+    floor_cz = z0 + 0.5 * floor_z
+    wall_cz = z0 + floor_z + 0.5 * depth
+
+    wall_lo_x0, wall_lo_x1 = x_lo, float(notch_lo)
+    wall_hi_x0, wall_hi_x1 = float(notch_hi), x_hi
+    if wall_lo_x1 - wall_lo_x0 < float(NOTCH_MIN_SEGMENT_X_M) or wall_hi_x1 - wall_hi_x0 < float(
+        NOTCH_MIN_SEGMENT_X_M
+    ):
+        print("[SPAWN] Skip notch: shoulder too thin after layout")
+        return
+
+    # Name walls by head, not by world ±X: Right beside head45, Left beside head39.
+    mid_lo = 0.5 * (wall_lo_x0 + wall_lo_x1)
+    mid_hi = 0.5 * (wall_hi_x0 + wall_hi_x1)
+    if abs(mid_lo - float(c45[0])) <= abs(mid_hi - float(c45[0])):
+        right_x0, right_x1 = wall_lo_x0, wall_lo_x1
+        left_x0, left_x1 = wall_hi_x0, wall_hi_x1
+    else:
+        right_x0, right_x1 = wall_hi_x0, wall_hi_x1
+        left_x0, left_x1 = wall_lo_x0, wall_lo_x1
+
+    stage.RemovePrim(Sdf.Path(CABLE_SUPPORT_PATH))
+    UsdGeom.Xform.Define(stage, Sdf.Path(CABLE_SUPPORT_PATH))
+
+    # Continuous floor under the whole span (keeps cable balance in the gap).
+    _support_cuboid(
+        f"{CABLE_SUPPORT_PATH}/Floor",
+        np.array([0.5 * (x_lo + x_hi), cy, floor_cz], dtype=np.float64),
+        np.array([x_hi - x_lo, size_y, floor_z], dtype=np.float64),
+    )
+    _support_cuboid(
+        f"{CABLE_SUPPORT_PATH}/Left",
+        np.array([float(SUPPORT_LEFT_X_M), cy, wall_cz], dtype=np.float64),
+        np.array([left_x1 - left_x0, size_y, depth], dtype=np.float64),
+    )
+    _support_cuboid(
+        f"{CABLE_SUPPORT_PATH}/Right",
+        np.array([float(SUPPORT_RIGHT_X_M), cy, wall_cz], dtype=np.float64),
+        np.array([right_x1 - right_x0, size_y, depth], dtype=np.float64),
+    )
+
+    c39_x = float(c39[0]) if c39 is not None else float("nan")
+    print(
+        f"[SPAWN] Grasp U-notch under head45 ({anchor_path}): "
+        f"notch_x=[{notch_lo:.4f}, {notch_hi:.4f}] mid={notch_mid:.4f} "
+        f"width={(notch_hi - notch_lo):.4f}m depth_z={depth:.4f}m floor_z={floor_z:.4f}m "
+        f"c45_x={float(c45[0]):.4f} c39_x={c39_x:.4f} "
+        f"Left_x={SUPPORT_LEFT_X_M:.5f} Right_x={SUPPORT_RIGHT_X_M:.5f} "
+        f"block_x=[{x_lo:.4f}, {x_hi:.4f}]"
+    )
+
+
 def load_network_cable() -> tuple[str, str]:
     """Reference the network cable USD. Does not enable physics or collision."""
 
@@ -749,6 +898,7 @@ def build_asset_spawn_scene(app) -> AssetSpawnBundle:
 
     path45, path39 = load_network_cable()
     place_crystal_heads_on_block_ends(path45, path39, block_top_z)
+    cut_grasp_notch_under_part(path45, path39)
     configure_robot_physics(UR10E_PRIM_PATH)
     rebind_cable_deformable()
     finalize_ur10e_placement(ur10e_robot, UR10E_MOUNT_PATH, base_link_path)
