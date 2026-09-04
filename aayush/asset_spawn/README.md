@@ -1,6 +1,14 @@
 # asset_spawn
 
-Minimal Isaac Sim scene that loads the DataHall rack USD.
+Minimal Isaac Sim scene that loads the DataHall rack USD with **static mesh
+collision** enabled (so the UR10e cannot pass through the hall/racks).
+
+Invisible debug spheres under `/World/DebugPortMarkers`:
+- **red** insert, **yellow** +0.02 X offset (scale 0.01)
+- **green** lift→offset maneuver vias under `ManeuverVias/` (scale 0.05):
+  `LiftTip`, `YawStation`, `Via_35`…`Via_95`
+
+Toggle Visibility in the Stage panel. No collision; they do not affect the simulation.
 
 ## Run
 

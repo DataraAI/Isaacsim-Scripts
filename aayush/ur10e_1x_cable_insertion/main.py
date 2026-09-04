@@ -1,4 +1,4 @@
-"""UR10e behaviour-tree demo: detect E_part006_44, grasp, and lift.
+"""UR10e behaviour-tree demo: grasp/lift cable, then approach port offset.
 
 Run from Isaacsim-Scripts:
 
@@ -45,11 +45,14 @@ from behaviour_tree_insertion import BehaviourTreeRuntime, Status, load_task_int
 from behaviour_tree_insertion.isaac_adapters import controller_primitive, function_primitive
 
 from ur10e_1x_cable_insertion.primitives import (
+    check_at_port_insert,
     check_physical_grasp,
     detect_grasp_part,
     inspect_workspace,
+    monitor_cable_hold,
     queue_grasp,
     queue_move,
+    queue_port_approach,
 )
 from ur10e_1x_cable_insertion.scene import apply_ur10e_home_pose, build_scene
 
@@ -88,8 +91,17 @@ def main() -> int:
     registry = {
         "navigate_to_workspace": controller_primitive(queue_move),
         "perceive_objects": function_primitive(detect_grasp_part),
-        "grasp_object": controller_primitive(queue_grasp, validate=check_physical_grasp),
-        "grasp_tool": controller_primitive(queue_grasp, validate=check_physical_grasp),
+        "grasp_object": controller_primitive(
+            queue_grasp, validate=check_physical_grasp, while_running=monitor_cable_hold
+        ),
+        "grasp_tool": controller_primitive(
+            queue_grasp, validate=check_physical_grasp, while_running=monitor_cable_hold
+        ),
+        "maneuver_to_ports": controller_primitive(
+            queue_port_approach,
+            validate=check_at_port_insert,
+            while_running=monitor_cable_hold,
+        ),
         "inspect_workspace": function_primitive(inspect_workspace),
         "execute_subtask": controller_primitive(queue_move),
     }
@@ -114,6 +126,9 @@ def main() -> int:
             "path45": bundle.path45,
             "block_top_z": bundle.block_top_z,
             "end_effector_path": bundle.end_effector_path,
+            "simulation_app": simulation_app,
+            "monitor_cable_hold": False,
+            "abort_simulation": False,
         },
     )
 
@@ -161,6 +176,13 @@ def main() -> int:
         if frame <= warmup_frames:
             continue
         result = tree.tick()
+        if tree.services.get("abort_simulation"):
+            print(f"[BT CABLE FAIL] {tree.services.get('abort_reason', 'aborted')}")
+            try:
+                simulation_app.close()
+            except Exception:
+                pass
+            return 4
         if result in (Status.SUCCESS, Status.FAILURE):
             break
 

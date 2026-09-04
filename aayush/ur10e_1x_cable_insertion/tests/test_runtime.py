@@ -22,9 +22,10 @@ class CableInsertionTreeTests(unittest.TestCase):
         payload = load_task_intelligence(json_path)
         tree = BehaviourTreeRuntime(payload, {}, logger=lambda _: None)
         rendered = tree.render_tree()
-        self.assertIn("Grasp and lift ethernet cable head", rendered)
+        self.assertIn("Grasp, lift, and approach ethernet port", rendered)
         self.assertIn("Detect E_part006_44", rendered)
         self.assertIn("Grasp and lift E_part006_44", rendered)
+        self.assertIn("Move held cable to port offset then insert", rendered)
 
 
 if __name__ == "__main__":

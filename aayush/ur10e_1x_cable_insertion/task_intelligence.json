@@ -1,7 +1,7 @@
 {
   "tree": {
     "type": "sequence",
-    "name": "Grasp and lift ethernet cable head",
+    "name": "Grasp, lift, and approach ethernet port",
     "children": [
       {
         "type": "action",
@@ -47,7 +47,27 @@
           }
         ]
       },
-      {"type": "condition", "name": "Confirm grasp after lift", "fact": "cable_held"}
+      {"type": "condition", "name": "Confirm grasp after lift", "fact": "cable_held"},
+      {
+        "type": "selector",
+        "name": "Maneuver to port approach offset",
+        "children": [
+          {"type": "condition", "name": "Already at port insert", "fact": "at_port_insert"},
+          {
+            "type": "retry",
+            "name": "Retry port approach",
+            "max_attempts": 2,
+            "child": {
+              "type": "action",
+              "name": "Move held cable to port offset then insert",
+              "primitive": "maneuver_to_ports",
+              "preconditions": ["cable_held"],
+              "success_conditions": ["at_port_insert"]
+            }
+          }
+        ]
+      },
+      {"type": "condition", "name": "Confirm at port insert", "fact": "at_port_insert"}
     ]
   }
 }

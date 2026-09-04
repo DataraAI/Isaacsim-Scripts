@@ -53,6 +53,29 @@ NOTCH_DEPTH_Z_M = 0.045  # how deep the channel is from the top (~finger room)
 NOTCH_END_SHOULDER_M = 0.028  # keep a visible wall past the notch when part is at an end
 NOTCH_MIN_SEGMENT_X_M = 0.012
 GRASP_PART_NAME = "E_part006_44"
+
+# Debug markers for RJ45 insert / pre-insert offset (visual only; toggle Visibility).
+PORT_CONTACTS_PATH = (
+    "/World/DataHall/Network_Switches/AS4610_01_1x_Grid/Upper_Right/AS4610_inst/"
+    "AS4610_01/Switch/Net_12_Pack_no_LED_Component_01/RJ45_Group01/CopperContacts/"
+    "Group_14345"
+)
+PORT_PIN_A_NAME = "Copper_Pin_Component_1907"
+PORT_PIN_B_NAME = "Copper_Pin_Component_1910"
+PORT_APPROACH_X_OFFSET_M = 0.02
+PORT_DEBUG_MARKER_ROOT = "/World/DebugPortMarkers"
+PORT_OFFSET_MARKER_PATH = f"{PORT_DEBUG_MARKER_ROOT}/PortApproachOffset"
+PORT_INSERT_MARKER_PATH = f"{PORT_DEBUG_MARKER_ROOT}/PortInsert"
+PORT_DEBUG_MARKER_SCALE = 0.01
+# Green tip vias for the lift→offset carry (mirrors ur10e_1x_cable_insertion path).
+PORT_MANEUVER_MARKER_ROOT = f"{PORT_DEBUG_MARKER_ROOT}/ManeuverVias"
+PORT_MANEUVER_MARKER_SCALE = 0.05
+PORT_APPROACH_VIA_FRACTIONS = (0.35, 0.60, 0.82, 0.95)
+PORT_APPROACH_VIA_Z_CLEARANCE_M = 0.04
+# Match ur10e_1x_cable_insertion lift-tip estimate from E_part006_44.
+DEBUG_GRASP_X_OFFSET_M = 0.0
+DEBUG_GRASP_DESCEND_CLEARANCE_M = -0.003
+DEBUG_GRASP_LIFT_CLEARANCE_M = 0.12
 # Final world X translations for the support walls (Isaac translate ops).
 # Tuned for CABLE_SUPPORT_XY[0] == 0.435 (shifted −15 mm from the prior 0.45 layout).
 SUPPORT_LEFT_X_M = 0.335
@@ -239,6 +262,64 @@ def enable_gpu_dynamics() -> None:
     for scene in SimulationManager.get_physics_scenes():
         scene.set_enabled_gpu_dynamics(True)
     print("[SPAWN] PhysX GPU dynamics enabled")
+
+
+def enable_datahall_static_collisions(
+    root_path: str = DATAHALL_PRIM_PATH, *, approximation_shape: str = "none"
+) -> int:
+    """Author static mesh colliders under DataHall so the arm cannot pass through.
+
+    Uses triangle-mesh approximation (``none``) for static geometry — same pattern
+    as ``detailedInsertion/datahall/collision_setup.py``.
+    """
+
+    from omni.physx.scripts import utils as physx_utils
+
+    root = stage.GetPrimAtPath(root_path)
+    if not root or not root.IsValid():
+        print(f"[SPAWN] DataHall collision skipped: missing {root_path}")
+        return 0
+
+    count = 0
+    for prim in Usd.PrimRange(root):
+        if prim.GetMetadata("hide_in_stage_window"):
+            continue
+        if prim.GetAttribute("omni:no_collision"):
+            continue
+        is_mesh = prim.IsA(UsdGeom.Mesh)
+        is_solid = (
+            is_mesh
+            or prim.IsA(UsdGeom.Cube)
+            or prim.IsA(UsdGeom.Sphere)
+            or prim.IsA(UsdGeom.Cylinder)
+            or prim.IsA(UsdGeom.Capsule)
+            or prim.IsA(UsdGeom.Cone)
+        )
+        if not is_solid and not prim.IsInstanceable():
+            continue
+        if is_mesh:
+            points = UsdGeom.Mesh(prim).GetPointsAttr().Get()
+            if points is None or len(points) == 0:
+                continue
+        try:
+            if prim.IsInstanceProxy():
+                continue
+            UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(True).Set(True)
+            PhysxSchema.PhysxCollisionAPI.Apply(prim)
+            if is_mesh:
+                mesh_api = UsdPhysics.MeshCollisionAPI.Apply(prim)
+                mesh_api.CreateApproximationAttr().Set(approximation_shape)
+                approx = physx_utils.MESH_APPROXIMATIONS.get(approximation_shape)
+                if approx is not None:
+                    approx.Apply(prim)
+            count += 1
+        except Exception as exc:
+            print(f"[SPAWN] DataHall collider skip {prim.GetPath()}: {exc}")
+    print(
+        f"[SPAWN] DataHall static collisions enabled on {count} prim(s) under {root_path} "
+        f"(approx={approximation_shape!r})"
+    )
+    return count
 
 
 def strip_physics_from_prim(prim_path: str) -> None:
@@ -832,6 +913,143 @@ def rebind_cable_deformable() -> None:
     print("[SPAWN] Timeline stop/play — soft cable rebound to crystal heads")
 
 
+def compute_port_debug_points() -> tuple[np.ndarray, np.ndarray, str, str] | None:
+    """Insert = mid of pins 1907/1910; approach = insert with +X standoff."""
+
+    contacts = PORT_CONTACTS_PATH
+    if not stage.GetPrimAtPath(contacts).IsValid():
+        print(f"[SPAWN] Port debug markers skipped: missing {contacts}")
+        return None
+    path_a = find_descendant(contacts, PORT_PIN_A_NAME)
+    path_b = find_descendant(contacts, PORT_PIN_B_NAME)
+    if not path_a or not path_b:
+        print(
+            f"[SPAWN] Port debug markers skipped: pins "
+            f"{PORT_PIN_A_NAME}={path_a} {PORT_PIN_B_NAME}={path_b}"
+        )
+        return None
+    _amin, _amax, ca = prim_bbox(path_a)
+    _bmin, _bmax, cb = prim_bbox(path_b)
+    insert = 0.5 * (ca + cb)
+    approach = insert.copy()
+    approach[0] += float(PORT_APPROACH_X_OFFSET_M)
+    return insert, approach, path_a, path_b
+
+
+def _spawn_debug_sphere(
+    prim_path: str,
+    center: np.ndarray,
+    color_rgb: tuple[float, float, float],
+    *,
+    scale: float | None = None,
+    visible: bool = False,
+) -> None:
+    """Marker sphere: invisible by default, no collision (toggle Visibility)."""
+
+    if stage.GetPrimAtPath(prim_path).IsValid():
+        stage.RemovePrim(Sdf.Path(prim_path))
+    sphere = UsdGeom.Sphere.Define(stage, Sdf.Path(prim_path))
+    sphere.CreateRadiusAttr(1.0)
+    sphere.CreateDisplayColorAttr([Gf.Vec3f(*color_rgb)])
+    prim = sphere.GetPrim()
+    xform = UsdGeom.Xformable(prim)
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(
+        Gf.Vec3d(float(center[0]), float(center[1]), float(center[2]))
+    )
+    s = float(PORT_DEBUG_MARKER_SCALE if scale is None else scale)
+    xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(s, s, s))
+    imageable = UsdGeom.Imageable(prim)
+    if visible:
+        imageable.MakeVisible()
+    else:
+        imageable.MakeInvisible()
+    # Markers must not affect physics / the insertion simulation.
+    strip_physics_from_prim(prim_path)
+
+
+def spawn_port_debug_markers() -> None:
+    """Yellow = approach offset (+0.02 X); red = insert. Invisible, non-colliding."""
+
+    resolved = compute_port_debug_points()
+    if resolved is None:
+        return
+    insert, approach, path_a, path_b = resolved
+    UsdGeom.Xform.Define(stage, Sdf.Path(PORT_DEBUG_MARKER_ROOT))
+    _spawn_debug_sphere(PORT_OFFSET_MARKER_PATH, approach, (1.0, 0.92, 0.1), visible=False)
+    _spawn_debug_sphere(PORT_INSERT_MARKER_PATH, insert, (0.95, 0.12, 0.12), visible=False)
+    print(
+        f"[SPAWN] Port debug markers (invisible; toggle Visibility in Stage):\n"
+        f"  yellow offset {PORT_OFFSET_MARKER_PATH} @ {np.round(approach, 4)}\n"
+        f"  red insert    {PORT_INSERT_MARKER_PATH} @ {np.round(insert, 4)}\n"
+        f"  from {path_a} / {path_b}"
+    )
+
+
+def _port_tip_via_debug(tip_start: np.ndarray, tip_end: np.ndarray, frac: float) -> np.ndarray:
+    """Same tip via rule as ur10e_1x_cable_insertion (raised Z on intermediate fracs)."""
+
+    t = float(np.clip(frac, 0.0, 1.0))
+    tip = (1.0 - t) * tip_start + t * tip_end
+    if t < 1.0 - 1e-9:
+        tip = tip.copy()
+        tip[2] = max(float(tip[2]), float(tip_end[2])) + float(PORT_APPROACH_VIA_Z_CLEARANCE_M)
+    return tip
+
+
+def spawn_maneuver_via_debug_markers(path45: str) -> None:
+    """Green spheres at lift tip, yaw station, and lift→offset vias (scale 0.05)."""
+
+    resolved = compute_port_debug_points()
+    if resolved is None:
+        return
+    _insert, approach, _path_a, _path_b = resolved
+
+    part_path = find_descendant(path45, GRASP_PART_NAME) or path45
+    try:
+        _mn, _mx, part_center = prim_bbox(part_path)
+    except Exception as exc:
+        print(f"[SPAWN] Maneuver via markers skipped: bbox failed for {part_path}: {exc}")
+        return
+
+    tip_start = np.asarray(part_center, dtype=np.float64).copy()
+    tip_start[0] += float(DEBUG_GRASP_X_OFFSET_M)
+    tip_start[2] += (
+        float(DEBUG_GRASP_DESCEND_CLEARANCE_M)
+        + float(DEBUG_GRASP_LIFT_CLEARANCE_M)
+        + abs(float(DEBUG_GRASP_DESCEND_CLEARANCE_M))
+    )
+    tip_end = np.asarray(approach, dtype=np.float64).copy()
+    tip_yaw = tip_start.copy()
+    tip_yaw[2] = max(float(tip_start[2]), float(tip_end[2])) + float(
+        PORT_APPROACH_VIA_Z_CLEARANCE_M
+    )
+
+    UsdGeom.Xform.Define(stage, Sdf.Path(PORT_DEBUG_MARKER_ROOT))
+    if stage.GetPrimAtPath(PORT_MANEUVER_MARKER_ROOT).IsValid():
+        stage.RemovePrim(Sdf.Path(PORT_MANEUVER_MARKER_ROOT))
+    UsdGeom.Xform.Define(stage, Sdf.Path(PORT_MANEUVER_MARKER_ROOT))
+
+    green = (0.15, 0.85, 0.25)
+    scale = float(PORT_MANEUVER_MARKER_SCALE)
+    points: list[tuple[str, np.ndarray]] = [
+        ("LiftTip", tip_start),
+        ("YawStation", tip_yaw),
+    ]
+    for frac in PORT_APPROACH_VIA_FRACTIONS:
+        tip = _port_tip_via_debug(tip_start, tip_end, float(frac))
+        points.append((f"Via_{int(round(float(frac) * 100)):02d}", tip))
+
+    print(
+        f"[SPAWN] Maneuver via markers (green, scale={scale}, invisible; "
+        f"toggle Visibility under {PORT_MANEUVER_MARKER_ROOT}):"
+    )
+    for name, tip in points:
+        prim_path = f"{PORT_MANEUVER_MARKER_ROOT}/{name}"
+        _spawn_debug_sphere(prim_path, tip, green, scale=scale, visible=False)
+        print(f"  {name} @ {np.round(tip, 4)}")
+
+
 def build_asset_spawn_scene(app) -> AssetSpawnBundle:
     """Construct the asset_spawn scene and return handles for extensions."""
 
@@ -844,6 +1062,8 @@ def build_asset_spawn_scene(app) -> AssetSpawnBundle:
     add_reference_to_stage(usd_path=DATAHALL_USD, prim_path=DATAHALL_PRIM_PATH)
     wait_for_stage_loading()
     print(f"[SPAWN] DataHall loaded at {DATAHALL_PRIM_PATH}")
+    enable_datahall_static_collisions(DATAHALL_PRIM_PATH)
+    spawn_port_debug_markers()
 
     table_orientation = euler_angles_to_quats(np.radians(TABLE_ORIENTATION_EULER_DEG))
     world.scene.add(
@@ -904,6 +1124,7 @@ def build_asset_spawn_scene(app) -> AssetSpawnBundle:
     finalize_ur10e_placement(ur10e_robot, UR10E_MOUNT_PATH, base_link_path)
     configure_robot_physics(UR10E_PRIM_PATH)
     strip_physics_from_prim(WORK_TABLE_PATH)
+    spawn_maneuver_via_debug_markers(path45)
 
     print(f"[SPAWN] UR10e + Robotiq 2F-85 wrist={wrist_path} end_effector={end_effector_path}")
     return AssetSpawnBundle(

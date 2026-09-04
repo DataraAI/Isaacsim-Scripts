@@ -14,7 +14,7 @@ from isaacsim.robot_motion.motion_generation import (
     LulaTaskSpaceTrajectoryGenerator,
     interface_config_loader,
 )
-from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics
+from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 
 from asset_spawn import spawn as asset_spawn
 from asset_spawn.spawn import AssetSpawnBundle, build_asset_spawn_scene
@@ -123,6 +123,103 @@ def resolve_grasp_part_path(stage, path45: str) -> str:
     raise RuntimeError(f"Missing grasp part E_part006_44 under {path45}")
 
 
+def _ensure_physics_material(
+    stage,
+    material_path: str,
+    *,
+    static_friction: float,
+    dynamic_friction: float,
+    combine_mode: str,
+) -> str:
+    """Create (or update) a rigid-body physics material. Returns material path."""
+
+    if not stage.GetPrimAtPath("/World/PhysicsMaterials").IsValid():
+        UsdGeom.Xform.Define(stage, "/World/PhysicsMaterials")
+    material = UsdShade.Material.Define(stage, material_path)
+    prim = material.GetPrim()
+    mat_api = UsdPhysics.MaterialAPI.Apply(prim)
+    mat_api.CreateStaticFrictionAttr(float(static_friction)).Set(float(static_friction))
+    mat_api.CreateDynamicFrictionAttr(float(dynamic_friction)).Set(float(dynamic_friction))
+    mat_api.CreateRestitutionAttr(0.0).Set(0.0)
+    try:
+        px_mat = PhysxSchema.PhysxMaterialAPI.Apply(prim)
+        px_mat.CreateFrictionCombineModeAttr().Set(str(combine_mode))
+    except Exception as exc:
+        print(f"[SCENE] PhysxMaterialAPI friction combine warning on {material_path}: {exc}")
+    return material_path
+
+
+def _bind_physics_material(prim, material_path: str) -> None:
+    binding = UsdShade.MaterialBindingAPI.Apply(prim)
+    binding.Bind(
+        UsdShade.Material.Get(prim.GetStage(), material_path),
+        UsdShade.Tokens.strongerThanDescendants,
+        "physics",
+    )
+
+
+def _prim_matches_finger_token(prim) -> bool:
+    name = prim.GetName().lower()
+    path = str(prim.GetPath()).lower()
+    for token in cfg.FINGERTIP_NAME_TOKENS:
+        t = token.lower()
+        if t in name or t in path:
+            return True
+    return False
+
+
+def apply_grasp_friction_materials(stage, robot_prim_path: str, path45: str, path39: str) -> None:
+    """Raise fingertip/head friction so the pinch holds through carry (Isaac tutorial recipe).
+
+    From NVIDIA's closed-loop gripper tutorial: rubber fingertip material with
+    static/dynamic friction 0.8 and friction combine mode ``max``, bound on the
+    inner-finger pads. Also bind the same recipe on crystal-head meshes so the
+    contact pair resolves to the high friction value.
+    """
+
+    mat_path = _ensure_physics_material(
+        stage,
+        "/World/PhysicsMaterials/fingertip_material",
+        static_friction=float(cfg.GRASP_FRICTION_STATIC),
+        dynamic_friction=float(cfg.GRASP_FRICTION_DYNAMIC),
+        combine_mode=str(cfg.GRASP_FRICTION_COMBINE_MODE),
+    )
+
+    finger_hits = 0
+    robot = stage.GetPrimAtPath(robot_prim_path)
+    if robot and robot.IsValid():
+        for prim in Usd.PrimRange(robot):
+            if not _prim_matches_finger_token(prim):
+                continue
+            # Bind on collision-capable prims (mesh or link xform with collider kids).
+            try:
+                _bind_physics_material(prim, mat_path)
+                finger_hits += 1
+            except Exception as exc:
+                print(f"[SCENE] fingertip material bind failed on {prim.GetPath()}: {exc}")
+
+    head_hits = 0
+    for head_path in (path45, path39):
+        head = stage.GetPrimAtPath(head_path)
+        if not head or not head.IsValid():
+            continue
+        for prim in Usd.PrimRange(head):
+            if not (prim.IsA(UsdGeom.Mesh) or prim == head):
+                continue
+            try:
+                _bind_physics_material(prim, mat_path)
+                head_hits += 1
+            except Exception as exc:
+                print(f"[SCENE] head material bind failed on {prim.GetPath()}: {exc}")
+
+    print(
+        f"[SCENE] Grasp friction material {mat_path} "
+        f"(mu_s={cfg.GRASP_FRICTION_STATIC}, mu_d={cfg.GRASP_FRICTION_DYNAMIC}, "
+        f"combine={cfg.GRASP_FRICTION_COMBINE_MODE}) "
+        f"bound on {finger_hits} fingertip prim(s), {head_hits} head prim(s)"
+    )
+
+
 def apply_ur10e_home_pose(robot, *, apply_live: bool = False) -> None:
     """Set default (and optionally live) arm joint positions to a known home."""
 
@@ -156,6 +253,7 @@ def build_scene(simulation_app) -> SceneBundle:
     path39 = spawn_bundle.path39
 
     enable_crystal_head_physics(stage, path45, path39)
+    apply_grasp_friction_materials(stage, cfg.UR10E_PRIM_PATH, path45, path39)
     grasp_part_path = resolve_grasp_part_path(stage, path45)
 
     # Rebuild physics views after adding RigidBody / collision on the cable.
@@ -170,7 +268,9 @@ def build_scene(simulation_app) -> SceneBundle:
         joint_prim_names=["finger_joint"],
         joint_opened_positions=np.array([0.0]),
         joint_closed_positions=np.array([cfg.ROBOTIQ_CLOSED_RAD]),
-        action_deltas=np.array([-cfg.ROBOTIQ_CLOSED_RAD]),
+        # Absolute open/close only. Delta mode re-adds the close angle on every
+        # "close" pulse and overshoots the joint limit (fingers chatter / open).
+        action_deltas=None,
         use_mimic_joints=True,
     )
 
@@ -196,6 +296,8 @@ def build_scene(simulation_app) -> SceneBundle:
     apply_ur10e_home_pose(robot, apply_live=True)
     asset_spawn.finalize_ur10e_placement(robot, asset_spawn.UR10E_MOUNT_PATH, spawn_bundle.base_link_path)
     asset_spawn.configure_robot_physics(cfg.UR10E_PRIM_PATH)
+    # Re-bind friction after configure_robot_physics rebuilds collision authors.
+    apply_grasp_friction_materials(stage, cfg.UR10E_PRIM_PATH, path45, path39)
 
     lula_config = interface_config_loader.load_supported_lula_kinematics_solver_config(
         cfg.UR10E_LULA_NAME
