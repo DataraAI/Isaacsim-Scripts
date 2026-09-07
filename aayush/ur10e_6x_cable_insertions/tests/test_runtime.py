@@ -123,6 +123,32 @@ class GraspWiringTests(unittest.TestCase):
         self.assertIn("grasp_tip_from_part(", grasp_check)
         self.assertIn("grasp_tip_from_part(", hold_check)
         self.assertIn("current_part=grasp_tip", grasp_check)
+        self.assertIn('context.services.get("grasp_joint_created")', grasp_check)
+
+    def test_squeeze_hold_attaches_cable_head_before_lift(self) -> None:
+        primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
+        source = primitives_path.read_text(encoding="utf-8")
+        hold_check = self._function_body(source, "monitor_cable_hold")
+        attach = self._function_body(source, "_attach_cable_head_to_gripper")
+        self.assertIn("_attach_cable_head_to_gripper(context)", hold_check)
+        self.assertIn("UsdPhysics.FixedJoint.Define", attach)
+        self.assertIn('context.services["end_effector_path"]', attach)
+        self.assertIn('context.services["path45"]', attach)
+
+    def test_grasp_descends_linearly_from_negative_x_toward_positive_x(self) -> None:
+        primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
+        source = primitives_path.read_text(encoding="utf-8")
+        queue_grasp = self._function_body(source, "queue_grasp")
+        self.assertGreater(float(cfg.GRASP_APPROACH_DIR[0]), 0.0)
+        self.assertIn("tip_hover = tip_grasp - approach", queue_grasp)
+        hover = queue_grasp[queue_grasp.index("hover-tilted") :]
+        hover = hover[: hover.index("add_gripper_command")]
+        self.assertIn("linear=True", hover)
+        self.assertIn("joint_interp=False", hover)
+        descend = queue_grasp[queue_grasp.index("descend-tilted") :]
+        descend = descend[: descend.index("add_gripper_command")]
+        self.assertIn("linear=True", descend)
+        self.assertIn("joint_interp=False", descend)
 
 
 class CableInsertionTreeTests(unittest.TestCase):

@@ -12,6 +12,7 @@ import numpy as np
 class FakeSharedController:
     def __init__(self, *args, **kwargs):
         self.queued = None
+        self.next_action = None
         self._joint_interp_warned = False
         self._segment_failed = False
         self._current_command_index = 0
@@ -56,7 +57,7 @@ class FakeSharedController:
 
         cmd = self._command_queue[self._current_command_index]
         if cmd.get("type") != "cartesian" or not cmd.get("joint_interp"):
-            return None
+            return self.next_action
 
         if not self._segment_ready:
             self._init_joint_interp_segment(cmd, current_joint_positions, 7)
@@ -66,7 +67,7 @@ class FakeSharedController:
         finished = self._joint_interp_step >= self._joint_interp_steps
         if finished:
             self._advance_command()
-        return None
+        return self.next_action
 
 
 def load_adapter():
@@ -102,6 +103,44 @@ class SixArmControllerTests(unittest.TestCase):
             label="descend",
         )
         np.testing.assert_allclose(controller.queued[0], [57.83, -135.0, 313.66])
+
+    def test_linear_step_is_converted_to_stage_units(self):
+        module = load_adapter()
+        controller = module.SixArmMotionController(meters_per_unit=0.01)
+        controller.add_cartesian_waypoint(
+            np.array([0.5783, -1.35, 3.1366]),
+            np.array([1.0, 0.0, 0.0, 0.0]),
+            linear=True,
+            linear_step=0.002,
+        )
+        self.assertAlmostEqual(controller.queued[2]["linear_step"], 0.2)
+
+    def test_forward_applies_commanded_joint_positions_immediately(self):
+        class FakeRobot:
+            def __init__(self):
+                self.positions = None
+
+            def set_joint_positions(self, positions):
+                self.positions = np.asarray(positions, dtype=np.float64)
+
+        class FakeAction:
+            joint_positions = [0.1, None, 0.3]
+
+        module = load_adapter()
+        controller = module.SixArmMotionController(meters_per_unit=0.01)
+        controller._robot = FakeRobot()
+        controller._command_queue = [{"type": "gripper"}]
+        controller.next_action = FakeAction()
+
+        controller.forward(np.array([0.0, 0.2, 0.0]))
+
+        self.assertIsNotNone(controller._robot.positions)
+        np.testing.assert_allclose(controller._robot.positions, [0.1, 0.2, 0.3])
+
+        controller.next_action.joint_positions = [None, 0.4, None]
+        controller.forward(np.array([9.0, 9.0, 9.0]))
+
+        np.testing.assert_allclose(controller._robot.positions, [0.1, 0.4, 0.3])
 
     def test_measured_hand_pose_is_returned_in_metres(self):
         module = load_adapter()
