@@ -16,6 +16,10 @@ class SixArmMotionController(FrankaMotionController):
         self._six_arm_failure_reason = ""
         super().__init__(*args, **kwargs)
 
+    def clear_queue(self) -> None:
+        super().clear_queue()
+        self._six_arm_failure_reason = ""
+
     def add_cartesian_waypoint(self, position, orientation, **kwargs):
         return super().add_cartesian_waypoint(
             meters_to_stage(position, self._meters_per_unit),

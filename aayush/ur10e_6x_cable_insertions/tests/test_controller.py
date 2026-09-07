@@ -16,6 +16,14 @@ class FakeSharedController:
         self._segment_failed = False
         self._current_command_index = 0
         self._command_queue = []
+        self._segment_ready = False
+        self._joint_interp_step = 0
+        self._joint_interp_steps = 1
+
+    def clear_queue(self) -> None:
+        self._command_queue = []
+        self._current_command_index = 0
+        self._clear_segment_playback()
 
     def add_cartesian_waypoint(self, position, orientation, **kwargs):
         self.queued = (np.asarray(position), np.asarray(orientation), kwargs)
@@ -25,6 +33,40 @@ class FakeSharedController:
 
     def _init_joint_interp_segment(self, cmd, current_joint_positions, n_dof):
         self._joint_interp_warned = bool(cmd.get("force_ik_failure"))
+        self._joint_interp_steps = max(1, int(cmd.get("joint_steps", 120)))
+        self._joint_interp_step = 0
+
+    def _clear_segment_playback(self) -> None:
+        self._segment_ready = False
+        self._segment_failed = False
+        self._joint_interp_warned = False
+        self._joint_interp_step = 0
+        self._joint_interp_steps = 1
+
+    def _advance_command(self) -> None:
+        self._current_command_index += 1
+        self._clear_segment_playback()
+
+    def is_done(self) -> bool:
+        return self._current_command_index >= len(self._command_queue)
+
+    def forward(self, current_joint_positions):
+        if self.is_done():
+            return None
+
+        cmd = self._command_queue[self._current_command_index]
+        if cmd.get("type") != "cartesian" or not cmd.get("joint_interp"):
+            return None
+
+        if not self._segment_ready:
+            self._init_joint_interp_segment(cmd, current_joint_positions, 7)
+            self._segment_ready = True
+
+        self._joint_interp_step += 1
+        finished = self._joint_interp_step >= self._joint_interp_steps
+        if finished:
+            self._advance_command()
+        return None
 
 
 def load_adapter():
@@ -36,6 +78,18 @@ def load_adapter():
             return importlib.import_module("ur10e_6x_cable_insertions.controller")
         except ModuleNotFoundError as exc:
             raise AssertionError("six-arm controller module is missing") from exc
+
+
+def bt_tick(controller, joint_positions):
+    """Mirror behaviour_tree_insertion.isaac_adapters controller tick checks."""
+    if controller.has_failed():
+        return "FAILURE"
+    if controller.is_done():
+        return "SUCCESS"
+    controller.forward(joint_positions)
+    if controller.has_failed():
+        return "FAILURE"
+    return "RUNNING"
 
 
 class SixArmControllerTests(unittest.TestCase):
@@ -58,8 +112,45 @@ class SixArmControllerTests(unittest.TestCase):
     def test_joint_interp_ik_failure_marks_controller_failed(self):
         module = load_adapter()
         controller = module.SixArmMotionController(meters_per_unit=0.01)
+        controller._command_queue = [{
+            "type": "cartesian",
+            "label": "descend",
+            "joint_interp": True,
+            "force_ik_failure": True,
+            "joint_steps": 2,
+            "max_frames": 400,
+            "frames_spent": 0,
+        }]
+
+        status = bt_tick(controller, np.zeros(7))
+
+        self.assertEqual(status, "FAILURE")
+        self.assertTrue(controller.has_failed())
+        self.assertIn("descend", controller.failure_reason())
+        self.assertEqual(controller._current_command_index, 0)
+
+        healthy = module.SixArmMotionController(meters_per_unit=0.01)
+        healthy._command_queue = [{
+            "type": "cartesian",
+            "label": "approach",
+            "joint_interp": True,
+            "joint_steps": 1,
+            "max_frames": 400,
+            "frames_spent": 0,
+        }]
+        self.assertEqual(healthy._current_command_index, 0)
+        healthy.forward(np.zeros(7))
+        self.assertEqual(healthy._current_command_index, 1)
+
+    def test_clear_queue_resets_failure_reason(self):
+        module = load_adapter()
+        controller = module.SixArmMotionController(meters_per_unit=0.01)
         cmd = {"label": "descend", "force_ik_failure": True}
         controller._init_joint_interp_segment(cmd, np.zeros(7), 7)
         self.assertTrue(controller.has_failed())
         self.assertIn("descend", controller.failure_reason())
-        self.assertEqual(controller._current_command_index, 0)
+
+        controller.clear_queue()
+
+        self.assertFalse(controller.has_failed())
+        self.assertEqual(controller.failure_reason(), "")
