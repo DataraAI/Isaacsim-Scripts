@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -89,13 +90,39 @@ class SceneWiringTests(unittest.TestCase):
 
 
 class GraspWiringTests(unittest.TestCase):
+    @staticmethod
+    def _function_body(source: str, name: str) -> str:
+        tree = ast.parse(source)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return ast.get_source_segment(source, node) or ""
+        return ""
+
     def test_grasp_records_initial_position_and_uses_metre_pose(self) -> None:
         primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
         source = primitives_path.read_text(encoding="utf-8")
         self.assertIn('context.services["initial_grasp_point"] = center.copy()', source)
-        self.assertIn("controller.current_hand_pose_meters()", source)
         self.assertIn("physical_grasp_is_valid(", source)
         self.assertNotIn("lifted = float(center[2]) >= block_top + 0.04", source)
+
+    def test_check_physical_grasp_calls_motion_controller_metre_pose(self) -> None:
+        primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
+        source = primitives_path.read_text(encoding="utf-8")
+        grasp_check = self._function_body(source, "check_physical_grasp")
+        self.assertTrue(grasp_check, "check_physical_grasp not found")
+        self.assertIn(
+            'context.services["motion_controller"].current_hand_pose_meters()',
+            grasp_check,
+        )
+
+    def test_check_physical_grasp_uses_grasp_tip_with_x_offset(self) -> None:
+        primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
+        source = primitives_path.read_text(encoding="utf-8")
+        grasp_check = self._function_body(source, "check_physical_grasp")
+        hold_check = self._function_body(source, "cable_still_in_gripper")
+        self.assertIn("grasp_tip_from_part(", grasp_check)
+        self.assertIn("grasp_tip_from_part(", hold_check)
+        self.assertIn("current_part=grasp_tip", grasp_check)
 
 
 class CableInsertionTreeTests(unittest.TestCase):

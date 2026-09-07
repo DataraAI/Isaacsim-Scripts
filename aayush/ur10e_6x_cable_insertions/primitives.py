@@ -6,7 +6,7 @@ import numpy as np
 from pxr import Usd, UsdGeom
 
 from ur10e_6x_cable_insertions import config as cfg
-from ur10e_6x_cable_insertions.runtime_support import physical_grasp_is_valid
+from ur10e_6x_cable_insertions.runtime_support import grasp_tip_from_part, physical_grasp_is_valid
 
 
 def _normalize_quat(quat: np.ndarray) -> np.ndarray:
@@ -254,9 +254,10 @@ def check_physical_grasp(context) -> bool:
     expected_tip = np.asarray(hand, dtype=np.float64) + _quat_to_rot_matrix(quat) @ np.array(
         [0.0, 0.0, float(cfg.TOOL_OFFSET_M)], dtype=np.float64
     )
+    grasp_tip = grasp_tip_from_part(center, cfg.GRASP_X_OFFSET_M)
     passed = physical_grasp_is_valid(
         initial_part=initial,
-        current_part=center,
+        current_part=grasp_tip,
         expected_tip=expected_tip,
         fingers=fingers,
         min_lift_m=cfg.GRASP_MIN_LIFT_M,
@@ -264,11 +265,11 @@ def check_physical_grasp(context) -> bool:
         contact_rad=cfg.ROBOTIQ_CONTACT_RAD,
     )
     lift_delta = float(center[2] - np.asarray(initial, dtype=np.float64)[2])
-    tip_err = float(np.linalg.norm(center - expected_tip))
+    tip_err = float(np.linalg.norm(grasp_tip - expected_tip))
     if passed:
         context.blackboard.add("cable_held")
     print(
-        f"[BT GRASP{_station_tag(context)}] validate center={np.round(center, 4)} "
+        f"[BT GRASP{_station_tag(context)}] validate grasp_tip={np.round(grasp_tip, 4)} "
         f"lift_delta={lift_delta:.4f} tip_err={tip_err:.4f} "
         f"fingers={np.round(fingers, 3)} -> {'PASS' if passed else 'FAIL'}"
     )
@@ -573,8 +574,7 @@ def cable_still_in_gripper(context) -> tuple[bool, dict]:
             [0.0, 0.0, float(cfg.TOOL_OFFSET_M)], dtype=np.float64
         )
         part = grasp_part_center(context)
-        grasp_tip = part.copy()
-        grasp_tip[0] += float(cfg.GRASP_X_OFFSET_M)
+        grasp_tip = grasp_tip_from_part(part, cfg.GRASP_X_OFFSET_M)
         tip_err = float(np.linalg.norm(grasp_tip - tip_expected))
         info["part"] = np.round(part, 4)
         info["grasp_tip"] = np.round(grasp_tip, 4)

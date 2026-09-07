@@ -23,6 +23,14 @@ def stage_to_meters(position, meters_per_unit: float) -> np.ndarray:
     return np.asarray(position, dtype=np.float64) * mpu
 
 
+def grasp_tip_from_part(part, x_offset_m: float) -> np.ndarray:
+    """Grasp tip in metres: part bbox center plus configured X offset."""
+
+    tip = np.asarray(part, dtype=np.float64).reshape(3).copy()
+    tip[0] += float(x_offset_m)
+    return tip
+
+
 def physical_grasp_is_valid(
     *,
     initial_part,

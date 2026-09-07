@@ -1,3 +1,4 @@
+import ast
 import importlib
 import unittest
 import numpy as np
@@ -60,3 +61,29 @@ class PhysicalGraspTests(unittest.TestCase):
             max_tip_error_m=0.06,
             contact_rad=0.21,
         ))
+
+    def test_nonzero_x_offset_requires_grasp_tip_not_part_center(self):
+        support = load_support()
+        grasp_tip_from_part = getattr(support, "grasp_tip_from_part", None)
+        if grasp_tip_from_part is None:
+            raise AssertionError("grasp_tip_from_part is missing")
+
+        part_center = np.array([0.7, -1.35, 3.12])
+        x_offset_m = 0.05
+        grasp_tip = grasp_tip_from_part(part_center, x_offset_m)
+        np.testing.assert_allclose(grasp_tip, [0.75, -1.35, 3.12])
+
+        initial = np.array([0.7, -1.35, 3.06])
+        expected_tip = grasp_tip.copy()
+        fingers = np.array([0.82])
+        kwargs = dict(
+            initial_part=initial,
+            expected_tip=expected_tip,
+            fingers=fingers,
+            min_lift_m=0.04,
+            max_tip_error_m=0.03,
+            contact_rad=0.21,
+        )
+
+        self.assertTrue(physical_grasp_is_valid(current_part=grasp_tip, **kwargs))
+        self.assertFalse(physical_grasp_is_valid(current_part=part_center, **kwargs))
