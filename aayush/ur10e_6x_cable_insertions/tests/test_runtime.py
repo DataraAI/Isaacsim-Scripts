@@ -88,6 +88,16 @@ class SceneWiringTests(unittest.TestCase):
         )
 
 
+class GraspWiringTests(unittest.TestCase):
+    def test_grasp_records_initial_position_and_uses_metre_pose(self) -> None:
+        primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
+        source = primitives_path.read_text(encoding="utf-8")
+        self.assertIn('context.services["initial_grasp_point"] = center.copy()', source)
+        self.assertIn("controller.current_hand_pose_meters()", source)
+        self.assertIn("physical_grasp_is_valid(", source)
+        self.assertNotIn("lifted = float(center[2]) >= block_top + 0.04", source)
+
+
 class CableInsertionTreeTests(unittest.TestCase):
     def test_task_intelligence_renders_grasp_lift_tree(self) -> None:
         json_path = Path(__file__).resolve().parents[1] / "task_intelligence.json"
