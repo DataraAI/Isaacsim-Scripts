@@ -1,0 +1,9 @@
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/uninstall.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/ur10e_2f_85_description_uninstall.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/test.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/edit_cache.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/rebuild_cache.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/list_install_components.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/install.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/install/local.dir
+/home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_2f_85_description/CMakeFiles/install/strip.dir

@@ -1,0 +1,37 @@
+-- The C compiler identification is GNU 11.5.0
+-- The CXX compiler identification is GNU 11.5.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ament_cmake: 2.5.6 (/opt/ros/jazzy/share/ament_cmake/cmake)
+-- Found Python3: /usr/bin/python3 (found version "3.12.3") found components: Interpreter 
+-- Configuring done (0.3s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/build/ur10e_robotiq_description
+-- Install configuration: ""
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/urdf/ur10e_robotiq_2f_85.urdf.xacro
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/urdf/ur10e_robotiq_2f_85_macro.urdf.xacro
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/urdf/ur10e_6x_robotiq_2f_85.urdf.xacro
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/urdf/ur10e_robotiq_2f_85.urdf
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ament_index/resource_index/package_run_dependencies/ur10e_robotiq_description
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ament_index/resource_index/parent_prefix_path/ur10e_robotiq_description
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/environment/ament_prefix_path.sh
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/environment/ament_prefix_path.dsv
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/environment/path.sh
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/environment/path.dsv
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/local_setup.bash
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/local_setup.sh
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/local_setup.zsh
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/local_setup.dsv
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/package.dsv
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ament_index/resource_index/packages/ur10e_robotiq_description
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/cmake/ur10e_robotiq_descriptionConfig.cmake
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/cmake/ur10e_robotiq_descriptionConfig-version.cmake
+-- Installing: /home/aayush/Desktop/Aayush_ws/Isaacsim-Scripts/aayush/ros2_ws/install/ur10e_robotiq_description/share/ur10e_robotiq_description/package.xml

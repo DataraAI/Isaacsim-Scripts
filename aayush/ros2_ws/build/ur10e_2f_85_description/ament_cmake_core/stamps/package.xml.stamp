@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ur10e_2f_85_description</name>
+  <version>0.1.0</version>
+  <description>
+    URDF/Xacro for a UR10e with a Robotiq 2F-85, composed from ur_description
+    and robotiq_description. Matches one cell of DataHall_6r.usd.
+  </description>
+  <maintainer email="aayush@todo.todo">Aayush</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>robotiq_description</exec_depend>
+  <exec_depend>ur_description</exec_depend>
+  <exec_depend>ur_robot_driver</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

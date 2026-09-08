@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur10e_6x_robotiq_2f_85">
+  <!--
+    Six UR10e + Robotiq 2F-85 cells matching DataHall_6r.usd station ids.
+
+    Prim paths in the USD:
+      /World/Robots/UR10e_NegativeY_Top
+      /World/Robots/UR10e_PositiveY_Top
+      /World/Robots/UR10e_NegativeY_Middle
+      /World/Robots/UR10e_PositiveY_Middle
+      /World/Robots/UR10e_NegativeY_Lower
+      /World/Robots/UR10e_PositiveY_Lower
+
+    Each arm is namespaced with tf_prefix so link/joint names stay unique.
+    Place each robot in the world by editing the corresponding origin, or
+    leave them at identity and set poses from the USD / TF at runtime.
+  -->
+  <xacro:arg name="force_abs_paths" default="false"/>
+  <xacro:arg name="include_ros2_control" default="false"/>
+  <xacro:arg name="sim_isaac" default="false"/>
+  <xacro:arg name="use_fake_hardware" default="true"/>
+  <xacro:arg name="safety_limits" default="false"/>
+
+  <xacro:include filename="ur10e_robotiq_2f_85_macro.urdf.xacro"/>
+
+  <link name="world"/>
+
+  <xacro:macro name="datahall_station" params="station_id *origin">
+    <xacro:ur10e_robotiq_2f_85
+      name="UR10e_${station_id}"
+      tf_prefix="UR10e_${station_id}/"
+      parent="world"
+      force_abs_paths="$(arg force_abs_paths)"
+      include_ros2_control="$(arg include_ros2_control)"
+      sim_isaac="$(arg sim_isaac)"
+      use_fake_hardware="$(arg use_fake_hardware)"
+      safety_limits="$(arg safety_limits)">
+      <xacro:insert_block name="origin"/>
+    </xacro:ur10e_robotiq_2f_85>
+  </xacro:macro>
+
+  <xacro:datahall_station station_id="NegativeY_Top">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:datahall_station>
+  <xacro:datahall_station station_id="PositiveY_Top">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:datahall_station>
+  <xacro:datahall_station station_id="NegativeY_Middle">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:datahall_station>
+  <xacro:datahall_station station_id="PositiveY_Middle">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:datahall_station>
+  <xacro:datahall_station station_id="NegativeY_Lower">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:datahall_station>
+  <xacro:datahall_station station_id="PositiveY_Lower">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:datahall_station>
+</robot>
