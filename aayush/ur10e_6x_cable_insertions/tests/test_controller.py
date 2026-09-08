@@ -51,6 +51,9 @@ class FakeSharedController:
     def is_done(self) -> bool:
         return self._current_command_index >= len(self._command_queue)
 
+    def _segment_goal_reached(self, _cmd) -> bool:
+        return True
+
     def forward(self, current_joint_positions):
         if self.is_done():
             return None
@@ -94,6 +97,10 @@ def bt_tick(controller, joint_positions):
 
 
 class SixArmControllerTests(unittest.TestCase):
+    def test_controller_uses_shared_waypoint_completion_timing(self):
+        module = load_adapter()
+        self.assertNotIn("_advance_command", module.SixArmMotionController.__dict__)
+
     def test_cartesian_target_is_converted_to_stage_units_once(self):
         module = load_adapter()
         controller = module.SixArmMotionController(meters_per_unit=0.01)
@@ -115,12 +122,14 @@ class SixArmControllerTests(unittest.TestCase):
         )
         self.assertAlmostEqual(controller.queued[2]["linear_step"], 0.2)
 
-    def test_forward_applies_commanded_joint_positions_immediately(self):
+    def test_forward_returns_drive_action_without_direct_joint_write(self):
         class FakeRobot:
             def __init__(self):
                 self.positions = None
+                self.set_calls = 0
 
             def set_joint_positions(self, positions):
+                self.set_calls += 1
                 self.positions = np.asarray(positions, dtype=np.float64)
 
         class FakeAction:
@@ -129,18 +138,79 @@ class SixArmControllerTests(unittest.TestCase):
         module = load_adapter()
         controller = module.SixArmMotionController(meters_per_unit=0.01)
         controller._robot = FakeRobot()
+        controller._command_queue = [{"type": "cartesian"}]
+        controller.next_action = FakeAction()
+
+        action = controller.forward(np.array([0.0, 0.2, 0.0]))
+
+        self.assertEqual(controller._robot.set_calls, 0)
+        np.testing.assert_allclose(action.joint_positions, [0.1, 0.2, 0.3])
+
+        controller.next_action.joint_positions = [None, 0.4, None]
+        action = controller.forward(np.array([9.0, 9.0, 9.0]))
+
+        self.assertEqual(controller._robot.set_calls, 0)
+        np.testing.assert_allclose(action.joint_positions, [0.1, 0.4, 0.3])
+
+    def test_forward_maps_sparse_gripper_action_to_its_joint_index(self):
+        class FakeRobot:
+            positions = None
+            set_calls = 0
+
+            def set_joint_positions(self, positions):
+                self.set_calls += 1
+                self.positions = np.asarray(positions, dtype=np.float64)
+
+        class FakeAction:
+            joint_positions = [0.7]
+            joint_indices = [2]
+
+        module = load_adapter()
+        controller = module.SixArmMotionController(meters_per_unit=0.01)
+        controller._robot = FakeRobot()
         controller._command_queue = [{"type": "gripper"}]
         controller.next_action = FakeAction()
 
-        controller.forward(np.array([0.0, 0.2, 0.0]))
+        action = controller.forward(np.array([0.1, 0.2, 0.3]))
 
-        self.assertIsNotNone(controller._robot.positions)
-        np.testing.assert_allclose(controller._robot.positions, [0.1, 0.2, 0.3])
+        self.assertEqual(controller._robot.set_calls, 0)
+        np.testing.assert_allclose(action.joint_positions, [0.1, 0.2, 0.7])
+        self.assertIsNone(action.joint_indices)
 
-        controller.next_action.joint_positions = [None, 0.4, None]
-        controller.forward(np.array([9.0, 9.0, 9.0]))
+    def test_forward_maps_indexless_gripper_action_to_named_master_dof(self):
+        class FakeRobot:
+            positions = None
+            set_calls = 0
+            dof_names = [
+                "shoulder_pan_joint",
+                "shoulder_lift_joint",
+                "finger_joint",
+                "mimic_joint",
+            ]
 
-        np.testing.assert_allclose(controller._robot.positions, [0.1, 0.4, 0.3])
+            def set_joint_positions(self, positions):
+                self.set_calls += 1
+                self.positions = np.asarray(positions, dtype=np.float64)
+
+        class FakeGripper:
+            joint_prim_names = ["finger_joint"]
+
+        class FakeAction:
+            joint_positions = [0.8]
+            joint_indices = None
+
+        module = load_adapter()
+        controller = module.SixArmMotionController(meters_per_unit=0.01)
+        controller._robot = FakeRobot()
+        controller._gripper = FakeGripper()
+        controller._command_queue = [{"type": "gripper"}]
+        controller.next_action = FakeAction()
+
+        action = controller.forward(np.array([0.1, 0.2, 0.3, 0.0]))
+
+        self.assertEqual(controller._robot.set_calls, 0)
+        self.assertEqual(action.joint_positions, [0.1, 0.2, 0.8, None])
+        self.assertIsNone(action.joint_indices)
 
     def test_measured_hand_pose_is_returned_in_metres(self):
         module = load_adapter()

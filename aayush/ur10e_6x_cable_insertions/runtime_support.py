@@ -23,6 +23,13 @@ def stage_to_meters(position, meters_per_unit: float) -> np.ndarray:
     return np.asarray(position, dtype=np.float64) * mpu
 
 
+def angular_drive_value_for_stage(value: float, meters_per_unit: float) -> float:
+    """Preserve physical angular drive strength across stage length units."""
+
+    scale = validate_meters_per_unit(meters_per_unit)
+    return float(value) / (scale * scale)
+
+
 def grasp_tip_from_part(part, x_offset_m: float) -> np.ndarray:
     """Grasp tip in metres: part bbox center plus configured X offset."""
 

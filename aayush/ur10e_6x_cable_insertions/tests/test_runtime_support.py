@@ -18,6 +18,13 @@ def physical_grasp_is_valid(**kwargs):
 
 
 class StageUnitTests(unittest.TestCase):
+    def test_angular_drive_value_scales_for_centimeter_stage(self):
+        support = load_support()
+        self.assertAlmostEqual(
+            support.angular_drive_value_for_stage(330.0, 0.01),
+            3_300_000.0,
+        )
+
     def test_centimeter_stage_round_trip(self):
         support = load_support()
         metres = np.array([0.5783, -1.35, 3.1366])

@@ -174,6 +174,7 @@ def queue_grasp(context) -> None:
 
     tip_grasp = point.copy()
     tip_grasp[0] += float(cfg.GRASP_X_OFFSET_M)
+    tip_grasp[1] += float(cfg.GRASP_Y_ALIGNMENT_OFFSET_M)
     tip_grasp[2] += float(cfg.GRASP_DESCEND_CLEARANCE_M)
     # Hover back along the tilted approach (away from the tip / toward −approach).
     tip_hover = tip_grasp - approach * float(cfg.GRASP_HOVER_CLEARANCE_M)
@@ -182,7 +183,6 @@ def queue_grasp(context) -> None:
     hand_grasp = _hand_from_tip(tip_grasp, orientation)
     hand_lift = hand_grasp.copy()
     hand_lift[2] += float(cfg.GRASP_LIFT_CLEARANCE_M) + abs(float(cfg.GRASP_DESCEND_CLEARANCE_M))
-
     print(
         f"[BT GRASP{_station_tag(context)}] tilt={cfg.GRASP_TILT_FROM_DOWN_DEG:.0f}° toward +X "
         f"part={np.round(point, 4)} x_offset={cfg.GRASP_X_OFFSET_M:+.4f}\n"
@@ -192,35 +192,44 @@ def queue_grasp(context) -> None:
         f"hand_lift={np.round(hand_lift, 4)}"
     )
 
+    # Open once before positioning, then preserve that measured open position
+    # through hover and descent. The only later finger command is grasp close.
+    controller.add_gripper_command(action="open", wait_frames=50)
     _add_waypoint(
         controller, hand_hover, orientation,
         label=f"{context.step.name}: hover-tilted",
-        linear=True,
-        joint_interp=False,
-        linear_step=0.002,
+        joint_interp=True,
+        joint_steps=240,
         max_frames=1200,
         pos_tolerance=0.025,
         debug_tip=tip_hover, tip_registry=tip_registry,
     )
-    controller.add_gripper_command(action="open", wait_frames=50)
     _add_waypoint(
         controller, hand_grasp, orientation,
         label=f"{context.step.name}: descend-tilted",
-        linear=True,
-        joint_interp=False,
-        linear_step=0.001,
+        joint_interp=True,
+        joint_steps=200,
         max_frames=1200,
         pos_tolerance=0.008,
         debug_tip=tip_grasp, tip_registry=tip_registry,
     )
+    controller.add_pose_settle(
+        hand_grasp,
+        tolerance_m=0.040,
+        stable_frames=15,
+        max_frames=300,
+        label=f"{context.step.name}: align-before-close",
+    )
     controller.add_gripper_command(action="close", wait_frames=int(cfg.GRASP_CLOSE_WAIT_FRAMES))
-    # Hold checks start only on hold_gripper waypoints (squeeze/lift), not hover/open/descend.
+    # Match the one-arm grasp: let both fingers settle against the cable before lift.
     context.services["monitor_cable_hold"] = True
     _add_waypoint(
         controller, hand_grasp, orientation,
         label=f"{context.step.name}: squeeze-hold",
         hold_gripper=True,
+        joint_interp=True,
         joint_steps=max(20, int(cfg.GRASP_SQUEEZE_HOLD_FRAMES)),
+        max_frames=600,
         pos_tolerance=0.01,
         debug_tip=tip_grasp, tip_registry=tip_registry,
     )
@@ -232,9 +241,8 @@ def queue_grasp(context) -> None:
         controller, hand_lift, orientation,
         label=f"{context.step.name}: lift",
         hold_gripper=True,
-        linear=True,
-        joint_interp=False,
-        linear_step=0.001,
+        joint_interp=True,
+        joint_steps=200,
         max_frames=1200,
         pos_tolerance=0.02,
         debug_tip=tip_lift, tip_registry=tip_registry,
@@ -268,7 +276,6 @@ def check_physical_grasp(context) -> bool:
         [0.0, 0.0, float(cfg.TOOL_OFFSET_M)], dtype=np.float64
     )
     grasp_tip = grasp_tip_from_part(center, cfg.GRASP_X_OFFSET_M)
-    attached = bool(context.services.get("grasp_joint_created"))
     passed = physical_grasp_is_valid(
         initial_part=initial,
         current_part=grasp_tip,
@@ -276,7 +283,7 @@ def check_physical_grasp(context) -> bool:
         fingers=fingers,
         min_lift_m=cfg.GRASP_MIN_LIFT_M,
         max_tip_error_m=cfg.CABLE_IN_GRIPPER_MAX_ERR_M,
-        contact_rad=0.0 if attached else cfg.ROBOTIQ_CONTACT_RAD,
+        contact_rad=cfg.ROBOTIQ_CONTACT_RAD,
     )
     lift_delta = float(center[2] - np.asarray(initial, dtype=np.float64)[2])
     tip_err = float(np.linalg.norm(grasp_tip - expected_tip))
@@ -285,7 +292,7 @@ def check_physical_grasp(context) -> bool:
     print(
         f"[BT GRASP{_station_tag(context)}] validate grasp_tip={np.round(grasp_tip, 4)} "
         f"hand={np.round(np.asarray(hand), 4)} lift_delta={lift_delta:.4f} tip_err={tip_err:.4f} "
-        f"fingers={np.round(fingers, 3)} attached={attached} -> {'PASS' if passed else 'FAIL'}"
+        f"fingers={np.round(fingers, 3)} -> {'PASS' if passed else 'FAIL'}"
     )
     return passed
 
@@ -574,11 +581,7 @@ def check_at_port_insert(context) -> bool:
 
 
 def cable_still_in_gripper(context) -> tuple[bool, dict]:
-    """True when the grasped tip still tracks the tool tip (cable has not slipped out).
-
-    Finger open/closed is logged, but abort uses tip error only. Otherwise a failed
-    close pulse (fingers≈0) looks like "cable lost" even when the part never moved.
-    """
+    """True while the cable tracks the tip and the physical fingers remain closed."""
 
     info: dict = {}
     try:
@@ -594,6 +597,16 @@ def cable_still_in_gripper(context) -> tuple[bool, dict]:
         info["grasp_tip"] = np.round(grasp_tip, 4)
         info["tip_expected"] = np.round(tip_expected, 4)
         info["tip_err_m"] = tip_err
+        gripper_root = str(
+            Sdf.Path(str(context.services["end_effector_path"])).GetParentPath()
+        )
+        pad_centers = {}
+        for name in ("left_inner_finger", "right_inner_finger"):
+            _pad_min, _pad_max, pad_center = prim_bbox(
+                context.services["stage"], f"{gripper_root}/{name}"
+            )
+            pad_centers[name] = np.round(pad_center, 4)
+        info["pads"] = pad_centers
     except Exception as exc:
         info["error"] = f"pose/bbox failed: {exc}"
         return False, info
@@ -611,8 +624,7 @@ def cable_still_in_gripper(context) -> tuple[bool, dict]:
         info["fingers"] = None
 
     info["closed_enough"] = bool(closed_enough)
-    # Geometric slip only — part left the tool tip.
-    in_grip = tip_err <= float(cfg.CABLE_IN_GRIPPER_MAX_ERR_M)
+    in_grip = tip_err <= float(cfg.CABLE_IN_GRIPPER_MAX_ERR_M) and closed_enough
     info["in_gripper"] = bool(in_grip)
     return in_grip, info
 
@@ -623,60 +635,9 @@ def _format_cable_status(info: dict) -> str:
         f"tip_err={info.get('tip_err_m', float('nan')):.4f}m "
         f"(max={cfg.CABLE_IN_GRIPPER_MAX_ERR_M:.3f}) "
         f"closed={info.get('closed_enough')} fingers={info.get('fingers')} "
-        f"part={info.get('part')} tip_expected={info.get('tip_expected')}"
+        f"part={info.get('part')} tip_expected={info.get('tip_expected')} "
+        f"pads={info.get('pads')}"
     )
-
-
-def _world_transform(stage, prim_path: str) -> np.ndarray:
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim or not prim.IsValid():
-        raise RuntimeError(f"invalid attachment prim: {prim_path}")
-    matrix = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(prim)
-    return np.asarray(matrix, dtype=np.float64).T
-
-
-def _matrix_to_gf_quatf(rotation: np.ndarray) -> Gf.Quatf:
-    values = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
-    matrix = Gf.Matrix3d(*[float(value) for value in values.reshape(-1)])
-    return Gf.Quatf(matrix.ExtractRotation().GetQuat())
-
-
-def _attach_cable_head_to_gripper(context) -> bool:
-    """Preserve the physical pinch after close; thin RJ45 meshes slip under lift."""
-
-    if context.services.get("grasp_joint_created"):
-        return True
-    stage = context.services["stage"]
-    hand_path = str(context.services["end_effector_path"])
-    head_path = str(context.services["path45"])
-    station_id = str(context.services.get("station_id", "station"))
-    root_path = "/World/GraspJoints"
-    joint_path = f"{root_path}/{station_id}"
-    try:
-        if not stage.GetPrimAtPath(root_path).IsValid():
-            UsdGeom.Xform.Define(stage, Sdf.Path(root_path))
-        hand_from_head = np.linalg.inv(_world_transform(stage, hand_path)) @ _world_transform(
-            stage, head_path
-        )
-        if hand_from_head.shape != (4, 4) or not np.all(np.isfinite(hand_from_head)):
-            raise RuntimeError("invalid hand-to-cable transform")
-        if stage.GetPrimAtPath(joint_path).IsValid():
-            stage.RemovePrim(Sdf.Path(joint_path))
-        joint = UsdPhysics.FixedJoint.Define(stage, Sdf.Path(joint_path))
-        joint.CreateBody0Rel().SetTargets([Sdf.Path(hand_path)])
-        joint.CreateBody1Rel().SetTargets([Sdf.Path(head_path)])
-        joint.CreateLocalPos0Attr().Set(
-            Gf.Vec3f(*[float(value) for value in hand_from_head[:3, 3]])
-        )
-        joint.CreateLocalRot0Attr().Set(_matrix_to_gf_quatf(hand_from_head[:3, :3]))
-        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-        joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
-    except Exception as exc:
-        print(f"[BT GRASP{_station_tag(context)}] cable attachment failed: {exc}")
-        return False
-    context.services["grasp_joint_created"] = True
-    print(f"[BT GRASP{_station_tag(context)}] Cable head attached at {joint_path}")
-    return True
 
 
 def _cmd_tip_str(context, cmd: dict | None) -> str:
@@ -767,8 +728,9 @@ def monitor_cable_hold(context):
         return None
 
     cmd = controller._command_queue[controller._current_command_index]
-    # Only while fingers are commanded locked on a carry waypoint.
-    if cmd.get("type") != "cartesian" or not cmd.get("hold_gripper"):
+    closing = cmd.get("type") == "gripper" and cmd.get("action") == "close"
+    carrying = cmd.get("type") == "cartesian" and cmd.get("hold_gripper")
+    if not closing and not carrying:
         return None
 
     every = max(1, int(cfg.CABLE_HOLD_CHECK_EVERY_N_FRAMES))
@@ -778,14 +740,12 @@ def monitor_cable_hold(context):
         return None
 
     held, info = cable_still_in_gripper(context)
-    label = cmd.get("label", "?")
+    label = cmd.get("label", f"gripper-{cmd.get('action', '?')}")
     if frame % max(every * 10, 30) == 0:
         print(f"[BT GRIP{_station_tag(context)}] during [{label}]: {_format_cable_status(info)}")
+    if closing:
+        return None
     if held:
-        if "squeeze-hold" in str(label) and not _attach_cable_head_to_gripper(context):
-            info["error"] = "could not attach cable head after close"
-            _abort_cable_lost(context, info, where=f"during [{label}]")
-            return Status.FAILURE
         return None
     _abort_cable_lost(context, info, where=f"during [{label}]")
     return Status.FAILURE

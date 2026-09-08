@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import omni.timeline
 from isaacsim.robot.manipulators import SingleManipulator
 from isaacsim.robot.manipulators.grippers import ParallelGripper
 from isaacsim.robot_motion.motion_generation import (
@@ -25,6 +26,7 @@ from ur10e_6x_cable_insertions.primitives import (
     meters_per_unit,
     prim_bbox,
 )
+from ur10e_6x_cable_insertions.runtime_support import angular_drive_value_for_stage
 
 
 @dataclass
@@ -353,6 +355,110 @@ def configure_robot_physics(stage, root_path: str) -> None:
     )
 
 
+def apply_ur10e_drive_parameters(stage, root_path: str) -> None:
+    """Apply unit-correct arm drives from the one-arm UR10e asset."""
+
+    root = stage.GetPrimAtPath(root_path)
+    if not root or not root.IsValid():
+        return
+    mpu = meters_per_unit(stage)
+    drive_parameters = cfg.UR10E_ARM_DRIVE_PARAMETERS
+    applied: set[str] = set()
+    for prim in Usd.PrimRange(root):
+        values = drive_parameters.get(prim.GetName())
+        if values is None or not prim.IsA(UsdPhysics.RevoluteJoint):
+            continue
+        stiffness, damping, max_force = values
+        stiffness = angular_drive_value_for_stage(stiffness, mpu)
+        damping = angular_drive_value_for_stage(damping, mpu)
+        max_force = angular_drive_value_for_stage(max_force, mpu)
+        drive = UsdPhysics.DriveAPI.Get(prim, "angular")
+        if not drive:
+            drive = UsdPhysics.DriveAPI.Apply(prim, "angular")
+        drive.CreateTypeAttr().Set("force")
+        drive.CreateStiffnessAttr(float(stiffness)).Set(float(stiffness))
+        drive.CreateDampingAttr(float(damping)).Set(float(damping))
+        drive.CreateMaxForceAttr(float(max_force)).Set(float(max_force))
+        applied.add(prim.GetName())
+    missing = set(drive_parameters) - applied
+    if missing:
+        print(f"[SCENE] Missing UR10e drive joints under {root_path}: {sorted(missing)}")
+    else:
+        print(f"[SCENE] One-arm UR10e drive parameters applied to {root_path}")
+
+
+def apply_robotiq_drive_parameters(stage, root_path: str) -> None:
+    """Apply the one-arm Robotiq finger drive with stage-unit compensation."""
+
+    root = stage.GetPrimAtPath(root_path)
+    if not root or not root.IsValid():
+        return
+    mpu = meters_per_unit(stage)
+    applied: set[str] = set()
+    for prim in Usd.PrimRange(root):
+        values = cfg.ROBOTIQ_DRIVE_PARAMETERS.get(prim.GetName())
+        if values is None or not prim.IsA(UsdPhysics.RevoluteJoint):
+            continue
+        stiffness, damping, max_force = values
+        drive = UsdPhysics.DriveAPI.Get(prim, "angular")
+        if not drive:
+            drive = UsdPhysics.DriveAPI.Apply(prim, "angular")
+        drive.CreateTypeAttr().Set("force")
+        drive.CreateStiffnessAttr(
+            angular_drive_value_for_stage(stiffness, mpu)
+        ).Set(angular_drive_value_for_stage(stiffness, mpu))
+        drive.CreateDampingAttr(
+            angular_drive_value_for_stage(damping, mpu)
+        ).Set(angular_drive_value_for_stage(damping, mpu))
+        drive.CreateMaxForceAttr(
+            angular_drive_value_for_stage(max_force, mpu)
+        ).Set(angular_drive_value_for_stage(max_force, mpu))
+        applied.add(prim.GetName())
+    missing = set(cfg.ROBOTIQ_DRIVE_PARAMETERS) - applied
+    if missing:
+        print(f"[SCENE] Missing Robotiq drive joints under {root_path}: {sorted(missing)}")
+    else:
+        print(f"[SCENE] One-arm Robotiq drive parameters applied to {root_path}")
+
+
+def rebind_cable_deformables(simulation_app) -> None:
+    """Rebuild PhysX so all soft cable lines remain attached to their heads."""
+
+    timeline = omni.timeline.get_timeline_interface()
+    if timeline.is_playing():
+        timeline.pause()
+    timeline.stop()
+    for _ in range(20):
+        simulation_app.update()
+        time.sleep(0.01)
+    timeline.play()
+    for _ in range(30):
+        simulation_app.update()
+        time.sleep(0.01)
+    print("[SCENE] Timeline stop/play — six soft cables rebound to crystal heads")
+
+
+def configure_cable_deformable_for_stage(stage, spec: cfg.StationSpec) -> None:
+    """Preserve the one-arm soft-cable response in the centimeter DataHall stage."""
+
+    mpu = meters_per_unit(stage)
+    line = stage.GetPrimAtPath(f"{spec.cable_root_path}/E_line_35")
+    simulation_mesh = stage.GetPrimAtPath(
+        f"{spec.cable_root_path}/E_line_35/simulation_mesh"
+    )
+    if not line or not line.IsValid() or not simulation_mesh or not simulation_mesh.IsValid():
+        raise RuntimeError(f"Missing deformable cable prims for {spec.station_id}")
+
+    line.GetAttribute("physxDeformableBody:linearDamping").Set(5000.0 * mpu)
+    simulation_mesh.GetAttribute("physxCollision:contactOffset").Set(0.00011 / mpu)
+    simulation_mesh.GetAttribute("physxCollision:restOffset").Set(0.00010 / mpu)
+    print(
+        f"[SCENE] {spec.station_id} cable stage-unit physics: "
+        f"damping={5000.0 * mpu:g} contact={0.00011 / mpu:g} "
+        f"rest={0.00010 / mpu:g}"
+    )
+
+
 def strip_physics_from_prim(stage, prim_path: str) -> None:
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
@@ -410,6 +516,39 @@ def apply_ur10e_home_pose(robot, *, apply_live: bool = False) -> None:
             robot.set_joint_positions(positions)
         except Exception as exc:
             print(f"[SCENE] set_joint_positions warning: {exc}")
+        try:
+            position, orientation = robot.get_world_pose()
+            robot.set_world_pose(
+                position=np.asarray(position, dtype=np.float64),
+                orientation=orientation,
+            )
+        except Exception as exc:
+            print(f"[SCENE] set_world_pose warning: {exc}")
+
+
+def apply_live_arm_damping(robot, station_id: str) -> None:
+    """Increase effective arm damping after the tensor articulation is initialized."""
+
+    try:
+        controller = robot.get_articulation_controller()
+        kps, kds = controller.get_gains()
+        kps = np.asarray(kps, dtype=np.float64)
+        kds = np.asarray(kds, dtype=np.float64)
+        names = list(robot.dof_names)
+        arm_indices = [
+            names.index(name)
+            for name in cfg.UR10E_ARM_JOINT_NAMES
+            if name in names
+        ]
+        before = kds[arm_indices].copy()
+        kds[arm_indices] *= float(cfg.UR10E_LIVE_DAMPING_MULTIPLIER)
+        controller.set_gains(kps=kps, kds=kds)
+        print(
+            f"[SCENE] {station_id} live arm KD x{cfg.UR10E_LIVE_DAMPING_MULTIPLIER:g}: "
+            f"{np.round(before, 3)} -> {np.round(kds[arm_indices], 3)}"
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not apply live arm damping to {station_id}") from exc
 
 
 def _port_tip_via(tip_start: np.ndarray, tip_end: np.ndarray, frac: float) -> np.ndarray:
@@ -596,7 +735,9 @@ def build_scene(simulation_app, *, usd_path: Path | None = None, stations=None) 
         disable_robot_ros_graphs(stage, spec.robot_prim_path)
         enable_crystal_head_physics(stage, spec.path45, spec.path39)
         apply_grasp_friction_materials(stage, spec.robot_prim_path, spec.path45, spec.path39)
+        configure_cable_deformable_for_stage(stage, spec)
 
+    rebind_cable_deformables(simulation_app)
     world.reset()
 
     robots: dict[str, Any] = {}
@@ -607,6 +748,8 @@ def build_scene(simulation_app, *, usd_path: Path | None = None, stations=None) 
         ee_paths[spec.station_id] = resolve_end_effector_path(stage, spec.robot_prim_path)
         robots[spec.station_id] = _attach_manipulator(world, spec, ee_paths[spec.station_id])
         configure_robot_physics(stage, spec.robot_prim_path)
+        apply_ur10e_drive_parameters(stage, spec.robot_prim_path)
+        apply_robotiq_drive_parameters(stage, spec.robot_prim_path)
         apply_ur10e_home_pose(robots[spec.station_id], apply_live=False)
 
     world.reset()
@@ -621,6 +764,7 @@ def build_scene(simulation_app, *, usd_path: Path | None = None, stations=None) 
     for spec in selected:
         robot = robots[spec.station_id]
         apply_ur10e_home_pose(robot, apply_live=True)
+        apply_live_arm_damping(robot, spec.station_id)
         configure_robot_physics(stage, spec.robot_prim_path)
         apply_grasp_friction_materials(stage, spec.robot_prim_path, spec.path45, spec.path39)
         controller = _make_motion_controller(stage, robot, spec, dict(lula_config))

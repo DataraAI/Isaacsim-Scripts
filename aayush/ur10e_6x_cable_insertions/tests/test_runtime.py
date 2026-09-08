@@ -7,6 +7,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TANISH_DIR = REPO_ROOT / "tanish"
 AAYUSH_DIR = REPO_ROOT / "aayush"
@@ -88,6 +90,22 @@ class SceneWiringTests(unittest.TestCase):
             source,
         )
 
+    def test_scene_enforces_one_arm_ur10e_drive_parameters(self) -> None:
+        scene_path = Path(__file__).resolve().parents[1] / "scene.py"
+        source = scene_path.read_text(encoding="utf-8")
+        self.assertIn("apply_ur10e_drive_parameters(", source)
+        self.assertIn("robot.set_world_pose(", source)
+        self.assertIn("angular_drive_value_for_stage", source)
+        self.assertNotIn("**cfg.ROBOTIQ_DRIVE_PARAMETERS", source)
+        self.assertEqual(
+            cfg.UR10E_ARM_DRIVE_PARAMETERS["shoulder_pan_joint"],
+            (3271.49169921875, 13.085969924926758, 330.0),
+        )
+        self.assertEqual(
+            cfg.UR10E_ARM_DRIVE_PARAMETERS["wrist_3_joint"],
+            (1268.18603515625, 5.070000171661377, 56.0),
+        )
+
 
 class GraspWiringTests(unittest.TestCase):
     @staticmethod
@@ -123,19 +141,21 @@ class GraspWiringTests(unittest.TestCase):
         self.assertIn("grasp_tip_from_part(", grasp_check)
         self.assertIn("grasp_tip_from_part(", hold_check)
         self.assertIn("current_part=grasp_tip", grasp_check)
-        self.assertIn('context.services.get("grasp_joint_created")', grasp_check)
+        self.assertNotIn("grasp_joint_created", grasp_check)
 
-    def test_squeeze_hold_attaches_cable_head_before_lift(self) -> None:
+    def test_regular_grasp_requires_finger_contact_without_fixed_joint(self) -> None:
         primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
         source = primitives_path.read_text(encoding="utf-8")
         hold_check = self._function_body(source, "monitor_cable_hold")
-        attach = self._function_body(source, "_attach_cable_head_to_gripper")
-        self.assertIn("_attach_cable_head_to_gripper(context)", hold_check)
-        self.assertIn("UsdPhysics.FixedJoint.Define", attach)
-        self.assertIn('context.services["end_effector_path"]', attach)
-        self.assertIn('context.services["path45"]', attach)
+        cable_check = self._function_body(source, "cable_still_in_gripper")
+        self.assertNotIn("FixedJoint", source)
+        self.assertNotIn("_attach_cable_head_to_gripper", source)
+        self.assertNotIn("squeeze-hold", self._function_body(source, "queue_grasp"))
+        self.assertIn('cmd.get("action") == "close"', hold_check)
+        self.assertIn("closed_enough", cable_check)
+        self.assertIn("and closed_enough", cable_check)
 
-    def test_grasp_descends_linearly_from_negative_x_toward_positive_x(self) -> None:
+    def test_grasp_uses_smooth_joint_interpolation_toward_positive_x(self) -> None:
         primitives_path = Path(__file__).resolve().parents[1] / "primitives.py"
         source = primitives_path.read_text(encoding="utf-8")
         queue_grasp = self._function_body(source, "queue_grasp")
@@ -143,12 +163,22 @@ class GraspWiringTests(unittest.TestCase):
         self.assertIn("tip_hover = tip_grasp - approach", queue_grasp)
         hover = queue_grasp[queue_grasp.index("hover-tilted") :]
         hover = hover[: hover.index("add_gripper_command")]
-        self.assertIn("linear=True", hover)
-        self.assertIn("joint_interp=False", hover)
+        self.assertIn("joint_interp=True", hover)
+        self.assertIn("joint_steps=240", hover)
         descend = queue_grasp[queue_grasp.index("descend-tilted") :]
         descend = descend[: descend.index("add_gripper_command")]
-        self.assertIn("linear=True", descend)
-        self.assertIn("joint_interp=False", descend)
+        self.assertIn("joint_interp=True", descend)
+        self.assertIn("joint_steps=200", descend)
+        lift = queue_grasp[queue_grasp.index('label=f"{context.step.name}: lift"') :]
+        self.assertIn("joint_interp=True", lift)
+        self.assertIn("joint_steps=900", lift)
+
+    def test_grasp_places_head_inside_fingertips(self) -> None:
+        self.assertAlmostEqual(cfg.TOOL_OFFSET_M, 0.16)
+        self.assertAlmostEqual(cfg.ROBOTIQ_CLOSED_RAD, float(np.deg2rad(70.0)))
+        self.assertAlmostEqual(cfg.ROBOTIQ_CONTACT_RAD, float(np.deg2rad(12.0)))
+        self.assertEqual(cfg.GRASP_FRICTION_STATIC, 0.8)
+        self.assertEqual(cfg.GRASP_FRICTION_DYNAMIC, 0.8)
 
 
 class CableInsertionTreeTests(unittest.TestCase):
