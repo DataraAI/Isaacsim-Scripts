@@ -24,3 +24,7 @@ combined_demo/run_logs/
 combined_demo/*.pt
 run_logs/
 *.pt
+
+aayush/ros2_ws/build
+aayush/ros2_ws/install
+aayush/ros2_ws/log
