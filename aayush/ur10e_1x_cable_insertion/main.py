@@ -44,6 +44,7 @@ for path in (str(TANISH_DIR), str(CONTROLLER_DIR), str(AAYUSH_DIR)):
 from behaviour_tree_insertion import BehaviourTreeRuntime, Status, load_task_intelligence
 from behaviour_tree_insertion.isaac_adapters import controller_primitive, function_primitive
 
+from ur10e_1x_cable_insertion.contact_monitor import CableDataHallContactMonitor
 from ur10e_1x_cable_insertion.primitives import (
     check_at_port_insert,
     check_physical_grasp,
@@ -87,6 +88,7 @@ def main() -> int:
     world = bundle.world
     robot = bundle.robot
     controller = bundle.motion_controller
+    contact_monitor = CableDataHallContactMonitor((bundle.path45, bundle.path39))
 
     registry = {
         "navigate_to_workspace": controller_primitive(queue_move),
@@ -124,7 +126,9 @@ def main() -> int:
             "articulation_controller": robot.get_articulation_controller(),
             "grasp_part_path": bundle.grasp_part_path,
             "path45": bundle.path45,
+            "path39": bundle.path39,
             "block_top_z": bundle.block_top_z,
+            "observe_hand": bundle.observe_hand,
             "end_effector_path": bundle.end_effector_path,
             "simulation_app": simulation_app,
             "monitor_cable_hold": False,
@@ -156,6 +160,8 @@ def main() -> int:
             break
     if not physics_ready:
         print("[BT CABLE FAIL] Physics Simulation View never became ready for joint reads.")
+        contact_monitor.report_summary()
+        contact_monitor.close()
         _hold_gui(10.0)
         simulation_app.close()
         return 3
@@ -178,6 +184,8 @@ def main() -> int:
         result = tree.tick()
         if tree.services.get("abort_simulation"):
             print(f"[BT CABLE FAIL] {tree.services.get('abort_reason', 'aborted')}")
+            contact_monitor.report_summary()
+            contact_monitor.close()
             try:
                 simulation_app.close()
             except Exception:
@@ -200,6 +208,8 @@ def main() -> int:
         if not simulation_app.is_running():
             break
         world.step(render=not ARGS.headless)
+    contact_monitor.report_summary()
+    contact_monitor.close()
     simulation_app.close()
     return exit_code
 

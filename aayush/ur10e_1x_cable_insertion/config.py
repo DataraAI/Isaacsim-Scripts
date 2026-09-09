@@ -11,28 +11,6 @@ CABLE_ROOT_PATH = "/World/NetworkCable"
 CABLE_SUPPORT_PATH = "/World/CableSupportBlock"
 UR10E_PRIM_PATH = "/World/UR10eMount/ur10e"
 
-# Top-down observe pose: +90° yaw about world Z (wxyz).
-_DOWN = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float64)
-_YAW90_Z = np.array(
-    [np.cos(np.pi / 4.0), 0.0, 0.0, np.sin(np.pi / 4.0)],
-    dtype=np.float64,
-)
-
-
-def _quat_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    aw, ax, ay, az = a
-    bw, bx, by, bz = b
-    return np.array(
-        [
-            aw * bw - ax * bx - ay * by - az * bz,
-            aw * bx + ax * bw + ay * bz - az * by,
-            aw * by - ax * bz + ay * bw + az * bx,
-            aw * bz + ax * by - ay * bx + az * bw,
-        ],
-        dtype=np.float64,
-    )
-
-
 def _normalize(v: np.ndarray) -> np.ndarray:
     n = float(np.linalg.norm(v))
     return v / n if n > 1e-9 else v
@@ -89,16 +67,29 @@ def _orientation_tool_z_along(approach: np.ndarray) -> np.ndarray:
     return _rot_matrix_to_quat_wxyz(np.column_stack((tool_x, tool_y, tool_z)))
 
 
-OBSERVE_ORIENTATION = _quat_multiply(_YAW90_Z, _DOWN)
-
 # Grasp tilt: 0° = tool along world −Z; 90° = tool along world +X.
 # 60° leans the gripper up toward +X so the wrist clears DataHall ports on descend.
 GRASP_TILT_FROM_DOWN_DEG = 60.0
 _tilt = np.deg2rad(GRASP_TILT_FROM_DOWN_DEG)
 GRASP_APPROACH_DIR = np.array([np.sin(_tilt), 0.0, -np.cos(_tilt)], dtype=np.float64)
 GRASP_ORIENTATION = _orientation_tool_z_along(GRASP_APPROACH_DIR)
+OBSERVE_ORIENTATION = GRASP_ORIENTATION.copy()
 
-OBSERVE_HAND = np.array([0.45, -0.20, 1.45], dtype=np.float64)
+# Keep the observation wrist above head39 before moving to the tilted grasp hover.
+OBSERVE_Z_CLEARANCE_M = 0.32
+
+
+def observation_hand_from_head39(
+    head39_center: np.ndarray,
+    support_y: float,
+    block_top_z: float,
+) -> np.ndarray:
+    hand = np.asarray(head39_center, dtype=np.float64).reshape(3).copy()
+    hand[1] = float(support_y)
+    hand[2] = max(float(hand[2]), float(block_top_z)) + float(OBSERVE_Z_CLEARANCE_M)
+    return hand
+
+
 # Standoff along the tilted approach before descending into the grasp.
 GRASP_HOVER_CLEARANCE_M = 0.12
 GRASP_LIFT_CLEARANCE_M = 0.12
@@ -141,8 +132,8 @@ PORT_CONTACTS_PATH = (
 PORT_PIN_A_NAME = "Copper_Pin_Component_1907"
 PORT_PIN_B_NAME = "Copper_Pin_Component_1910"
 # Pre-insert standoff: insert_point.x + this value.
-PORT_APPROACH_X_OFFSET_M = 0.02
-PORT_APPROACH_TOLERANCE_M = 0.04
+PORT_APPROACH_X_OFFSET_M = 0.03
+PORT_APPROACH_TOLERANCE_M = 0.01
 # World-Z yaw applied after lift (0 at lift, −180 before translating to the port).
 PORT_APPROACH_YAW_DEG = -180.0
 # Yaw steps while still near the lift tip (orientation-only, tip barely moves).
@@ -150,11 +141,33 @@ PORT_APPROACH_YAW_STEPS = 6
 # After yaw completes: tip blend fractions tip_start→tip_end (final 1.0 is always appended).
 # Staged XY approach keeps each IK target close to the previous reachable pose.
 PORT_APPROACH_VIA_FRACTIONS = (0.35, 0.60, 0.82, 0.95)
+# Per-transition interpolation overrides. More steps reduce nominal joint speed.
+PORT_APPROACH_TRANSITION_JOINT_STEPS = {
+    (0.60, 0.82): 480,
+    (0.82, 0.95): 480,
+}
+
+
+def port_approach_joint_steps(
+    source_fraction: float,
+    destination_fraction: float,
+    *,
+    is_final: bool,
+) -> int:
+    default_steps = 160 if is_final else 120
+    transition = (float(source_fraction), float(destination_fraction))
+    return int(PORT_APPROACH_TRANSITION_JOINT_STEPS.get(transition, default_steps))
+
+
 # Extra world-Z on intermediate vias so the held cable clears the switch face.
 PORT_APPROACH_VIA_Z_CLEARANCE_M = 0.04
-# After offset: tip blend fractions approach→insert (final 1.0 always appended).
-PORT_INSERT_VIA_FRACTIONS = (0.45, 0.75)
-PORT_INSERT_TOLERANCE_M = 0.035
+# Settle at the pre-insert offset for three seconds at 120 physics frames/s.
+PORT_OFFSET_HOLD_FRAMES = 360
+# Final approach descends vertically; insertion then advances straight along -X.
+PORT_FINAL_DESCENT_LINEAR_STEP_M = 0.002
+PORT_INSERT_LINEAR_STEP_M = 0.001
+PORT_LINEAR_IK_TOLERANCE_M = 0.002
+PORT_INSERT_TOLERANCE_M = 0.01
 PORT_APPROACH_WAYPOINTS = 8  # legacy; transit now uses yaw steps + via fractions
 
 # Abort if grasped tip drifts this far from the tool tip (cable slipped out).

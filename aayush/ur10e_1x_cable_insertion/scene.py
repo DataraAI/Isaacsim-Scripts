@@ -33,6 +33,7 @@ class SceneBundle:
     path45: str
     path39: str
     block_top_z: float
+    observe_hand: np.ndarray
 
 
 def _strip_rigid_body_api(prim) -> None:
@@ -73,6 +74,8 @@ def enable_crystal_head_physics(stage, path45: str, path39: str) -> None:
         try:
             rb = UsdPhysics.RigidBodyAPI.Apply(head)
             rb.CreateRigidBodyEnabledAttr(True).Set(True)
+            contact_report = PhysxSchema.PhysxContactReportAPI.Apply(head)
+            contact_report.CreateThresholdAttr().Set(0.0)
         except Exception as exc:
             print(f"[SCENE] RigidBodyAPI failed on {head_path}: {exc}")
             continue
@@ -328,9 +331,16 @@ def build_scene(simulation_app) -> SceneBundle:
         ee_frame=ee_frame,
         debug=True,
     )
+    _mn, _mx, head39_center = asset_spawn.prim_bbox(path39)
+    observe_hand = cfg.observation_hand_from_head39(
+        head39_center,
+        float(asset_spawn.CABLE_SUPPORT_XY[1]),
+        float(spawn_bundle.block_top_z),
+    )
     print(
         f"[SCENE] Motion ready ee_frame={ee_frame} grasp_part={grasp_part_path} "
-        f"block_top_z={spawn_bundle.block_top_z:.4f}"
+        f"block_top_z={spawn_bundle.block_top_z:.4f} "
+        f"head39={np.round(head39_center, 4)} observe={np.round(observe_hand, 4)}"
     )
     return SceneBundle(
         world=world,
@@ -342,4 +352,5 @@ def build_scene(simulation_app) -> SceneBundle:
         path45=path45,
         path39=path39,
         block_top_z=spawn_bundle.block_top_z,
+        observe_hand=observe_hand,
     )

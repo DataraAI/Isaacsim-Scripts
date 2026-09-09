@@ -37,9 +37,11 @@ TABLE_ORIENTATION_EULER_DEG = np.array([0.0, 0.0, -90.0], dtype=np.float64)
 TABLE_SIZE_XYZ = np.array([1.40, 0.90, 0.05], dtype=np.float64)
 TABLE_COLOR = np.array([0.55, 0.35, 0.18], dtype=np.float64)
 
-UR10E_POSITION = np.array([0.18, -0.085, 1.03], dtype=np.float64)
+# Center the robot base on the table's X axis while keeping it on the far Y side.
+UR10E_POSITION = np.array([TABLE_POSITION[0], -0.085, 1.03], dtype=np.float64)
 
-CABLE_SUPPORT_XY = np.array([0.435, -0.35], dtype=np.float64)
+# Center the support pieces and seated cable on the table's Y axis.
+CABLE_SUPPORT_XY = np.array([0.435, TABLE_POSITION[1]], dtype=np.float64)
 # Y/Z kept; X is set from the span of both crystal heads at spawn.
 CABLE_SUPPORT_SIZE_M = np.array([0.22, 0.05, 0.10], dtype=np.float64)
 CABLE_SUPPORT_COLOR = np.array([0.85, 0.45, 0.15], dtype=np.float64)
@@ -62,7 +64,7 @@ PORT_CONTACTS_PATH = (
 )
 PORT_PIN_A_NAME = "Copper_Pin_Component_1907"
 PORT_PIN_B_NAME = "Copper_Pin_Component_1910"
-PORT_APPROACH_X_OFFSET_M = 0.02
+PORT_APPROACH_X_OFFSET_M = 0.03
 PORT_DEBUG_MARKER_ROOT = "/World/DebugPortMarkers"
 PORT_OFFSET_MARKER_PATH = f"{PORT_DEBUG_MARKER_ROOT}/PortApproachOffset"
 PORT_INSERT_MARKER_PATH = f"{PORT_DEBUG_MARKER_ROOT}/PortInsert"
@@ -78,7 +80,7 @@ DEBUG_GRASP_DESCEND_CLEARANCE_M = -0.003
 DEBUG_GRASP_LIFT_CLEARANCE_M = 0.12
 # Final world X translations for the support walls (Isaac translate ops).
 # Tuned for CABLE_SUPPORT_XY[0] == 0.435 (shifted −15 mm from the prior 0.45 layout).
-SUPPORT_LEFT_X_M = 0.335
+SUPPORT_LEFT_X_M = 0.300
 SUPPORT_RIGHT_X_M = 0.60621
 
 UR10E_USD_LOCAL = Path.home() / "isaacsim_assets/Isaac/Robots/UniversalRobots/ur10e/ur10e.usd"
@@ -269,8 +271,9 @@ def enable_datahall_static_collisions(
 ) -> int:
     """Author static mesh colliders under DataHall so the arm cannot pass through.
 
-    Uses triangle-mesh approximation (``none``) for static geometry — same pattern
-    as ``detailedInsertion/datahall/collision_setup.py``.
+    Uses triangle-mesh approximation (``none``) for visible static geometry.
+    Invisible descendants (for example a hidden closed rack door) must not
+    become obstacles that block otherwise visible and reachable equipment.
     """
 
     from omni.physx.scripts import utils as physx_utils
@@ -281,10 +284,16 @@ def enable_datahall_static_collisions(
         return 0
 
     count = 0
+    invisible_count = 0
     for prim in Usd.PrimRange(root):
         if prim.GetMetadata("hide_in_stage_window"):
             continue
-        if prim.GetAttribute("omni:no_collision"):
+        imageable = UsdGeom.Imageable(prim)
+        if imageable and imageable.ComputeVisibility() == UsdGeom.Tokens.invisible:
+            invisible_count += 1
+            continue
+        no_collision = prim.GetAttribute("omni:no_collision")
+        if no_collision and bool(no_collision.Get()):
             continue
         is_mesh = prim.IsA(UsdGeom.Mesh)
         is_solid = (
@@ -295,7 +304,9 @@ def enable_datahall_static_collisions(
             or prim.IsA(UsdGeom.Capsule)
             or prim.IsA(UsdGeom.Cone)
         )
-        if not is_solid and not prim.IsInstanceable():
+        # Instanceable Xforms are containers, not collision geometry. Applying
+        # CollisionAPI to them creates broad hulls that seal child switch ports.
+        if not is_solid:
             continue
         if is_mesh:
             points = UsdGeom.Mesh(prim).GetPointsAttr().Get()
@@ -317,7 +328,7 @@ def enable_datahall_static_collisions(
             print(f"[SPAWN] DataHall collider skip {prim.GetPath()}: {exc}")
     print(
         f"[SPAWN] DataHall static collisions enabled on {count} prim(s) under {root_path} "
-        f"(approx={approximation_shape!r})"
+        f"(skipped_invisible={invisible_count}, approx={approximation_shape!r})"
     )
     return count
 
@@ -969,7 +980,7 @@ def _spawn_debug_sphere(
 
 
 def spawn_port_debug_markers() -> None:
-    """Yellow = approach offset (+0.02 X); red = insert. Invisible, non-colliding."""
+    """Yellow = approach offset (+0.03 X); red = insert. Invisible, non-colliding."""
 
     resolved = compute_port_debug_points()
     if resolved is None:
@@ -1039,6 +1050,11 @@ def spawn_maneuver_via_debug_markers(path45: str) -> None:
     for frac in PORT_APPROACH_VIA_FRACTIONS:
         tip = _port_tip_via_debug(tip_start, tip_end, float(frac))
         points.append((f"Via_{int(round(float(frac) * 100)):02d}", tip))
+    offset_above = tip_end.copy()
+    offset_above[2] = max(float(tip_start[2]), float(tip_end[2])) + float(
+        PORT_APPROACH_VIA_Z_CLEARANCE_M
+    )
+    points.append(("OffsetAbove", offset_above))
 
     print(
         f"[SPAWN] Maneuver via markers (green, scale={scale}, invisible; "

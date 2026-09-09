@@ -103,7 +103,11 @@ def _add_waypoint(controller, position, orientation, *, debug_tip=None, tip_regi
 
 def queue_move(context) -> None:
     controller = context.services["motion_controller"]
-    raw = context.step.inputs.get("position", cfg.OBSERVE_HAND)
+    raw = context.step.inputs.get("position")
+    if raw is None:
+        raw = context.services.get("observe_hand")
+    if raw is None:
+        raise RuntimeError("observe hand pose missing from step inputs and services")
     position = np.asarray(raw, dtype=np.float64).reshape(3)
     orientation = _normalize_quat(
         np.asarray(
@@ -321,12 +325,12 @@ def _port_tip_via(tip_start: np.ndarray, tip_end: np.ndarray, frac: float) -> np
 
 
 def queue_port_approach(context) -> None:
-    """Carry the grasped cable: yaw → offset vias → insert vias, gripper locked closed.
+    """Carry the cable: yaw → elevated offset → settle → linear insertion.
 
     Simultaneous tip lerp + −180° yaw was producing unreachable mid-poses (IK
     failed around −45°). Split: finish yaw while still near tip_start, translate
-    to the +0.02 X offset, then continue tip into the insert point. Every arm
-    segment uses hold_gripper so fingers never command open after the grasp.
+    above the pre-insert offset, descend vertically, settle, then insert along
+    −X. Every arm segment uses hold_gripper so fingers never open after grasp.
     """
 
     controller = context.services["motion_controller"]
@@ -355,11 +359,10 @@ def queue_port_approach(context) -> None:
 
     yaw_steps = max(2, int(cfg.PORT_APPROACH_YAW_STEPS))
     via_fracs = [float(f) for f in cfg.PORT_APPROACH_VIA_FRACTIONS if 0.0 < float(f) < 1.0]
-    via_fracs.append(1.0)
-    insert_fracs = [
-        float(f) for f in cfg.PORT_INSERT_VIA_FRACTIONS if 0.0 < float(f) < 1.0
-    ]
-    insert_fracs.append(1.0)
+    tip_offset_above = tip_end.copy()
+    tip_offset_above[2] = max(float(tip_start[2]), float(tip_end[2])) + float(
+        cfg.PORT_APPROACH_VIA_Z_CLEARANCE_M
+    )
     context.services["monitor_cable_hold"] = True
 
     print(
@@ -369,8 +372,10 @@ def queue_port_approach(context) -> None:
         f"  tip_start={np.round(tip_start, 4)} tip_yaw={np.round(tip_yaw, 4)} "
         f"tip_end={np.round(tip_end, 4)}\n"
         f"  phase1: yaw 0 → {yaw_total:.0f} deg over {yaw_steps} steps at tip_yaw\n"
-        f"  phase2: tip vias fracs={via_fracs} → offset (fingers locked closed)\n"
-        f"  phase3: tip vias fracs={insert_fracs} → insert (fingers locked closed)\n"
+        f"  phase2: tip vias fracs={via_fracs} → offset-above="
+        f"{np.round(tip_offset_above, 4)} → vertical offset\n"
+        f"  phase3: hold={cfg.PORT_OFFSET_HOLD_FRAMES} frames → linear insert "
+        f"(fingers locked closed)\n"
         f"  ori_start={np.round(ori_start, 4)} ori_end={np.round(ori_end, 4)}"
     )
 
@@ -396,40 +401,71 @@ def queue_port_approach(context) -> None:
     for i, frac in enumerate(via_fracs):
         tip = _port_tip_via(tip_start, tip_end, frac)
         hand = _hand_from_tip(tip, ori_end)
-        is_final = i == len(via_fracs) - 1
+        source_frac = 0.0 if i == 0 else via_fracs[i - 1]
         _add_waypoint(
             controller,
             hand,
             ori_end,
             label=f"{context.step.name}: port-via-{frac:.2f}",
             hold_gripper=True,
-            joint_steps=160 if is_final else 120,
-            pos_tolerance=(
-                float(cfg.PORT_APPROACH_TOLERANCE_M) if is_final else 0.03
+            joint_steps=cfg.port_approach_joint_steps(
+                source_frac,
+                frac,
+                is_final=False,
             ),
+            pos_tolerance=0.03,
             max_frames=900,
             debug_tip=tip, tip_registry=tip_registry,
         )
 
-    # Phase 3 — offset → insert tip, fingers stay locked closed (never open).
-    for i, frac in enumerate(insert_fracs):
-        t = float(frac)
-        tip = (1.0 - t) * tip_end + t * insert
-        hand = _hand_from_tip(tip, ori_end)
-        is_final = i == len(insert_fracs) - 1
-        _add_waypoint(
-            controller,
-            hand,
-            ori_end,
-            label=f"{context.step.name}: insert-via-{frac:.2f}",
-            hold_gripper=True,
-            joint_steps=140 if is_final else 100,
-            pos_tolerance=(
-                float(cfg.PORT_INSERT_TOLERANCE_M) if is_final else 0.03
-            ),
-            max_frames=900,
-            debug_tip=tip, tip_registry=tip_registry,
-        )
+    hand_offset_above = _hand_from_tip(tip_offset_above, ori_end)
+    _add_waypoint(
+        controller,
+        hand_offset_above,
+        ori_end,
+        label=f"{context.step.name}: port-offset-above",
+        hold_gripper=True,
+        joint_steps=160,
+        pos_tolerance=float(cfg.PORT_APPROACH_TOLERANCE_M),
+        max_frames=900,
+        debug_tip=tip_offset_above, tip_registry=tip_registry,
+    )
+
+    hand_offset = _hand_from_tip(tip_end, ori_end)
+    _add_waypoint(
+        controller,
+        hand_offset,
+        ori_end,
+        label=f"{context.step.name}: port-offset",
+        hold_gripper=True,
+        joint_interp=False,
+        linear=True,
+        linear_step=float(cfg.PORT_FINAL_DESCENT_LINEAR_STEP_M),
+        pos_tolerance=float(cfg.PORT_LINEAR_IK_TOLERANCE_M),
+        max_frames=900,
+        debug_tip=tip_end, tip_registry=tip_registry,
+    )
+    controller.add_hold_command(
+        int(cfg.PORT_OFFSET_HOLD_FRAMES),
+        hold_gripper=True,
+        label=f"{context.step.name}: settle-at-port-offset",
+    )
+
+    # Phase 3 — straight insertion along world −X after the settling hold.
+    hand_insert = _hand_from_tip(insert, ori_end)
+    _add_waypoint(
+        controller,
+        hand_insert,
+        ori_end,
+        label=f"{context.step.name}: linear-insert",
+        hold_gripper=True,
+        joint_interp=False,
+        linear=True,
+        linear_step=float(cfg.PORT_INSERT_LINEAR_STEP_M),
+        pos_tolerance=float(cfg.PORT_LINEAR_IK_TOLERANCE_M),
+        max_frames=900,
+        debug_tip=insert, tip_registry=tip_registry,
+    )
 
 
 def check_at_port_approach(context) -> bool:
@@ -453,7 +489,7 @@ def check_at_port_approach(context) -> bool:
         return False
 
     err = float(np.linalg.norm(tip - np.asarray(approach, dtype=np.float64)))
-    ok = err <= float(cfg.PORT_APPROACH_TOLERANCE_M) + 0.02
+    ok = err <= float(cfg.PORT_APPROACH_TOLERANCE_M)
     if ok:
         context.blackboard.add("at_port_approach")
     print(
@@ -487,7 +523,7 @@ def check_at_port_insert(context) -> bool:
         return False
 
     err = float(np.linalg.norm(tip - np.asarray(insert, dtype=np.float64)))
-    ok = err <= float(cfg.PORT_INSERT_TOLERANCE_M) + 0.02
+    ok = err <= float(cfg.PORT_INSERT_TOLERANCE_M)
     if ok:
         context.blackboard.add("at_port_approach")
         context.blackboard.add("at_port_insert")
@@ -590,19 +626,29 @@ def _log_ik_progress(context) -> None:
 
     for i in range(prev, min(idx, len(queue))):
         cmd = queue[i]
-        if cmd.get("type") != "cartesian":
+        cmd_type = cmd.get("type")
+        if cmd_type == "hold":
+            print(
+                f"[BT HOLD] COMPLETE [{cmd.get('label', '')}] "
+                f"frames={cmd.get('frames_spent', '?')}"
+            )
+        elif cmd_type == "cartesian":
+            print(
+                f"[BT IK] REACHED [{cmd.get('label', '')}] "
+                f"hand_target={np.round(cmd['pos'], 4)}{_cmd_tip_str(context, cmd)} "
+                f"frames={cmd.get('frames_spent', '?')}"
+            )
+        else:
             continue
-        print(
-            f"[BT IK] REACHED [{cmd.get('label', '')}] "
-            f"hand_target={np.round(cmd['pos'], 4)}{_cmd_tip_str(context, cmd)} "
-            f"frames={cmd.get('frames_spent', '?')}"
-        )
         if context.services.get("monitor_cable_hold") and cmd.get("hold_gripper"):
             held, info = cable_still_in_gripper(context)
-            print(f"[BT GRIP] after REACHED [{cmd.get('label', '')}]: {_format_cable_status(info)}")
+            print(
+                f"[BT GRIP] after {cmd_type.upper()} [{cmd.get('label', '')}]: "
+                f"{_format_cable_status(info)}"
+            )
             if not held:
                 _abort_cable_lost(
-                    context, info, where=f"after reaching [{cmd.get('label', '')}]"
+                    context, info, where=f"after [{cmd.get('label', '')}]"
                 )
                 context.services["_ik_cmd_idx"] = idx
                 return
@@ -610,16 +656,22 @@ def _log_ik_progress(context) -> None:
     if controller.is_done():
         print("[BT IK] NEXT (none — queue end)")
     else:
-        nxt = _next_cartesian(idx)
-        if nxt is not None:
+        cur = queue[idx] if idx < len(queue) else None
+        kind = cur.get("type") if cur else "?"
+        if kind == "hold":
             print(
-                f"[BT IK] NEXT [{nxt.get('label', '')}] "
-                f"hand_target={np.round(nxt['pos'], 4)}{_cmd_tip_str(context, nxt)}"
+                f"[BT HOLD] START [{cur.get('label', '')}] "
+                f"frames={cur.get('max_frames', '?')}"
             )
         else:
-            cur = queue[idx] if idx < len(queue) else None
-            kind = cur.get("type") if cur else "?"
-            print(f"[BT IK] NEXT (non-cartesian: {kind})")
+            nxt = _next_cartesian(idx)
+            if nxt is not None:
+                print(
+                    f"[BT IK] NEXT [{nxt.get('label', '')}] "
+                    f"hand_target={np.round(nxt['pos'], 4)}{_cmd_tip_str(context, nxt)}"
+                )
+            else:
+                print(f"[BT IK] NEXT (non-cartesian: {kind})")
     context.services["_ik_cmd_idx"] = idx
 
 
@@ -643,7 +695,7 @@ def monitor_cable_hold(context):
 
     cmd = controller._command_queue[controller._current_command_index]
     # Only while fingers are commanded locked on a carry waypoint.
-    if cmd.get("type") != "cartesian" or not cmd.get("hold_gripper"):
+    if cmd.get("type") not in ("cartesian", "hold") or not cmd.get("hold_gripper"):
         return None
 
     every = max(1, int(cfg.CABLE_HOLD_CHECK_EVERY_N_FRAMES))
