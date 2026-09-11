@@ -93,6 +93,24 @@ class FrankaMotionController(BaseController):
             "frames_spent": 0,
         })
 
+    def add_hold_command(
+        self,
+        wait_frames: int,
+        *,
+        hold_gripper: bool = False,
+        label: str = "",
+    ) -> None:
+        """Hold current arm joints (and optionally closed fingers) for N frames."""
+
+        self._command_queue.append({
+            "type": "hold",
+            "max_frames": max(1, int(wait_frames)),
+            "frames_spent": 0,
+            "hold_gripper": bool(hold_gripper),
+            "label": str(label),
+            "joint_positions": None,
+        })
+
     def forward(self, current_joint_positions: np.ndarray) -> ArticulationAction:
         n_dof = int(current_joint_positions.shape[0])
 
@@ -107,6 +125,29 @@ class FrankaMotionController(BaseController):
                     self._advance_command()
                     continue
                 return self._gripper.forward(action=cmd["action"])
+
+            if cmd["type"] == "hold":
+                if cmd["frames_spent"] >= cmd["max_frames"]:
+                    if self._debug:
+                        carb.log_info(
+                            f"[Controller] Hold complete{self._debug_tag(cmd)}: "
+                            f"frames={cmd['frames_spent']}"
+                        )
+                    self._advance_command()
+                    continue
+                if cmd["joint_positions"] is None:
+                    cmd["joint_positions"] = np.asarray(
+                        current_joint_positions, dtype=np.float64
+                    ).copy()
+                cmd["frames_spent"] += 1
+                action = ArticulationAction(
+                    joint_positions=cmd["joint_positions"].tolist()
+                )
+                return (
+                    self._with_closed_gripper(action, n_dof)
+                    if cmd.get("hold_gripper")
+                    else action
+                )
 
             if cmd["type"] != "cartesian":
                 carb.log_warn(f"Unknown command type: {cmd.get('type')}")
@@ -124,6 +165,15 @@ class FrankaMotionController(BaseController):
                 cmd["frames_spent"] = 0
 
             if cmd.get("joint_interp"):
+                if self._segment_failed:
+                    # Unreachable IK endpoint: hold instead of treating a zero-motion
+                    # segment as complete and advancing unsafely.
+                    action = self._hold_action(n_dof)
+                    return (
+                        self._with_closed_gripper(action, n_dof)
+                        if cmd.get("hold_gripper")
+                        else action
+                    )
                 cmd["frames_spent"] += 1
                 finished = self._joint_interp_step >= self._joint_interp_steps
                 timed_out = cmd["frames_spent"] >= cmd["max_frames"]
@@ -138,8 +188,14 @@ class FrankaMotionController(BaseController):
                 if self._segment_failed:
                     # A failed linear IK step means the commanded straight line is not currently
                     # executable. Do not silently advance to the next command and close the
-                    # gripper in empty space. Freeze so the failure is obvious.
-                    return self._hold_action(n_dof)
+                    # gripper in empty space. Freeze so the failure is obvious — and keep
+                    # fingers locked if this was a carry segment.
+                    action = self._hold_action(n_dof)
+                    return (
+                        self._with_closed_gripper(action, n_dof)
+                        if cmd.get("hold_gripper")
+                        else action
+                    )
                 goal_reached = self._linear_progress >= self._linear_length and self._segment_goal_reached(cmd)
                 timed_out = cmd["frames_spent"] >= cmd["max_frames"]
                 if goal_reached or timed_out:
@@ -175,6 +231,8 @@ class FrankaMotionController(BaseController):
         self._clear_segment_playback()
         for cmd in self._command_queue:
             cmd["frames_spent"] = 0
+            if cmd.get("type") == "hold":
+                cmd["joint_positions"] = None
 
     def is_done(self) -> bool:
         return self._current_command_index >= len(self._command_queue)
@@ -331,7 +389,12 @@ class FrankaMotionController(BaseController):
                 )
                 self._linear_ik_warned = True
             self._segment_failed = True
-            return self._hold_action(n_dof)
+            action = self._hold_action(n_dof)
+            return (
+                self._with_closed_gripper(action, n_dof)
+                if cmd.get("hold_gripper")
+                else action
+            )
 
         # Only advance the virtual path after IK succeeds. The previous version
         # advanced progress before solving, so one failed step could make the
@@ -356,6 +419,7 @@ class FrankaMotionController(BaseController):
         else:
             carb.log_warn(f"Joint-interp IK target failed{self._debug_tag(cmd)}; holding.")
             self._joint_interp_warned = True
+            self._segment_failed = True
 
         self._joint_interp_start = start
         self._joint_interp_goal = goal

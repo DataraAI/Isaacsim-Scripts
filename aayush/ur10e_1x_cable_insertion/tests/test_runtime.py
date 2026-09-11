@@ -30,16 +30,17 @@ class CableInsertionTreeTests(unittest.TestCase):
         self.assertIn("Grasp and lift E_part006_44", rendered)
         self.assertIn("Move held cable to port offset then insert", rendered)
 
-    def test_port_approach_joint_steps_slow_from_via_60_through_95(self) -> None:
+    def test_port_approach_joint_steps_use_defaults(self) -> None:
         select_steps = getattr(
             cfg,
             "port_approach_joint_steps",
             lambda _source, _destination, *, is_final: 160 if is_final else 120,
         )
 
-        self.assertEqual(select_steps(0.82, 0.95, is_final=False), 480)
-        self.assertEqual(select_steps(0.60, 0.82, is_final=False), 480)
+        self.assertEqual(select_steps(0.82, 0.95, is_final=False), 120)
+        self.assertEqual(select_steps(0.60, 0.82, is_final=False), 120)
         self.assertEqual(select_steps(0.95, 1.0, is_final=True), 160)
+        self.assertEqual(cfg.PORT_APPROACH_X_OFFSET_M, 0.06)
 
     def test_observation_pose_uses_head39_xy_and_safe_clearance(self) -> None:
         compute_pose = getattr(

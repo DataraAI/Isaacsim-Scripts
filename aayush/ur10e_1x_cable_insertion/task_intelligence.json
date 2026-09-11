@@ -62,12 +62,20 @@
               "name": "Move held cable to port offset then insert",
               "primitive": "maneuver_to_ports",
               "preconditions": ["cable_held"],
-              "success_conditions": ["at_port_insert"]
+              "success_conditions": ["at_port_insert", "cable_held"]
             }
           }
         ]
       },
-      {"type": "condition", "name": "Confirm at port insert", "fact": "at_port_insert"}
+      {"type": "condition", "name": "Confirm at port insert", "fact": "at_port_insert"},
+      {"type": "condition", "name": "Confirm cable still held after insert", "fact": "cable_held"},
+      {
+        "type": "action",
+        "name": "Release cable after successful insert",
+        "primitive": "release_gripper",
+        "preconditions": ["at_port_insert", "cable_held"],
+        "success_conditions": ["cable_released"]
+      }
     ]
   }
 }

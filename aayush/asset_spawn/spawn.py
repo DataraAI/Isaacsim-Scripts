@@ -24,6 +24,13 @@ NETWORK_CABLE_USD = (
 )
 
 DATAHALL_PRIM_PATH = "/World/DataHall"
+NETWORK_SWITCHES_PATH = f"{DATAHALL_PRIM_PATH}/Network_Switches"
+# Top / middle / bottom AS4610 ethernet switch rows in the 3-row DataHall asset.
+ETHERNET_SWITCH_ROW_GRID_NAMES = (
+    "AS4610_Ethernet_Row_Top_1x_Grid",
+    "AS4610_Ethernet_Row_Middle_1x_Grid",
+    "AS4610_01_1x_Grid",
+)
 WORK_TABLE_PATH = "/World/WorkTable"
 UR10E_MOUNT_PATH = "/World/UR10eMount"
 UR10E_PRIM_PATH = f"{UR10E_MOUNT_PATH}/ur10e"
@@ -64,7 +71,9 @@ PORT_CONTACTS_PATH = (
 )
 PORT_PIN_A_NAME = "Copper_Pin_Component_1907"
 PORT_PIN_B_NAME = "Copper_Pin_Component_1910"
-PORT_APPROACH_X_OFFSET_M = 0.03
+PORT_APPROACH_X_OFFSET_M = 0.06
+# Match ur10e_1x_cable_insertion PORT_TIP_Z_BIAS_M (negative = lower).
+DEBUG_PORT_TIP_Z_BIAS_M = -0.005
 PORT_DEBUG_MARKER_ROOT = "/World/DebugPortMarkers"
 PORT_OFFSET_MARKER_PATH = f"{PORT_DEBUG_MARKER_ROOT}/PortApproachOffset"
 PORT_INSERT_MARKER_PATH = f"{PORT_DEBUG_MARKER_ROOT}/PortInsert"
@@ -76,6 +85,7 @@ PORT_APPROACH_VIA_FRACTIONS = (0.35, 0.60, 0.82, 0.95)
 PORT_APPROACH_VIA_Z_CLEARANCE_M = 0.04
 # Match ur10e_1x_cable_insertion lift-tip estimate from E_part006_44.
 DEBUG_GRASP_X_OFFSET_M = 0.0
+DEBUG_GRASP_TOWARD_NEG_X_FRAC = 0.85
 DEBUG_GRASP_DESCEND_CLEARANCE_M = -0.003
 DEBUG_GRASP_LIFT_CLEARANCE_M = 0.12
 # Final world X translations for the support walls (Isaac translate ops).
@@ -264,6 +274,79 @@ def enable_gpu_dynamics() -> None:
     for scene in SimulationManager.get_physics_scenes():
         scene.set_enabled_gpu_dynamics(True)
     print("[SPAWN] PhysX GPU dynamics enabled")
+
+
+def deinstance_prim_tree(root_path: str, *, max_passes: int = 4) -> int:
+    """Clear USD instanceable flags under ``root_path`` so mesh APIs can be authored.
+
+    Instance proxies are read-only; collision authoring must run after their
+    instanceable ancestors are flattened with ``SetInstanceable(False)``.
+    Nested switch instances can require more than one pass.
+    """
+
+    root = stage.GetPrimAtPath(root_path)
+    if not root or not root.IsValid():
+        print(f"[SPAWN] De-instance skipped: missing {root_path}")
+        return 0
+    total_changed = 0
+    for _pass in range(max(1, int(max_passes))):
+        changed = 0
+        root = stage.GetPrimAtPath(root_path)
+        if not root or not root.IsValid():
+            break
+        for prim in Usd.PrimRange(root):
+            try:
+                if prim.IsInstanceProxy():
+                    continue
+                is_instance = bool(prim.IsInstance()) if hasattr(prim, "IsInstance") else False
+                is_instanceable = (
+                    bool(prim.IsInstanceable()) if hasattr(prim, "IsInstanceable") else False
+                )
+                if is_instance or is_instanceable:
+                    prim.SetInstanceable(False)
+                    changed += 1
+            except Exception as exc:
+                print(f"[SPAWN] De-instance skip {prim.GetPath()}: {exc}")
+        total_changed += changed
+        if changed == 0:
+            break
+    print(f"[SPAWN] De-instanced {total_changed} prim(s) under {root_path}")
+    return total_changed
+
+
+def enable_ethernet_switch_row_collisions(
+    *, approximation_shape: str = "none"
+) -> int:
+    """De-instance top/middle/bottom switch rows, then author solid mesh colliders.
+
+    Keeps the DataHall-wide rule of never putting CollisionAPI on bare Xform
+    containers (that previously sealed ports with a broad Upper_Right hull).
+    """
+
+    switches = stage.GetPrimAtPath(NETWORK_SWITCHES_PATH)
+    if not switches or not switches.IsValid():
+        print(f"[SPAWN] Switch-row collisions skipped: missing {NETWORK_SWITCHES_PATH}")
+        return 0
+
+    targets: list[str] = []
+    for name in ETHERNET_SWITCH_ROW_GRID_NAMES:
+        path = f"{NETWORK_SWITCHES_PATH}/{name}"
+        if stage.GetPrimAtPath(path).IsValid():
+            targets.append(path)
+        else:
+            print(f"[SPAWN] Switch row grid missing (ok if asset differs): {path}")
+    if not targets:
+        # Fallback: whole Network_Switches scope when grid names are absent.
+        targets = [NETWORK_SWITCHES_PATH]
+
+    for path in targets:
+        deinstance_prim_tree(path)
+
+    # Re-run solid-mesh authoring over Network_Switches after de-instancing so
+    # former instance-proxy meshes become editable collision geometry.
+    return enable_datahall_static_collisions(
+        NETWORK_SWITCHES_PATH, approximation_shape=approximation_shape
+    )
 
 
 def enable_datahall_static_collisions(
@@ -924,8 +1007,12 @@ def rebind_cable_deformable() -> None:
     print("[SPAWN] Timeline stop/play — soft cable rebound to crystal heads")
 
 
-def compute_port_debug_points() -> tuple[np.ndarray, np.ndarray, str, str] | None:
-    """Insert = mid of pins 1907/1910; approach = insert with +X standoff."""
+def compute_port_debug_points(
+    tip_ref_for_z: np.ndarray | None = None,
+    *,
+    crystal_head_path: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, str, str] | None:
+    """Insert XY = mid of pins; Z aligns crystal-head bottom to pin bottoms when possible."""
 
     contacts = PORT_CONTACTS_PATH
     if not stage.GetPrimAtPath(contacts).IsValid():
@@ -939,11 +1026,22 @@ def compute_port_debug_points() -> tuple[np.ndarray, np.ndarray, str, str] | Non
             f"{PORT_PIN_A_NAME}={path_a} {PORT_PIN_B_NAME}={path_b}"
         )
         return None
-    _amin, _amax, ca = prim_bbox(path_a)
-    _bmin, _bmax, cb = prim_bbox(path_b)
+    amin, _amax, ca = prim_bbox(path_a)
+    bmin, _bmax, cb = prim_bbox(path_b)
     insert = 0.5 * (ca + cb)
+    pin_bottom_z = 0.5 * (float(amin[2]) + float(bmin[2]))
+    head_path = crystal_head_path or TRACKED_PLUG_PRIM_PATH
+    if tip_ref_for_z is not None and stage.GetPrimAtPath(head_path).IsValid():
+        head_min, _head_max, _head_c = prim_bbox(head_path)
+        tip_ref = np.asarray(tip_ref_for_z, dtype=np.float64).reshape(3)
+        insert[2] = pin_bottom_z + (float(tip_ref[2]) - float(head_min[2]))
+    else:
+        insert[2] = pin_bottom_z
+    aligned_z = float(insert[2])
+    insert[2] = aligned_z + float(DEBUG_PORT_TIP_Z_BIAS_M)
     approach = insert.copy()
     approach[0] += float(PORT_APPROACH_X_OFFSET_M)
+    approach[2] = aligned_z
     return insert, approach, path_a, path_b
 
 
@@ -980,7 +1078,7 @@ def _spawn_debug_sphere(
 
 
 def spawn_port_debug_markers() -> None:
-    """Yellow = approach offset (+0.03 X); red = insert. Invisible, non-colliding."""
+    """Yellow = approach offset (+0.06 X); red = insert. Invisible, non-colliding."""
 
     resolved = compute_port_debug_points()
     if resolved is None:
@@ -1011,32 +1109,46 @@ def _port_tip_via_debug(tip_start: np.ndarray, tip_end: np.ndarray, frac: float)
 def spawn_maneuver_via_debug_markers(path45: str) -> None:
     """Green spheres at lift tip, yaw station, and lift→offset vias (scale 0.05)."""
 
-    resolved = compute_port_debug_points()
-    if resolved is None:
-        return
-    _insert, approach, _path_a, _path_b = resolved
-
     part_path = find_descendant(path45, GRASP_PART_NAME) or path45
     try:
-        _mn, _mx, part_center = prim_bbox(part_path)
+        part_min, _part_max, part_center = prim_bbox(part_path)
     except Exception as exc:
         print(f"[SPAWN] Maneuver via markers skipped: bbox failed for {part_path}: {exc}")
         return
 
     tip_start = np.asarray(part_center, dtype=np.float64).copy()
-    tip_start[0] += float(DEBUG_GRASP_X_OFFSET_M)
+    tip_start[0] += (
+        float(DEBUG_GRASP_TOWARD_NEG_X_FRAC)
+        * (float(part_min[0]) - float(part_center[0]))
+        + float(DEBUG_GRASP_X_OFFSET_M)
+    )
     tip_start[2] += (
         float(DEBUG_GRASP_DESCEND_CLEARANCE_M)
         + float(DEBUG_GRASP_LIFT_CLEARANCE_M)
         + abs(float(DEBUG_GRASP_DESCEND_CLEARANCE_M))
     )
+
+    resolved = compute_port_debug_points(tip_start, crystal_head_path=path45)
+    if resolved is None:
+        return
+    insert, approach, path_a, path_b = resolved
+    # Refresh yellow/red markers with head-bottom↔pin-bottom Z once the cable exists.
+    UsdGeom.Xform.Define(stage, Sdf.Path(PORT_DEBUG_MARKER_ROOT))
+    _spawn_debug_sphere(PORT_OFFSET_MARKER_PATH, approach, (1.0, 0.92, 0.1), visible=False)
+    _spawn_debug_sphere(PORT_INSERT_MARKER_PATH, insert, (0.95, 0.12, 0.12), visible=False)
+    print(
+        f"[SPAWN] Port debug markers refreshed (Z=head-bottom↔pin-bottom):\n"
+        f"  yellow offset {PORT_OFFSET_MARKER_PATH} @ {np.round(approach, 4)}\n"
+        f"  red insert    {PORT_INSERT_MARKER_PATH} @ {np.round(insert, 4)}\n"
+        f"  from {path_a} / {path_b}"
+    )
+
     tip_end = np.asarray(approach, dtype=np.float64).copy()
     tip_yaw = tip_start.copy()
     tip_yaw[2] = max(float(tip_start[2]), float(tip_end[2])) + float(
         PORT_APPROACH_VIA_Z_CLEARANCE_M
     )
 
-    UsdGeom.Xform.Define(stage, Sdf.Path(PORT_DEBUG_MARKER_ROOT))
     if stage.GetPrimAtPath(PORT_MANEUVER_MARKER_ROOT).IsValid():
         stage.RemovePrim(Sdf.Path(PORT_MANEUVER_MARKER_ROOT))
     UsdGeom.Xform.Define(stage, Sdf.Path(PORT_MANEUVER_MARKER_ROOT))
@@ -1079,6 +1191,7 @@ def build_asset_spawn_scene(app) -> AssetSpawnBundle:
     wait_for_stage_loading()
     print(f"[SPAWN] DataHall loaded at {DATAHALL_PRIM_PATH}")
     enable_datahall_static_collisions(DATAHALL_PRIM_PATH)
+    enable_ethernet_switch_row_collisions()
     spawn_port_debug_markers()
 
     table_orientation = euler_angles_to_quats(np.radians(TABLE_ORIENTATION_EULER_DEG))

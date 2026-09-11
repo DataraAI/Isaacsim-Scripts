@@ -223,6 +223,59 @@ def apply_grasp_friction_materials(stage, robot_prim_path: str, path45: str, pat
     )
 
 
+def apply_bezel_slide_friction_materials(stage, path39: str) -> None:
+    """Low-friction materials on DGX bezels (and optional trailing head39).
+
+    Keeps bezel collision enabled but reduces snagging when the cable line /
+    head39 graze the rack face during port approach.
+    """
+
+    mat_path = _ensure_physics_material(
+        stage,
+        "/World/PhysicsMaterials/bezel_slide_material",
+        static_friction=float(cfg.BEZEL_FRICTION_STATIC),
+        dynamic_friction=float(cfg.BEZEL_FRICTION_DYNAMIC),
+        combine_mode=str(cfg.BEZEL_FRICTION_COMBINE_MODE),
+    )
+
+    bezel_hits = 0
+    datahall = stage.GetPrimAtPath("/World/DataHall")
+    if datahall and datahall.IsValid():
+        tokens = tuple(t.lower() for t in cfg.DGX_BEZEL_PATH_TOKENS)
+        for prim in Usd.PrimRange(datahall):
+            path_l = str(prim.GetPath()).lower()
+            name_l = prim.GetName().lower()
+            if not any(t in path_l or t in name_l for t in tokens):
+                continue
+            if not (prim.IsA(UsdGeom.Mesh) or prim.HasAPI(UsdPhysics.CollisionAPI)):
+                continue
+            try:
+                _bind_physics_material(prim, mat_path)
+                bezel_hits += 1
+            except Exception as exc:
+                print(f"[SCENE] bezel material bind failed on {prim.GetPath()}: {exc}")
+
+    trail_hits = 0
+    if bool(cfg.TRAILING_HEAD_SLIDE_FRICTION):
+        head = stage.GetPrimAtPath(path39)
+        if head and head.IsValid():
+            for prim in Usd.PrimRange(head):
+                if not (prim.IsA(UsdGeom.Mesh) or prim == head):
+                    continue
+                try:
+                    _bind_physics_material(prim, mat_path)
+                    trail_hits += 1
+                except Exception as exc:
+                    print(f"[SCENE] trailing-head slide bind failed on {prim.GetPath()}: {exc}")
+
+    print(
+        f"[SCENE] Bezel slide material {mat_path} "
+        f"(mu_s={cfg.BEZEL_FRICTION_STATIC}, mu_d={cfg.BEZEL_FRICTION_DYNAMIC}, "
+        f"combine={cfg.BEZEL_FRICTION_COMBINE_MODE}) "
+        f"bound on {bezel_hits} bezel prim(s), {trail_hits} trailing-head prim(s)"
+    )
+
+
 def apply_ur10e_home_pose(robot, *, apply_live: bool = False) -> None:
     """Set default (and optionally live) arm joint positions to a known home."""
 
@@ -257,6 +310,7 @@ def build_scene(simulation_app) -> SceneBundle:
 
     enable_crystal_head_physics(stage, path45, path39)
     apply_grasp_friction_materials(stage, cfg.UR10E_PRIM_PATH, path45, path39)
+    apply_bezel_slide_friction_materials(stage, path39)
     grasp_part_path = resolve_grasp_part_path(stage, path45)
 
     # Rebuild physics views after adding RigidBody / collision on the cable.
@@ -301,6 +355,7 @@ def build_scene(simulation_app) -> SceneBundle:
     asset_spawn.configure_robot_physics(cfg.UR10E_PRIM_PATH)
     # Re-bind friction after configure_robot_physics rebuilds collision authors.
     apply_grasp_friction_materials(stage, cfg.UR10E_PRIM_PATH, path45, path39)
+    apply_bezel_slide_friction_materials(stage, path39)
 
     lula_config = interface_config_loader.load_supported_lula_kinematics_solver_config(
         cfg.UR10E_LULA_NAME

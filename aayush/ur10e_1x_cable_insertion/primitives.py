@@ -36,6 +36,21 @@ def grasp_part_center(context) -> np.ndarray:
     return center.copy()
 
 
+def grasp_x_offset_m(context) -> float:
+    """World-X offset from part center toward the −X end of E_part006_44."""
+
+    cached = context.services.get("grasp_x_offset_m")
+    if cached is not None:
+        return float(cached)
+    stage = context.services["stage"]
+    path = context.services.get("grasp_part_path", cfg.GRASP_PART_PATH)
+    part_min, _part_max, center = prim_bbox(stage, path)
+    toward_end = float(cfg.GRASP_TOWARD_NEG_X_FRAC) * (float(part_min[0]) - float(center[0]))
+    offset = toward_end + float(cfg.GRASP_X_OFFSET_M)
+    context.services["grasp_x_offset_m"] = offset
+    return offset
+
+
 def detect_grasp_part(context) -> bool:
     """Perceive E_part006_44 and cache its world center."""
 
@@ -45,7 +60,10 @@ def detect_grasp_part(context) -> bool:
     if not prim or not prim.IsValid():
         print(f"[BT PERCEPTION] grasp part missing: {path}")
         return False
-    center = grasp_part_center(context)
+    part_min, part_max, center = prim_bbox(stage, path)
+    toward_end = float(cfg.GRASP_TOWARD_NEG_X_FRAC) * (float(part_min[0]) - float(center[0]))
+    offset = toward_end + float(cfg.GRASP_X_OFFSET_M)
+    context.services["grasp_x_offset_m"] = offset
     block_top = float(context.services.get("block_top_z", 1.125))
     if center[2] < block_top - 0.25 or center[2] > block_top + 0.35:
         print(f"[BT PERCEPTION] REJECT bad detection center={np.round(center, 4)}")
@@ -53,7 +71,12 @@ def detect_grasp_part(context) -> bool:
     context.services["detected_grasp_point"] = center.copy()
     context.services["live_grasp_point"] = center.copy()
     context.blackboard.add("target_visible")
-    print(f"[BT PERCEPTION] E_part006_44 @ {np.round(center, 4)}")
+    print(
+        f"[BT PERCEPTION] E_part006_44 @ {np.round(center, 4)} "
+        f"grasp_x_offset={offset:+.4f} "
+        f"(frac={cfg.GRASP_TOWARD_NEG_X_FRAC:.2f} toward -X end "
+        f"span_x={float(part_max[0] - part_min[0]):.4f})"
+    )
     return True
 
 
@@ -142,7 +165,7 @@ def queue_grasp(context) -> None:
     context.services["grasp_orientation"] = orientation.copy()
 
     tip_grasp = point.copy()
-    tip_grasp[0] += float(cfg.GRASP_X_OFFSET_M)
+    tip_grasp[0] += float(grasp_x_offset_m(context))
     tip_grasp[2] += float(cfg.GRASP_DESCEND_CLEARANCE_M)
     # Hover back along the tilted approach (away from the tip / toward −approach).
     tip_hover = tip_grasp - approach * float(cfg.GRASP_HOVER_CLEARANCE_M)
@@ -154,7 +177,7 @@ def queue_grasp(context) -> None:
 
     print(
         f"[BT GRASP] tilt={cfg.GRASP_TILT_FROM_DOWN_DEG:.0f}° toward +X "
-        f"part={np.round(point, 4)} x_offset={cfg.GRASP_X_OFFSET_M:+.4f}\n"
+        f"part={np.round(point, 4)} x_offset={grasp_x_offset_m(context):+.4f}\n"
         f"  approach={np.round(approach, 4)}\n"
         f"  tip_hover={np.round(tip_hover, 4)} tip_grasp={np.round(tip_grasp, 4)}\n"
         f"  hand_hover={np.round(hand_hover, 4)} hand_grasp={np.round(hand_grasp, 4)} "
@@ -274,8 +297,17 @@ def _yaw_about_world_z(quat_wxyz: np.ndarray, yaw_deg: float) -> np.ndarray:
     return _quat_multiply(yaw_q, quat_wxyz)
 
 
-def compute_port_targets(stage) -> tuple[np.ndarray, np.ndarray, str, str]:
-    """Insert = mid of pins 1907/1910; approach = insert with +X standoff."""
+def compute_port_targets(
+    stage,
+    tip_ref_for_z: np.ndarray | None = None,
+    *,
+    crystal_head_path: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, str, str]:
+    """Insert XY = mid of pins 1907/1910; approach = insert with +X standoff.
+
+    When ``tip_ref_for_z`` is given and head/pin bottom alignment is enabled,
+    tip Z is chosen so the crystal-head bottom matches the copper-pin bottoms.
+    """
 
     contacts = cfg.PORT_CONTACTS_PATH
     if not stage.GetPrimAtPath(contacts).IsValid():
@@ -287,11 +319,32 @@ def compute_port_targets(stage) -> tuple[np.ndarray, np.ndarray, str, str]:
             f"Missing pins under {contacts}: "
             f"{cfg.PORT_PIN_A_NAME}={path_a} {cfg.PORT_PIN_B_NAME}={path_b}"
         )
-    _amin, _amax, ca = prim_bbox(stage, path_a)
-    _bmin, _bmax, cb = prim_bbox(stage, path_b)
+    amin, _amax, ca = prim_bbox(stage, path_a)
+    bmin, _bmax, cb = prim_bbox(stage, path_b)
     insert = 0.5 * (ca + cb)
+    pin_bottom_z = 0.5 * (float(amin[2]) + float(bmin[2]))
+
+    head_path = crystal_head_path or cfg.CRYSTAL_HEAD45_PATH
+    if (
+        tip_ref_for_z is not None
+        and bool(cfg.PORT_ALIGN_HEAD_BOTTOM_TO_PIN_BOTTOM)
+        and stage.GetPrimAtPath(head_path).IsValid()
+    ):
+        head_min, _head_max, _head_c = prim_bbox(stage, head_path)
+        tip_ref = np.asarray(tip_ref_for_z, dtype=np.float64).reshape(3)
+        tip_above_head_bottom = float(tip_ref[2]) - float(head_min[2])
+        insert[2] = pin_bottom_z + tip_above_head_bottom
+    else:
+        # Without a tip reference, still prefer pin bottoms over pin centers so
+        # markers / fallbacks sit slightly lower than the old mid-pin Z.
+        insert[2] = pin_bottom_z
+
+    aligned_z = float(insert[2])
+    # Bias lowers only the insert tip; offset stays at the aligned (higher) Z.
+    insert[2] = aligned_z + float(cfg.PORT_TIP_Z_BIAS_M)
     approach = insert.copy()
     approach[0] += float(cfg.PORT_APPROACH_X_OFFSET_M)
+    approach[2] = aligned_z
     return insert, approach, path_a, path_b
 
 
@@ -303,7 +356,7 @@ def _lift_tip_from_context(context) -> np.ndarray:
         dtype=np.float64,
     ).reshape(3)
     tip = point.copy()
-    tip[0] += float(cfg.GRASP_X_OFFSET_M)
+    tip[0] += float(grasp_x_offset_m(context))
     tip[2] += (
         float(cfg.GRASP_DESCEND_CLEARANCE_M)
         + float(cfg.GRASP_LIFT_CLEARANCE_M)
@@ -325,12 +378,13 @@ def _port_tip_via(tip_start: np.ndarray, tip_end: np.ndarray, frac: float) -> np
 
 
 def queue_port_approach(context) -> None:
-    """Carry the cable: yaw → elevated offset → settle → linear insertion.
+    """Carry the cable: yaw → elevated offset → continuous slow linear insert.
 
     Simultaneous tip lerp + −180° yaw was producing unreachable mid-poses (IK
     failed around −45°). Split: finish yaw while still near tip_start, translate
-    above the pre-insert offset, descend vertically, settle, then insert along
-    −X. Every arm segment uses hold_gripper so fingers never open after grasp.
+    above the pre-insert offset, descend vertically, then insert smoothly along
+    −X with no settle hold. Every arm segment uses hold_gripper so fingers never
+    open after grasp; cable-in-gripper is monitored through insert.
     """
 
     controller = context.services["motion_controller"]
@@ -344,12 +398,17 @@ def queue_port_approach(context) -> None:
     yaw_total = float(cfg.PORT_APPROACH_YAW_DEG)
     ori_end = _yaw_about_world_z(ori_start, yaw_total)
 
-    insert, approach, path_a, path_b = compute_port_targets(stage)
+    tip_start = _lift_tip_from_context(context)
+    head_path = context.services.get("crystal_head_path", cfg.CRYSTAL_HEAD45_PATH)
+    insert, approach, path_a, path_b = compute_port_targets(
+        stage,
+        tip_ref_for_z=tip_start,
+        crystal_head_path=head_path,
+    )
     context.services["port_insert_point"] = insert.copy()
     context.services["port_approach_point"] = approach.copy()
     context.services["port_approach_orientation"] = ori_end.copy()
 
-    tip_start = _lift_tip_from_context(context)
     tip_end = approach.copy()
     # Slight raise at the lift tip so yaw clears the support / table.
     tip_yaw = tip_start.copy()
@@ -365,17 +424,24 @@ def queue_port_approach(context) -> None:
     )
     context.services["monitor_cable_hold"] = True
 
+    hand_offset = _hand_from_tip(tip_end, ori_end)
+    hand_insert = _hand_from_tip(insert, ori_end)
     print(
         f"[BT PORT] staged transit {path_a} / {path_b}\n"
         f"  insert={np.round(insert, 4)} approach={np.round(approach, 4)} "
-        f"(+{cfg.PORT_APPROACH_X_OFFSET_M:.3f} X)\n"
+        f"(+{cfg.PORT_APPROACH_X_OFFSET_M:.3f} X, insert_Z_bias={cfg.PORT_TIP_Z_BIAS_M:+.4f})\n"
         f"  tip_start={np.round(tip_start, 4)} tip_yaw={np.round(tip_yaw, 4)} "
         f"tip_end={np.round(tip_end, 4)}\n"
+        f"  OFFSET→INSERT start tip={np.round(tip_end, 4)} "
+        f"hand={np.round(hand_offset, 4)} ori={np.round(ori_end, 4)}\n"
+        f"  OFFSET→INSERT end   tip={np.round(insert, 4)} "
+        f"hand={np.round(hand_insert, 4)} ori={np.round(ori_end, 4)}\n"
         f"  phase1: yaw 0 → {yaw_total:.0f} deg over {yaw_steps} steps at tip_yaw\n"
         f"  phase2: tip vias fracs={via_fracs} → offset-above="
         f"{np.round(tip_offset_above, 4)} → vertical offset\n"
-        f"  phase3: hold={cfg.PORT_OFFSET_HOLD_FRAMES} frames → linear insert "
-        f"(fingers locked closed)\n"
+        f"  phase3: continuous slow linear insert "
+        f"(step={cfg.PORT_INSERT_LINEAR_STEP_M:.6f} m, fingers locked closed, "
+        f"monitor cable hold)\n"
         f"  ori_start={np.round(ori_start, 4)} ori_end={np.round(ori_end, 4)}"
     )
 
@@ -445,13 +511,8 @@ def queue_port_approach(context) -> None:
         max_frames=900,
         debug_tip=tip_end, tip_registry=tip_registry,
     )
-    controller.add_hold_command(
-        int(cfg.PORT_OFFSET_HOLD_FRAMES),
-        hold_gripper=True,
-        label=f"{context.step.name}: settle-at-port-offset",
-    )
 
-    # Phase 3 — straight insertion along world −X after the settling hold.
+    # Phase 3 — continuous slow −X insert immediately after offset (no settle hold).
     hand_insert = _hand_from_tip(insert, ori_end)
     _add_waypoint(
         controller,
@@ -463,9 +524,31 @@ def queue_port_approach(context) -> None:
         linear=True,
         linear_step=float(cfg.PORT_INSERT_LINEAR_STEP_M),
         pos_tolerance=float(cfg.PORT_LINEAR_IK_TOLERANCE_M),
-        max_frames=900,
+        max_frames=2400,
         debug_tip=insert, tip_registry=tip_registry,
     )
+
+
+def queue_release_gripper(context) -> None:
+    """Open fingers only after a confirmed insert (ends the grasp intentionally)."""
+
+    context.services["monitor_cable_hold"] = False
+    controller = context.services["motion_controller"]
+    controller.clear_queue()
+    controller.add_gripper_command(
+        action="open",
+        wait_frames=int(cfg.GRASP_RELEASE_WAIT_FRAMES),
+    )
+    print(
+        f"[BT RELEASE] Opening gripper after insert "
+        f"(wait_frames={cfg.GRASP_RELEASE_WAIT_FRAMES})"
+    )
+
+
+def check_gripper_released(context) -> bool:
+    context.blackboard.add("cable_released")
+    print("[BT RELEASE] Gripper open command finished -> cable_released")
+    return True
 
 
 def check_at_port_approach(context) -> bool:
@@ -483,7 +566,7 @@ def check_at_port_approach(context) -> bool:
 
     try:
         tip = grasp_part_center(context)
-        tip[0] += float(cfg.GRASP_X_OFFSET_M)
+        tip[0] += float(grasp_x_offset_m(context))
     except Exception as exc:
         print(f"[BT PORT] approach validate: tip bbox failed: {exc}")
         return False
@@ -501,7 +584,7 @@ def check_at_port_approach(context) -> bool:
 
 
 def check_at_port_insert(context) -> bool:
-    """True when the grasped tip is near the RJ45 insert point (after offset)."""
+    """True when the tip is at insert and the cable is still in the fingers."""
 
     stage = context.services["stage"]
     insert = context.services.get("port_insert_point")
@@ -517,29 +600,42 @@ def check_at_port_insert(context) -> bool:
 
     try:
         tip = grasp_part_center(context)
-        tip[0] += float(cfg.GRASP_X_OFFSET_M)
+        tip[0] += float(grasp_x_offset_m(context))
     except Exception as exc:
         print(f"[BT PORT] insert validate: tip bbox failed: {exc}")
         return False
 
     err = float(np.linalg.norm(tip - np.asarray(insert, dtype=np.float64)))
-    ok = err <= float(cfg.PORT_INSERT_TOLERANCE_M)
-    if ok:
+    at_insert = err <= float(cfg.PORT_INSERT_TOLERANCE_M)
+
+    held, grip_info = cable_still_in_gripper(context)
+    if held:
+        context.blackboard.add("cable_held")
+    else:
+        context.blackboard.discard("cable_held")
+        context.blackboard.discard("at_port_insert")
+        print(
+            f"[BT PORT] insert validate FAIL: cable not in gripper "
+            f"{_format_cable_status(grip_info)}"
+        )
+        return False
+
+    if at_insert:
         context.blackboard.add("at_port_approach")
         context.blackboard.add("at_port_insert")
     print(
         f"[BT PORT] insert validate tip={np.round(tip, 4)} "
         f"target={np.round(np.asarray(insert), 4)} err={err:.4f} "
-        f"-> {'PASS' if ok else 'FAIL'}"
+        f"in_gripper={held} -> {'PASS' if at_insert else 'FAIL'}"
     )
-    return ok
+    return at_insert
 
 
 def cable_still_in_gripper(context) -> tuple[bool, dict]:
-    """True when the grasped tip still tracks the tool tip (cable has not slipped out).
+    """True when the grasped tip still tracks the tool tip and fingers stay closed.
 
-    Finger open/closed is logged, but abort uses tip error only. Otherwise a failed
-    close pulse (fingers≈0) looks like "cable lost" even when the part never moved.
+    Abort if tip error exceeds CABLE_IN_GRIPPER_MAX_ERR_M or fingers open under
+    contact (common slip mode while tip_err still looks small).
     """
 
     info: dict = {}
@@ -551,7 +647,7 @@ def cable_still_in_gripper(context) -> tuple[bool, dict]:
         )
         part = grasp_part_center(context)
         grasp_tip = part.copy()
-        grasp_tip[0] += float(cfg.GRASP_X_OFFSET_M)
+        grasp_tip[0] += float(grasp_x_offset_m(context))
         tip_err = float(np.linalg.norm(grasp_tip - tip_expected))
         info["part"] = np.round(part, 4)
         info["grasp_tip"] = np.round(grasp_tip, 4)
@@ -574,9 +670,12 @@ def cable_still_in_gripper(context) -> tuple[bool, dict]:
         info["fingers"] = None
 
     info["closed_enough"] = bool(closed_enough)
-    # Geometric slip only — part left the tool tip.
-    in_grip = tip_err <= float(cfg.CABLE_IN_GRIPPER_MAX_ERR_M)
-    info["in_gripper"] = bool(in_grip)
+    # Slip if the part left the tool tip OR the fingers are no longer closed.
+    # Prior runs showed fingers opening under contact while tip_err stayed < max.
+    in_grip = bool(
+        tip_err <= float(cfg.CABLE_IN_GRIPPER_MAX_ERR_M) and closed_enough
+    )
+    info["in_gripper"] = in_grip
     return in_grip, info
 
 

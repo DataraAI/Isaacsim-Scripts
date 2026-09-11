@@ -47,6 +47,7 @@ from behaviour_tree_insertion.isaac_adapters import controller_primitive, functi
 from ur10e_1x_cable_insertion.contact_monitor import CableDataHallContactMonitor
 from ur10e_1x_cable_insertion.primitives import (
     check_at_port_insert,
+    check_gripper_released,
     check_physical_grasp,
     detect_grasp_part,
     inspect_workspace,
@@ -54,6 +55,7 @@ from ur10e_1x_cable_insertion.primitives import (
     queue_grasp,
     queue_move,
     queue_port_approach,
+    queue_release_gripper,
 )
 from ur10e_1x_cable_insertion.scene import apply_ur10e_home_pose, build_scene
 
@@ -103,6 +105,10 @@ def main() -> int:
             queue_port_approach,
             validate=check_at_port_insert,
             while_running=monitor_cable_hold,
+        ),
+        "release_gripper": controller_primitive(
+            queue_release_gripper,
+            validate=check_gripper_released,
         ),
         "inspect_workspace": function_primitive(inspect_workspace),
         "execute_subtask": controller_primitive(queue_move),

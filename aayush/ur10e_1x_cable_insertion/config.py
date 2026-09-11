@@ -96,9 +96,12 @@ GRASP_LIFT_CLEARANCE_M = 0.12
 # Pinch slightly below the part center (world −Z).
 GRASP_DESCEND_CLEARANCE_M = -0.003
 # World-X shift from E_part006_44 center. Head45 sits on the +X end of the
-# cable; positive X pinches closer to the rigid crystal head (less slip on lift).
-# Keep small so fingers still drop into the support U-notch.
+# cable; negative X pinches further from the rigid crystal head (toward the
+# cable body / −X face of the part).
 GRASP_X_OFFSET_M = 0.0
+# 0 = part center, 1 = −X bbox face of E_part006_44. Combined with
+# GRASP_X_OFFSET_M for the final pinch X.
+GRASP_TOWARD_NEG_X_FRAC = 0.85
 
 UR10E_LULA_NAME = "UR10e"
 UR10E_EE_FRAME = "tool0"
@@ -132,7 +135,7 @@ PORT_CONTACTS_PATH = (
 PORT_PIN_A_NAME = "Copper_Pin_Component_1907"
 PORT_PIN_B_NAME = "Copper_Pin_Component_1910"
 # Pre-insert standoff: insert_point.x + this value.
-PORT_APPROACH_X_OFFSET_M = 0.03
+PORT_APPROACH_X_OFFSET_M = 0.06
 PORT_APPROACH_TOLERANCE_M = 0.01
 # World-Z yaw applied after lift (0 at lift, −180 before translating to the port).
 PORT_APPROACH_YAW_DEG = -180.0
@@ -141,11 +144,8 @@ PORT_APPROACH_YAW_STEPS = 6
 # After yaw completes: tip blend fractions tip_start→tip_end (final 1.0 is always appended).
 # Staged XY approach keeps each IK target close to the previous reachable pose.
 PORT_APPROACH_VIA_FRACTIONS = (0.35, 0.60, 0.82, 0.95)
-# Per-transition interpolation overrides. More steps reduce nominal joint speed.
-PORT_APPROACH_TRANSITION_JOINT_STEPS = {
-    (0.60, 0.82): 480,
-    (0.82, 0.95): 480,
-}
+# Optional per-transition joint-step overrides (empty → all intermediates use 120).
+PORT_APPROACH_TRANSITION_JOINT_STEPS: dict[tuple[float, float], int] = {}
 
 
 def port_approach_joint_steps(
@@ -161,14 +161,20 @@ def port_approach_joint_steps(
 
 # Extra world-Z on intermediate vias so the held cable clears the switch face.
 PORT_APPROACH_VIA_Z_CLEARANCE_M = 0.04
-# Settle at the pre-insert offset for three seconds at 120 physics frames/s.
-PORT_OFFSET_HOLD_FRAMES = 360
+# No settle hold between offset and insert — continuous slow −X slide.
 # Final approach descends vertically; insertion then advances straight along -X.
 PORT_FINAL_DESCENT_LINEAR_STEP_M = 0.002
-PORT_INSERT_LINEAR_STEP_M = 0.001
+# 3× slower than the prior 1 mm/frame insert (≈0.333 mm per physics frame).
+PORT_INSERT_LINEAR_STEP_M = 0.001 / 3.0
 PORT_LINEAR_IK_TOLERANCE_M = 0.002
 PORT_INSERT_TOLERANCE_M = 0.01
+# Align tip Z so crystal-head bottom matches copper-pin bottoms (Z only).
+PORT_ALIGN_HEAD_BOTTOM_TO_PIN_BOTTOM = True
+# Extra world-Z trim on the INSERT tip only (negative = lower). Offset keeps the
+# aligned Z so it stays above the insert during the −X slide.
+PORT_TIP_Z_BIAS_M = -0.005
 PORT_APPROACH_WAYPOINTS = 8  # legacy; transit now uses yaw steps + via fractions
+GRASP_RELEASE_WAIT_FRAMES = 90
 
 # Abort if grasped tip drifts this far from the tool tip (cable slipped out).
 CABLE_IN_GRIPPER_MAX_ERR_M = 0.06
@@ -184,3 +190,11 @@ FINGERTIP_NAME_TOKENS = (
     "pad",
     "fingertip",
 )
+# Low-friction slide materials for DGX bezel (+ trailing head39) so the cable can
+# graze racks without snagging. Collision stays enabled; combine=min so pairs
+# resolve to the lower μ even when the grasped head45 uses combine=max.
+BEZEL_FRICTION_STATIC = 0.01
+BEZEL_FRICTION_DYNAMIC = 0.005
+BEZEL_FRICTION_COMBINE_MODE = "min"
+DGX_BEZEL_PATH_TOKENS = ("bezel", "dgx3_bezel")
+TRAILING_HEAD_SLIDE_FRICTION = True
