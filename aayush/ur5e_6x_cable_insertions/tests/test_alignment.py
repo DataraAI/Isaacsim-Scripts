@@ -104,6 +104,22 @@ class AlignmentTests(unittest.TestCase):
         )
         self.assertTrue(residual.passed)
 
+    def test_mating_gap_along_axis(self) -> None:
+        port = _box_features(
+            origin=[0.0, 0.0, 0.1],
+            axis=[-1.0, 0.0, 0.0],
+            width=[0.0, 1.0, 0.0],
+            up=[0.0, 0.0, 1.0],
+        )
+        crystal = _box_features(
+            origin=[0.01, 0.0, 0.1],
+            axis=[-1.0, 0.0, 0.0],
+            width=[0.0, 1.0, 0.0],
+            up=[0.0, 0.0, 1.0],
+        )
+        gap = mating_gap_along_axis(crystal, port)
+        self.assertAlmostEqual(gap, -0.01, places=9)
+
     def test_insert_step_moves_along_port_axis(self) -> None:
         tip = np.array([0.05, 0.0, 0.1])
         axis = np.array([-1.0, 0.0, 0.0])

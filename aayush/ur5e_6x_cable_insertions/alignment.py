@@ -47,12 +47,9 @@ def evaluate_alignment(
     if float(np.dot(crystal_axis, port_axis)) < 0.0:
         crystal_axis = -crystal_axis
 
-    latch_z_ok = bool(
-        np.all(
-            crystal.latch_keypoints[:, 2]
-            < port.latch_keypoints[:, 2] - float(latch_z_margin_m)
-        )
-    )
+    crystal_latch_z = float(np.max(crystal.latch_keypoints[:, 2]))
+    port_latch_z = float(np.min(port.latch_keypoints[:, 2]))
+    latch_z_ok = crystal_latch_z < port_latch_z - float(latch_z_margin_m)
 
     width = _unit(port.width_axis)
     up = _unit(port.up_axis)
@@ -74,8 +71,6 @@ def evaluate_alignment(
     delta = crystal.mating_center - port.mating_center
     lateral = (float(np.dot(delta, width)) * width) + (float(np.dot(delta, up)) * up)
     # Latch Z error: raise/lower tip so crystal latch max Z clears below port min Z.
-    crystal_latch_z = float(np.max(crystal.latch_keypoints[:, 2]))
-    port_latch_z = float(np.min(port.latch_keypoints[:, 2]))
     z_err = np.array(
         [0.0, 0.0, (port_latch_z - float(latch_z_margin_m)) - crystal_latch_z],
         dtype=np.float64,
