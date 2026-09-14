@@ -41,6 +41,14 @@ class StationTableTests(unittest.TestCase):
         self.assertEqual(np.asarray(cfg.UR5E_HOME_ARM).shape, (6,))
 
 
+class ControllerWiringTests(unittest.TestCase):
+    def test_controller_uses_ur5e_arm_joint_names(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "controller.py"
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("UR5E_ARM_JOINT_NAMES", source)
+        self.assertNotIn("UR10E_ARM_JOINT_NAMES", source)
+
+
 class TaskIntelligenceTests(unittest.TestCase):
     def test_tree_covers_align_insert_release_home(self) -> None:
         from behaviour_tree_insertion import BehaviourTreeRuntime, load_task_intelligence
