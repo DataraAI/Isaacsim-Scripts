@@ -49,6 +49,25 @@ class ControllerWiringTests(unittest.TestCase):
         self.assertNotIn("UR10E_ARM_JOINT_NAMES", source)
 
 
+class SceneWiringTests(unittest.TestCase):
+    def test_scene_wires_ur5e_cable_physics_and_friction(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "scene.py"
+        source = path.read_text(encoding="utf-8") if path.exists() else ""
+        for needle in (
+            "Ur5eSixArmMotionController",
+            "GRASP_FRICTION_STATIC",
+            "enable_crystal_head_physics",
+            "configure_cable_deformable_for_stage",
+        ):
+            self.assertIn(needle, source)
+
+    def test_scene_does_not_fake_grasp_with_fixed_joint(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "scene.py"
+        source = path.read_text(encoding="utf-8") if path.exists() else ""
+        self.assertNotIn("FixedJoint", source)
+        self.assertNotIn("_attach_cable_head_to_gripper", source)
+
+
 class TaskIntelligenceTests(unittest.TestCase):
     def test_tree_covers_align_insert_release_home(self) -> None:
         from behaviour_tree_insertion import BehaviourTreeRuntime, load_task_intelligence
