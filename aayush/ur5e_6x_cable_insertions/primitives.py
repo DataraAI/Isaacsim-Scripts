@@ -8,10 +8,12 @@ from pxr import Usd, UsdGeom
 from insertion_features.cache import world_features_for_head, world_features_for_jack
 from ur5e_6x_cable_insertions import config as cfg
 from ur5e_6x_cable_insertions.alignment import (
+    assert_unit_linear_scale,
     clamp_nudge,
     evaluate_alignment,
     insert_target_tip,
     mating_gap_along_axis,
+    port_standoff_target,
 )
 from ur5e_6x_cable_insertions.runtime_support import (
     grasp_tip_from_part,
@@ -155,6 +157,8 @@ def _live_features(context):
     world_from_pack = _world_from_prim(
         stage, str(context.services["port_pack_path"]), translation_in_meters=False
     )
+    assert_unit_linear_scale(world_from_head, label="crystal head")
+    assert_unit_linear_scale(world_from_pack, label="port pack")
     crystal = world_features_for_head(cfg.HEAD45_NAME, world_from_head)
     port = world_features_for_jack(
         str(context.services["jack_id"]),
@@ -372,12 +376,10 @@ def _port_tip_via(start: np.ndarray, target: np.ndarray, fraction: float) -> np.
 
 
 def queue_port_offset(context) -> None:
-    """Reorient, then carry the held cable to the feature-based +X offset."""
+    """Reorient, then carry the held cable outside the port insertion axis."""
 
     _crystal, port = _live_features(context)
-    target_tip = np.asarray(port.mating_center, dtype=np.float64) + np.array(
-        [1.0, 0.0, 0.0], dtype=np.float64
-    ) * float(cfg.PORT_APPROACH_X_OFFSET_M)
+    target_tip = port_standoff_target(port, cfg.PORT_APPROACH_X_OFFSET_M)
     start_tip, start_orientation = _current_tip(context)
     end_orientation = _yaw_about_world_z(
         context.services.get("grasp_orientation", start_orientation),
@@ -440,9 +442,7 @@ def check_at_port_offset(context) -> bool:
     if target is None:
         try:
             _crystal, port = _live_features(context)
-            target = np.asarray(port.mating_center, dtype=np.float64) + np.array(
-                [1.0, 0.0, 0.0], dtype=np.float64
-            ) * float(cfg.PORT_APPROACH_X_OFFSET_M)
+            target = port_standoff_target(port, cfg.PORT_APPROACH_X_OFFSET_M)
         except Exception:
             return False
     try:
@@ -652,7 +652,7 @@ def queue_release_gripper(context) -> None:
     context.services["monitor_cable_hold"] = False
     context.services["motion_controller"].add_gripper_command(
         action="open",
-        wait_frames=int(getattr(cfg, "GRASP_RELEASE_WAIT_FRAMES", 90)),
+        wait_frames=int(cfg.GRASP_RELEASE_WAIT_FRAMES),
     )
 
 

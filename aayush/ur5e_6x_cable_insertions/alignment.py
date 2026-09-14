@@ -26,6 +26,29 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return v / n if n > 1e-12 else v
 
 
+def assert_unit_linear_scale(
+    transform: np.ndarray, *, label: str, atol: float = 1.0e-3
+) -> None:
+    """Reject feature transforms whose linear columns contain authored scale."""
+
+    matrix = np.asarray(transform, dtype=np.float64).reshape(4, 4)
+    norms = np.linalg.norm(matrix[:3, :3], axis=0)
+    if not np.all(np.isfinite(norms)) or not np.allclose(
+        norms, np.ones(3), atol=float(atol), rtol=0.0
+    ):
+        raise ValueError(
+            f"{label} feature transform must have unit scale; column norms={norms}"
+        )
+
+
+def port_standoff_target(port: ConnectorFeatures, standoff_m: float) -> np.ndarray:
+    """Return a point outside the port, opposite its insertion direction."""
+
+    return np.asarray(port.mating_center, dtype=np.float64) - float(
+        standoff_m
+    ) * _unit(port.insertion_axis)
+
+
 def mating_gap_along_axis(crystal: ConnectorFeatures, port: ConnectorFeatures) -> float:
     """Signed distance from port mating plane to crystal mating center along port axis."""
 
@@ -71,10 +94,9 @@ def evaluate_alignment(
     delta = crystal.mating_center - port.mating_center
     lateral = (float(np.dot(delta, width)) * width) + (float(np.dot(delta, up)) * up)
     # Latch Z error: raise/lower tip so crystal latch max Z clears below port min Z.
-    z_err = np.array(
-        [0.0, 0.0, (port_latch_z - float(latch_z_margin_m)) - crystal_latch_z],
-        dtype=np.float64,
-    )
+    z_err = np.zeros(3, dtype=np.float64)
+    if not latch_z_ok:
+        z_err[2] = (port_latch_z - float(latch_z_margin_m)) - crystal_latch_z
     pos_error = -lateral + z_err  # move tip to cancel crystal offset
 
     # Rotation: align crystal_axis → port_axis (small-angle approx).

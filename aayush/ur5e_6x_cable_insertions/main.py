@@ -117,13 +117,6 @@ def _select_stations():
     return tuple(known[name] for name in (spec.station_id for spec in cfg.STATIONS) if name in wanted)
 
 
-def _align_and_insert_while_running(context) -> None:
-    """Monitor cable hold and drive the align/insert state machine each frame."""
-
-    monitor_cable_hold(context)
-    tick_align_and_insert(context)
-
-
 def _make_registry():
     return {
         "navigate_to_workspace": controller_primitive(queue_move),
@@ -142,7 +135,7 @@ def _make_registry():
         "align_and_insert": controller_primitive(
             queue_align_and_insert,
             validate=check_at_port_insert,
-            while_running=_align_and_insert_while_running,
+            while_running=tick_align_and_insert,
         ),
         "release_gripper": controller_primitive(
             queue_release_gripper, validate=check_gripper_released

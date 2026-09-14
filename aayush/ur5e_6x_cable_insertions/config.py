@@ -309,13 +309,14 @@ ROBOTIQ_CONTACT_RAD = float(np.deg2rad(12.0))
 GRASP_MIN_LIFT_M = 0.04
 GRASP_CLOSE_WAIT_FRAMES = 220
 GRASP_SQUEEZE_HOLD_FRAMES = 80
+GRASP_RELEASE_WAIT_FRAMES = 90
 
 # Tool tip offset from Lula ee_frame toward the cable (meters along tool +Z).
 TOOL_OFFSET_M = 0.16
 
 PORT_PIN_A_NAME = "Copper_Pin_Component_1907"
 PORT_PIN_B_NAME = "Copper_Pin_Component_1910"
-PORT_APPROACH_X_OFFSET_M = 0.02  # +X standoff from port mating center
+PORT_APPROACH_X_OFFSET_M = 0.02  # Standoff opposite the port insertion axis
 PORT_APPROACH_TOLERANCE_M = 0.04
 PORT_APPROACH_YAW_DEG = -180.0
 PORT_APPROACH_YAW_STEPS = 6
@@ -345,7 +346,7 @@ TRAILING_HEAD_SLIDE_FRICTION = True
 
 # Align + insert loop
 LATCH_Z_MARGIN_M = 0.0005
-MATING_SIDE_MARGIN_M = 0.0005
+MATING_SIDE_MARGIN_M = 0.00015
 AXIS_DOT_MIN = 0.98
 INSERT_STEP_M = 0.001
 MATING_TOUCH_GAP_M = 0.001

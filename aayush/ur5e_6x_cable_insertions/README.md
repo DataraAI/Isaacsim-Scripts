@@ -75,12 +75,9 @@ See `JACK_COPPER_GROUP` for valid IDs.
 
 ## Debug markers
 
-Invisible spheres under `/World/DebugPortMarkers/<station_id>/` (toggle Visibility
-in the Stage panel). No rigid body, no collision:
-
-- **yellow** `Offset` — pre-insert +0.02 m in world X from port mating center
-- **red** `Insert` — port mating center
-- **green** `Via_35`…`Via_95` — lift→offset waypoints
+Debug marker names and scales are reserved in `config.py`, but marker prim
+creation is not implemented yet. The pre-insert offset is computed 0.02 m
+opposite each port's insertion axis, rather than along a fixed world axis.
 
 ## Host-side tests
 

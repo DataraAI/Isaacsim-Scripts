@@ -427,9 +427,13 @@ def _make_motion_controller(stage, robot, spec: cfg.StationSpec, lula_config: di
     kinematics = LulaKinematicsSolver(**lula_config)
     trajectory = LulaTaskSpaceTrajectoryGenerator(**lula_config)
     ee_frame = cfg.UR5E_EE_FRAME
-    tool0 = stage.GetPrimAtPath(f"{spec.robot_prim_path}/tool0")
-    if not tool0 or not tool0.IsValid():
+    tool0_path = find_descendant(stage, spec.robot_prim_path, cfg.UR5E_EE_FRAME)
+    if not tool0_path:
         ee_frame = cfg.UR5E_EE_FRAME_FALLBACK
+    print(
+        f"[SCENE {spec.station_id}] Lula end-effector frame: {ee_frame}"
+        + (f" ({tool0_path})" if tool0_path else "")
+    )
     articulation_kinematics = ArticulationKinematicsSolver(robot, kinematics, ee_frame)
     base_position, base_orientation = robot.get_world_pose()
     kinematics.set_robot_base_pose(base_position, base_orientation)

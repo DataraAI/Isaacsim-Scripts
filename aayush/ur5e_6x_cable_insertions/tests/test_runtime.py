@@ -146,19 +146,39 @@ class PrimitiveSourceTests(unittest.TestCase):
         self.assertLess(body.index("MATING_TOUCH_GAP_M"), body.index("insert_target_tip"))
         self.assertIn("monitor_cable_hold(context)", body)
 
-    def test_port_offset_uses_feature_mating_center_plus_world_x(self) -> None:
+    def test_port_offset_uses_feature_mating_center_and_insertion_axis(self) -> None:
         start = self.source.find("def queue_port_offset")
         self.assertGreaterEqual(start, 0, "queue_port_offset is missing")
         end = self.source.find("\ndef ", start + 1)
         body = self.source[start:] if end < 0 else self.source[start:end]
-        self.assertIn("port.mating_center", body)
+        self.assertIn("port_standoff_target", body)
         self.assertIn("PORT_APPROACH_X_OFFSET_M", body)
-        self.assertIn("[1.0, 0.0, 0.0]", body)
+        self.assertNotIn("[1.0, 0.0, 0.0]", body)
+
+    def test_live_features_rejects_scaled_transforms(self) -> None:
+        start = self.source.find("def _live_features")
+        self.assertGreaterEqual(start, 0, "_live_features is missing")
+        end = self.source.find("\ndef ", start + 1)
+        body = self.source[start:] if end < 0 else self.source[start:end]
+        self.assertEqual(body.count("assert_unit_linear_scale"), 2)
 
     def test_release_opens_and_home_joint_interpolates(self) -> None:
         self.assertIn('action="open"', self.source)
+        self.assertNotIn('getattr(cfg, "GRASP_RELEASE_WAIT_FRAMES"', self.source)
         self.assertIn("UR5E_HOME_ARM", self.source)
         self.assertIn("add_joint_waypoint", self.source)
+
+
+class MainSourceTests(unittest.TestCase):
+    def test_align_monitor_has_one_call_site(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        main_source = (root / "main.py").read_text(encoding="utf-8")
+        primitives_source = (root / "primitives.py").read_text(encoding="utf-8")
+        self.assertNotIn("def _align_and_insert_while_running", main_source)
+        tick_start = primitives_source.find("def tick_align_and_insert")
+        tick_end = primitives_source.find("\ndef ", tick_start + 1)
+        tick_body = primitives_source[tick_start:tick_end]
+        self.assertEqual(tick_body.count("monitor_cable_hold(context)"), 1)
 
 
 class TaskIntelligenceTests(unittest.TestCase):
