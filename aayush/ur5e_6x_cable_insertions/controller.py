@@ -56,6 +56,29 @@ class Ur5eSixArmMotionController(FrankaMotionController):
             "label": str(label),
         })
 
+    def add_joint_waypoint(
+        self,
+        arm_positions,
+        *,
+        joint_steps: int = 240,
+        open_gripper: bool = False,
+        label: str = "",
+    ) -> None:
+        """Queue a direct named-arm interpolation, optionally holding fingers open."""
+
+        target = np.asarray(arm_positions, dtype=np.float64).reshape(-1)
+        if target.shape != (len(cfg.UR5E_ARM_JOINT_NAMES),):
+            raise ValueError("arm_positions must match UR5E_ARM_JOINT_NAMES")
+        self._command_queue.append({
+            "type": "joint_waypoint",
+            "arm_positions": target,
+            "joint_steps": max(1, int(joint_steps)),
+            "step": 0,
+            "start": None,
+            "open_gripper": bool(open_gripper),
+            "label": str(label),
+        })
+
     def current_hand_pose_meters(self):
         position, orientation = super()._current_hand_pose()
         return stage_to_meters(position, self._meters_per_unit), orientation
@@ -101,6 +124,37 @@ class Ur5eSixArmMotionController(FrankaMotionController):
         n_dof = int(np.asarray(current_joint_positions).size)
         while not self.is_done():
             cmd = self._command_queue[self._current_command_index]
+            if cmd.get("type") == "joint_waypoint":
+                current = np.asarray(current_joint_positions, dtype=np.float64).reshape(-1)
+                arm_indices = self._configured_arm_indices()
+                if len(arm_indices) != len(cfg.UR5E_ARM_JOINT_NAMES):
+                    self._segment_failed = True
+                    self._six_arm_failure_reason = "UR5e arm joints unavailable for home waypoint"
+                    return self._hold_action(n_dof)
+                if cmd["start"] is None:
+                    cmd["start"] = current[arm_indices].copy()
+                cmd["step"] += 1
+                t = min(1.0, float(cmd["step"]) / float(cmd["joint_steps"]))
+                blend = t * t * (3.0 - 2.0 * t)
+                arm_target = (
+                    (1.0 - blend) * np.asarray(cmd["start"], dtype=np.float64)
+                    + blend * np.asarray(cmd["arm_positions"], dtype=np.float64)
+                )
+                action = self._hold_action(n_dof)
+                positions = list(action.joint_positions)
+                for index, value in zip(arm_indices, arm_target):
+                    positions[index] = float(value)
+                if cmd.get("open_gripper"):
+                    opened = np.asarray(
+                        self._gripper.joint_opened_positions, dtype=np.float64
+                    ).reshape(-1)
+                    for finger_i, index in enumerate(self._configured_gripper_indices()):
+                        if finger_i < opened.size:
+                            positions[index] = float(opened[finger_i])
+                action.joint_positions = positions
+                if t >= 1.0:
+                    self._advance_command()
+                return action
             if cmd.get("type") != "pose_settle":
                 break
             cmd["frames_spent"] += 1
