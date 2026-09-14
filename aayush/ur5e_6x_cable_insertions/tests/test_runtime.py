@@ -67,6 +67,18 @@ class SceneWiringTests(unittest.TestCase):
         self.assertNotIn("FixedJoint", source)
         self.assertNotIn("_attach_cable_head_to_gripper", source)
 
+    def test_observe_hand_computed_from_path39(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "scene.py"
+        source = path.read_text(encoding="utf-8") if path.exists() else ""
+        start = source.find("prim_bbox(stage, spec.path39)")
+        self.assertGreater(start, 0, "head39 bbox lookup missing from scene.py")
+        end = source.find("observe_hand =", start)
+        self.assertGreater(end, start, "observe_hand assignment missing from scene.py")
+        window = source[start : end + 120]
+        self.assertIn("spec.path39", window)
+        self.assertIn("observation_hand_from_head39", window)
+        self.assertNotIn("grasp_paths", window)
+
 
 class TaskIntelligenceTests(unittest.TestCase):
     def test_tree_covers_align_insert_release_home(self) -> None:

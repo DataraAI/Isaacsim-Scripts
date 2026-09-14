@@ -514,11 +514,8 @@ def build_scene(
                 stage, grasp_paths[spec.station_id]
             )
             block_top_z = float(part_center[2]) - 0.08
-        _minimum, _maximum, part_center = prim_bbox(
-            stage, grasp_paths[spec.station_id]
-        )
-        observe_hand = part_center.copy()
-        observe_hand[2] += float(cfg.OBSERVE_Z_CLEARANCE_M)
+        _minimum, _maximum, head39_center = prim_bbox(stage, spec.path39)
+        observe_hand = cfg.observation_hand_from_head39(head39_center, block_top_z)
         bundles.append(
             StationBundle(
                 spec=spec,

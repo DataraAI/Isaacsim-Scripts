@@ -251,8 +251,19 @@ _tilt = np.deg2rad(GRASP_TILT_FROM_DOWN_DEG)
 GRASP_APPROACH_DIR = np.array([np.sin(_tilt), 0.0, -np.cos(_tilt)], dtype=np.float64)
 GRASP_ORIENTATION = _orientation_tool_z_along(GRASP_APPROACH_DIR)
 
-# Hover this far above E_part006_44 for the observe waypoint (meters).
+# Hover this far above crystal head39 for the observe waypoint (meters).
 OBSERVE_Z_CLEARANCE_M = 0.32
+
+
+def observation_hand_from_head39(
+    head39_center: np.ndarray,
+    block_top_z: float,
+) -> np.ndarray:
+    """Place the observe TCP above head39, clearing the support block."""
+
+    hand = np.asarray(head39_center, dtype=np.float64).reshape(3).copy()
+    hand[2] = max(float(hand[2]), float(block_top_z)) + float(OBSERVE_Z_CLEARANCE_M)
+    return hand
 
 GRASP_HOVER_CLEARANCE_M = 0.12
 GRASP_LIFT_CLEARANCE_M = 0.12
