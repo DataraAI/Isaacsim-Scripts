@@ -8,9 +8,11 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+TANISH_DIR = REPO_ROOT / "tanish"
 AAYUSH_DIR = REPO_ROOT / "aayush"
-if str(AAYUSH_DIR) not in sys.path:
-    sys.path.insert(0, str(AAYUSH_DIR))
+for path in (str(TANISH_DIR), str(AAYUSH_DIR)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from ur5e_6x_cable_insertions import config as cfg
 
@@ -37,6 +39,24 @@ class StationTableTests(unittest.TestCase):
 
     def test_home_arm_is_length_6(self) -> None:
         self.assertEqual(np.asarray(cfg.UR5E_HOME_ARM).shape, (6,))
+
+
+class TaskIntelligenceTests(unittest.TestCase):
+    def test_tree_covers_align_insert_release_home(self) -> None:
+        from behaviour_tree_insertion import BehaviourTreeRuntime, load_task_intelligence
+
+        path = Path(__file__).resolve().parents[1] / "task_intelligence.json"
+        payload = load_task_intelligence(path)
+        rendered = BehaviourTreeRuntime(payload, {}).render_tree()
+        for needle in (
+            "Move to observation pose",
+            "Grasp and lift",
+            "Maneuver to port offset",
+            "Align and insert",
+            "Release cable",
+            "Return home",
+        ):
+            self.assertIn(needle, rendered)
 
 
 if __name__ == "__main__":
