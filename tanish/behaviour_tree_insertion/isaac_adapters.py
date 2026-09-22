@@ -54,6 +54,17 @@ class IsaacControllerPrimitive:
         if _controller_failed(controller):
             return Status.FAILURE
         if controller.is_done():
+            # Grasp/lift handoff: without a joint command this frame, gravity
+            # sags the wrist and bends the cable neck on the rest block.
+            idle_lock = getattr(controller, "idle_lock_action", None)
+            if callable(idle_lock):
+                joint_positions = robot.get_joint_positions()
+                if joint_positions is not None:
+                    if hasattr(joint_positions, "cpu"):
+                        joint_positions = joint_positions.cpu().numpy()
+                    action = idle_lock(joint_positions)
+                    if action is not None:
+                        articulation_controller.apply_action(action)
             return Status.SUCCESS if self.validate is None or self.validate(context) else Status.FAILURE
 
         joint_positions = robot.get_joint_positions()

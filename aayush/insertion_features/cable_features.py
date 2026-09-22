@@ -272,16 +272,18 @@ def world_features_from_crystal_head(
     prim = stage.GetPrimAtPath(head_prim_path)
     if not prim or not prim.IsValid():
         raise RuntimeError(f"Missing crystal head: {head_prim_path}")
+    meters_per_unit = float(UsdGeom.GetStageMetersPerUnit(stage))
     world = world_features_for_head(
         prim.GetName(),
         _world_transform(prim),
         cache_path=cache_path,
+        meters_per_unit=meters_per_unit,
     )
     return CrystalHeadFeatures(
         name=prim.GetName(),
         prim_path=str(prim.GetPath()),
         features=world,
-        meters_per_unit=float(UsdGeom.GetStageMetersPerUnit(stage)),
+        meters_per_unit=meters_per_unit,
     )
 
 

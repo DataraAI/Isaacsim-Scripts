@@ -50,10 +50,60 @@ class FrankaMotionController(BaseController):
         self._debug = bool(debug)
         self.clear_queue()
 
+    def _forward_extended_command(
+        self,
+        cmd: dict,
+        current_joint_positions: np.ndarray,
+        n_dof: int,
+    ):
+        """Hook for subclass command types (pose_settle, joint_waypoint, ...).
+
+        Return an ``ArticulationAction`` if handled, otherwise ``None`` so the
+        base controller logs an unknown-type warning.
+        """
+
+        return None
+
     def clear_queue(self) -> None:
+        # Keep the last arm lock across queue clears so grasp→validate→lift
+        # cannot float under gravity when ``is_done()`` skips apply_action.
+        lock = getattr(self, "_lock_joint_positions", None)
         self._command_queue: typing.List[dict] = []
         self._current_command_index = 0
         self._clear_segment_playback()
+        self._lock_joint_positions = lock
+
+    def idle_lock_action(self, current_joint_positions: np.ndarray | None = None) -> ArticulationAction:
+        """Re-apply the last frozen arm (+ closed fingers) when the queue is empty."""
+
+        n_dof = None
+        if current_joint_positions is not None:
+            n_dof = int(np.asarray(current_joint_positions).shape[0])
+        lock = getattr(self, "_lock_joint_positions", None)
+        if lock is not None:
+            positions = list(lock)
+            if n_dof is not None:
+                if len(positions) < n_dof:
+                    positions.extend([None] * (n_dof - len(positions)))
+                else:
+                    positions = positions[:n_dof]
+            return ArticulationAction(joint_positions=positions)
+        if n_dof is None:
+            n_dof = 0
+        return self._hold_action(n_dof)
+
+    def _remember_lock(self, positions) -> None:
+        prior = getattr(self, "_lock_joint_positions", None)
+        out = []
+        for i, value in enumerate(list(positions)):
+            if value is None:
+                if prior is not None and i < len(prior) and prior[i] is not None:
+                    out.append(float(prior[i]))
+                else:
+                    out.append(None)
+            else:
+                out.append(float(value))
+        self._lock_joint_positions = out
 
     def add_cartesian_waypoint(
         self,
@@ -61,6 +111,7 @@ class FrankaMotionController(BaseController):
         orientation: np.ndarray,
         max_frames: int = 400,
         pos_tolerance: typing.Optional[float] = None,
+        ori_tolerance: typing.Optional[float] = None,
         linear: bool = False,
         linear_step: float = 0.001,
         joint_interp: bool = False,
@@ -76,6 +127,7 @@ class FrankaMotionController(BaseController):
             "max_frames": int(max_frames),
             "frames_spent": 0,
             "pos_tolerance": pos_tolerance,
+            "ori_tolerance": ori_tolerance,
             "linear": bool(linear),
             "linear_step": float(linear_step),
             "joint_interp": bool(joint_interp),
@@ -85,12 +137,22 @@ class FrankaMotionController(BaseController):
             "label": str(label),
         })
 
-    def add_gripper_command(self, action: str, wait_frames: int = 60) -> None:
+    def add_gripper_command(
+        self,
+        action: str,
+        wait_frames: int = 60,
+        *,
+        hold_arm: bool = False,
+    ) -> None:
         self._command_queue.append({
             "type": "gripper",
             "action": str(action),
             "max_frames": int(wait_frames),
             "frames_spent": 0,
+            # When True, freeze arm DOFs at the pose captured on the first tick
+            # so gravity cannot sag the wrist while fingers close.
+            "hold_arm": bool(hold_arm),
+            "arm_positions": None,
         })
 
     def add_hold_command(
@@ -124,7 +186,43 @@ class FrankaMotionController(BaseController):
                         carb.log_info(f"[Controller] Gripper {cmd['action']!r} complete")
                     self._advance_command()
                     continue
-                return self._gripper.forward(action=cmd["action"])
+                if not cmd.get("hold_arm"):
+                    return self._gripper.forward(action=cmd["action"])
+                # Freeze arm DOFs; drive fingers to open/close targets only.
+                if cmd.get("arm_positions") is None:
+                    lock = getattr(self, "_lock_joint_positions", None)
+                    if lock is not None and len(lock) >= n_dof:
+                        cmd["arm_positions"] = np.asarray(
+                            lock[:n_dof], dtype=np.float64
+                        ).copy()
+                    else:
+                        cmd["arm_positions"] = np.asarray(
+                            current_joint_positions, dtype=np.float64
+                        ).copy()
+                positions = list(cmd["arm_positions"])
+                if len(positions) < n_dof:
+                    positions.extend([None] * (n_dof - len(positions)))
+                elif len(positions) > n_dof:
+                    positions = positions[:n_dof]
+                action_name = str(cmd["action"]).lower()
+                if action_name == "close":
+                    finger_targets = np.asarray(
+                        self._gripper.joint_closed_positions, dtype=np.float64
+                    ).flatten()
+                else:
+                    opened = getattr(
+                        self._gripper,
+                        "joint_opened_positions",
+                        getattr(self._gripper, "joint_open_positions", None),
+                    )
+                    if opened is None:
+                        return self._gripper.forward(action=cmd["action"])
+                    finger_targets = np.asarray(opened, dtype=np.float64).flatten()
+                for finger_i, joint_i in enumerate(self._gripper_joint_indices(n_dof)):
+                    if finger_i < len(finger_targets) and 0 <= joint_i < len(positions):
+                        positions[joint_i] = float(finger_targets[finger_i])
+                self._remember_lock(positions)
+                return ArticulationAction(joint_positions=positions)
 
             if cmd["type"] == "hold":
                 if cmd["frames_spent"] >= cmd["max_frames"]:
@@ -136,20 +234,35 @@ class FrankaMotionController(BaseController):
                     self._advance_command()
                     continue
                 if cmd["joint_positions"] is None:
-                    cmd["joint_positions"] = np.asarray(
-                        current_joint_positions, dtype=np.float64
-                    ).copy()
+                    lock = getattr(self, "_lock_joint_positions", None)
+                    if lock is not None and len(lock) >= n_dof:
+                        cmd["joint_positions"] = np.asarray(
+                            lock[:n_dof], dtype=np.float64
+                        ).copy()
+                    else:
+                        cmd["joint_positions"] = np.asarray(
+                            current_joint_positions, dtype=np.float64
+                        ).copy()
                 cmd["frames_spent"] += 1
                 action = ArticulationAction(
                     joint_positions=cmd["joint_positions"].tolist()
                 )
-                return (
+                held = (
                     self._with_closed_gripper(action, n_dof)
                     if cmd.get("hold_gripper")
                     else action
                 )
+                self._remember_lock(getattr(held, "joint_positions", cmd["joint_positions"]))
+                return held
 
             if cmd["type"] != "cartesian":
+                # Subclasses (e.g. pose_settle / joint_waypoint) handle extra types.
+                # Parent may advance into those in the same tick as a cartesian finish.
+                extended = self._forward_extended_command(
+                    cmd, current_joint_positions, n_dof
+                )
+                if extended is not None:
+                    return extended
                 carb.log_warn(f"Unknown command type: {cmd.get('type')}")
                 return self._hold_action(n_dof)
 
@@ -169,11 +282,7 @@ class FrankaMotionController(BaseController):
                     # Unreachable IK endpoint: hold instead of treating a zero-motion
                     # segment as complete and advancing unsafely.
                     action = self._hold_action(n_dof)
-                    return (
-                        self._with_closed_gripper(action, n_dof)
-                        if cmd.get("hold_gripper")
-                        else action
-                    )
+                    return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
                 cmd["frames_spent"] += 1
                 finished = self._joint_interp_step >= self._joint_interp_steps
                 timed_out = cmd["frames_spent"] >= cmd["max_frames"]
@@ -185,19 +294,27 @@ class FrankaMotionController(BaseController):
 
             if cmd.get("linear"):
                 cmd["frames_spent"] += 1
-                if self._segment_failed:
-                    # A failed linear IK step means the commanded straight line is not currently
-                    # executable. Do not silently advance to the next command and close the
-                    # gripper in empty space. Freeze so the failure is obvious — and keep
-                    # fingers locked if this was a carry segment.
-                    action = self._hold_action(n_dof)
-                    return (
-                        self._with_closed_gripper(action, n_dof)
-                        if cmd.get("hold_gripper")
-                        else action
-                    )
-                goal_reached = self._linear_progress >= self._linear_length and self._segment_goal_reached(cmd)
                 timed_out = cmd["frames_spent"] >= cmd["max_frames"]
+                if self._segment_failed:
+                    # Prefer advancing after timeout over freezing forever mid-carry.
+                    if timed_out:
+                        self._log_waypoint_complete(cmd, timed_out=True)
+                        self._advance_command()
+                        continue
+                    action = self._hold_action(n_dof)
+                    return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
+                # Advance when hand is close enough (loose via / tight offset), or
+                # when the linear sample finished within pos tol, or on timeout.
+                goal_reached = self._segment_goal_reached(cmd)
+                if (
+                    not goal_reached
+                    and self._linear_progress >= self._linear_length - 1e-9
+                    and self._segment_goal_hand is not None
+                ):
+                    hand_pos, _ = self._current_hand_pose()
+                    pos_tol = float(cmd.get("pos_tolerance") or self._pos_tolerance)
+                    if float(np.linalg.norm(self._segment_goal_hand - hand_pos)) < pos_tol:
+                        goal_reached = True
                 if goal_reached or timed_out:
                     self._log_waypoint_complete(cmd, timed_out)
                     self._advance_command()
@@ -218,7 +335,7 @@ class FrankaMotionController(BaseController):
                 continue
             return self._hold_action(n_dof)
 
-        return self._hold_action(n_dof)
+        return self.idle_lock_action(current_joint_positions)
 
     def current_label(self) -> str:
         if self.is_done():
@@ -233,6 +350,8 @@ class FrankaMotionController(BaseController):
             cmd["frames_spent"] = 0
             if cmd.get("type") == "hold":
                 cmd["joint_positions"] = None
+            if cmd.get("type") == "gripper":
+                cmd["arm_positions"] = None
 
     def is_done(self) -> bool:
         return self._current_command_index >= len(self._command_queue)
@@ -259,6 +378,9 @@ class FrankaMotionController(BaseController):
         self._joint_interp_warned = False
 
     def _hold_action(self, n_dof: int) -> ArticulationAction:
+        lock = getattr(self, "_lock_joint_positions", None)
+        if lock is not None and len(lock) >= n_dof:
+            return ArticulationAction(joint_positions=list(lock[:n_dof]))
         return ArticulationAction(joint_positions=[None] * n_dof)
 
     def _gripper_joint_indices(self, n_dof: int) -> typing.List[int]:
@@ -351,7 +473,7 @@ class FrankaMotionController(BaseController):
                 target_position=self._segment_goal_hand,
                 target_orientation=cmd["ori"],
                 position_tolerance=cmd.get("pos_tolerance") or self._pos_tolerance,
-                orientation_tolerance=self._ori_tolerance,
+                orientation_tolerance=self._ori_tol(cmd),
             )
             if not success:
                 carb.log_warn(f"IK fallback did not report convergence{tag}.")
@@ -372,6 +494,10 @@ class FrankaMotionController(BaseController):
         self._linear_progress = 0.0
         self._linear_ik_warned = False
 
+    def _ori_tol(self, cmd: dict) -> float:
+        value = cmd.get("ori_tolerance")
+        return float(self._ori_tolerance if value is None else value)
+
     def _linear_ik_action(self, cmd: dict, n_dof: int) -> ArticulationAction:
         next_progress = min(self._linear_progress + cmd["linear_step"], self._linear_length)
         target = self._linear_start + self._linear_dir * next_progress
@@ -379,7 +505,7 @@ class FrankaMotionController(BaseController):
             target_position=target,
             target_orientation=cmd["ori"],
             position_tolerance=cmd.get("pos_tolerance") or self._pos_tolerance,
-            orientation_tolerance=self._ori_tolerance,
+            orientation_tolerance=self._ori_tol(cmd),
         )
         if not success:
             if not self._linear_ik_warned:
@@ -390,11 +516,7 @@ class FrankaMotionController(BaseController):
                 self._linear_ik_warned = True
             self._segment_failed = True
             action = self._hold_action(n_dof)
-            return (
-                self._with_closed_gripper(action, n_dof)
-                if cmd.get("hold_gripper")
-                else action
-            )
+            return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
 
         # Only advance the virtual path after IK succeeds. The previous version
         # advanced progress before solving, so one failed step could make the
@@ -408,7 +530,7 @@ class FrankaMotionController(BaseController):
             target_position=self._segment_goal_hand,
             target_orientation=cmd["ori"],
             position_tolerance=cmd.get("pos_tolerance") or self._pos_tolerance,
-            orientation_tolerance=self._ori_tolerance,
+            orientation_tolerance=self._ori_tol(cmd),
         )
         start = np.asarray(current_joint_positions, dtype=np.float64).copy()
         goal = start.copy()
@@ -443,9 +565,28 @@ class FrankaMotionController(BaseController):
         return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
 
     def _segment_goal_reached(self, cmd: dict) -> bool:
+        if self._segment_goal_hand is None:
+            return False
         tolerance = cmd.get("pos_tolerance") or self._pos_tolerance
-        hand_pos, _ = self._current_hand_pose()
-        return float(np.linalg.norm(self._segment_goal_hand - hand_pos)) < tolerance
+        hand_pos, hand_ori = self._current_hand_pose()
+        if float(np.linalg.norm(self._segment_goal_hand - hand_pos)) >= float(tolerance):
+            return False
+        ori_tol = cmd.get("ori_tolerance")
+        if ori_tol is None:
+            return True
+        # Quaternion absolute dot ≥ cos(θ/2) for angle ≤ ori_tol.
+        q_goal = np.asarray(cmd.get("ori"), dtype=np.float64).reshape(4)
+        q_now = np.asarray(hand_ori, dtype=np.float64).reshape(4)
+        n_g = float(np.linalg.norm(q_goal))
+        n_n = float(np.linalg.norm(q_now))
+        if n_g < 1e-12 or n_n < 1e-12:
+            return True
+        q_goal = q_goal / n_g
+        q_now = q_now / n_n
+        dot = abs(float(np.dot(q_goal, q_now)))
+        dot = min(1.0, dot)
+        angle = 2.0 * float(np.arccos(dot))
+        return angle <= float(ori_tol)
 
     def _log_waypoint_complete(self, cmd: dict, timed_out: bool) -> None:
         if not self._debug:

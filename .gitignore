@@ -28,3 +28,7 @@ run_logs/
 aayush/ros2_ws/build
 aayush/ros2_ws/install
 aayush/ros2_ws/log
+
+# Developer-local UR5e motion / insert caches and diagnostics (not shared).
+aayush/ur5e_6x_cable_insertions/*_cache.json
+aayush/ur5e_6x_cable_insertions/insert_diag.jsonl

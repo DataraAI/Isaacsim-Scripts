@@ -190,15 +190,19 @@ def world_features_for_head(
     head_name: str,
     world_from_head: np.ndarray,
     cache_path: Path | str | None = None,
+    *,
+    meters_per_unit: float = 1.0,
 ) -> ConnectorFeatures:
     """Apply a live crystal-head world pose to cached local features.
 
     ``world_from_head`` is a 4x4 column-vector transform (USD Gf matrix
-    transposed), mapping head-local coordinates into the current stage world.
+    transposed). Pass the stage's ``meters_per_unit`` so a centimetre DataHall
+    pose is converted before being applied to the metre cache.
     """
 
     local = local_features_for_head(head_name, cache_path=cache_path)
-    return transform_connector_features(local, world_from_head)
+    world_from_head_m = meters_transform_from_stage(world_from_head, meters_per_unit)
+    return transform_connector_features(local, world_from_head_m)
 
 
 def _bind_imported_variables(heads: dict[str, ConnectorFeatures]) -> None:
@@ -212,16 +216,27 @@ def meters_transform_from_stage(
     transform: np.ndarray,
     meters_per_unit: float,
 ) -> np.ndarray:
-    """Scale a stage-unit Gf.T column-vector transform into meters.
+    """Convert a stage-unit Gf.T column-vector transform into metres.
 
-    Rotation/scale is unchanged; translation is multiplied by ``meters_per_unit``.
+    Translation is multiplied by ``meters_per_unit``. The linear 3×3 is replaced
+    by its closest rotation (SVD / polar factor) so DataHall hierarchy scale
+    (~100× on crystal heads) does not inflate metre-local feature offsets.
     """
 
     matrix = np.asarray(transform, dtype=np.float64).reshape(4, 4).copy()
     if not np.all(np.isfinite(matrix)):
         raise ValueError("transform must be finite")
-    matrix[:3, 3] *= float(meters_per_unit)
-    return matrix
+    linear = matrix[:3, :3]
+    u, _, vt = np.linalg.svd(linear)
+    rotation = u @ vt
+    if float(np.linalg.det(rotation)) < 0.0:
+        u = u.copy()
+        u[:, -1] *= -1.0
+        rotation = u @ vt
+    out = np.eye(4, dtype=np.float64)
+    out[:3, :3] = rotation
+    out[:3, 3] = matrix[:3, 3] * float(meters_per_unit)
+    return out
 
 
 def length_scale_transform(scale: float) -> np.ndarray:

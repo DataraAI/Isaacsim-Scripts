@@ -1,0 +1,58 @@
+{
+  "tree": {
+    "type": "sequence",
+    "name": "Grasp cable, maneuver to port offset, and insert",
+    "children": [
+      {
+        "type": "action",
+        "name": "Move to cable hover",
+        "primitive": "navigate_to_workspace",
+        "preconditions": ["robot_ready"],
+        "success_conditions": ["at_workspace"]
+      },
+      {
+        "type": "action",
+        "name": "Orient + tilt gripper",
+        "primitive": "orient_gripper",
+        "preconditions": ["at_workspace"],
+        "success_conditions": ["gripper_oriented"]
+      },
+      {
+        "type": "action",
+        "name": "Descend to cable neck",
+        "primitive": "descend_to_neck",
+        "preconditions": ["gripper_oriented"],
+        "success_conditions": ["at_grasp_pose"]
+      },
+      {
+        "type": "action",
+        "name": "Close gripper on neck",
+        "primitive": "grasp_object",
+        "preconditions": ["at_grasp_pose"],
+        "success_conditions": ["cable_held"]
+      },
+      {
+        "type": "action",
+        "name": "Lift cable",
+        "primitive": "lift_cable",
+        "preconditions": ["cable_held"],
+        "success_conditions": ["cable_lifted"]
+      },
+      {
+        "type": "action",
+        "name": "Maneuver to port offset",
+        "primitive": "maneuver_to_ports",
+        "preconditions": ["cable_lifted"],
+        "success_conditions": ["at_port_offset"]
+      },
+      {
+        "type": "action",
+        "name": "Align + translate into port",
+        "primitive": "align_and_insert",
+        "preconditions": ["at_port_offset"],
+        "success_conditions": ["port_inserted"],
+        "notes": "At TipOffset: IK must reach crystal-mating≡port-mating; pan-reconfig at fixed offset tip if needed, then align YZ → translate along crystal axis."
+      }
+    ]
+  }
+}
