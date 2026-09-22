@@ -443,16 +443,39 @@ def main() -> int:
     max_frames = int(ARGS.max_frames)
     print("[BT CABLE UR5E 6X] Starting behaviour trees…")
     print("[BT CABLE UR5E 6X] Pause/Stop are respected (script will not force-play).")
+    cuda_fail_streak = 0
     while simulation_app.is_running():
         if max_frames > 0 and frame >= max_frames:
             print(f"[BT CABLE UR5E 6X] Reached --max-frames={max_frames}; exiting.")
             break
-        world.step(render=not ARGS.headless)
+        try:
+            world.step(render=not ARGS.headless)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "700" in msg or "cuda" in msg:
+                print(
+                    f"[BT CABLE UR5E 6X FAIL] PhysX/CUDA step failed ({exc}); "
+                    "exiting so the next run gets a clean GPU context."
+                )
+                break
+            raise
         if getattr(world, "is_stopped", lambda: False)():
             print("[BT CABLE UR5E 6X] Timeline stopped; exiting run loop.")
             break
         if not world.is_playing():
             continue
+        # Detect poisoned PhysX GPU context (CUDA 700) via articulation read failure.
+        try:
+            _ = bundle.stations[0].robot.get_joint_positions()
+            cuda_fail_streak = 0
+        except Exception as exc:
+            cuda_fail_streak += 1
+            if cuda_fail_streak >= 5:
+                print(
+                    f"[BT CABLE UR5E 6X FAIL] Articulation views dead after PhysX "
+                    f"GPU error ({exc}); closing app for a clean relaunch."
+                )
+                break
         # Default motion for unselected arms: stay at home.
         hold_idle_ur5e_homes(bundle.idle_stations)
         frame += 1

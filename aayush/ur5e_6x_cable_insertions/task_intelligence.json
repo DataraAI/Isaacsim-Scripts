@@ -47,11 +47,11 @@
       },
       {
         "type": "action",
-        "name": "Align + translate into port",
+        "name": "Insert TipOffset → seat",
         "primitive": "align_and_insert",
         "preconditions": ["at_port_offset"],
         "success_conditions": ["port_inserted"],
-        "notes": "At TipOffset: IK must reach crystal-mating≡port-mating; pan-reconfig at fixed offset tip if needed, then align YZ → translate along crystal axis."
+        "notes": "Cached TipOffset→seat cartesian IK path: crystal mating center steps 1 cm along insertion axis until coincident with port mating."
       }
     ]
   }

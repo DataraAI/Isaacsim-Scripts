@@ -19,7 +19,9 @@ DATAHALL_PRIM_PATH_FALLBACKS = (
     "/World/DataHall",
 )
 ENABLE_DATAHALL_STATIC_COLLISIONS = True
-DATAHALL_COLLISION_APPROXIMATION = "none"  # triangle mesh (static accurate)
+# Prefer convexHull for bulk static meshes — triangle ("none") on every switch
+# prim (~6k) overflows PhysX GPU buffers and triggers CUDA 700 mid-grasp.
+DATAHALL_COLLISION_APPROXIMATION = "convexHull"
 # Flatten instanceable switch/rack meshes before CollisionAPI (proxies are read-only).
 DATAHALL_DEINSTANCE_BEFORE_COLLISION = True
 DATAHALL_DEINSTANCE_MAX_PASSES = 4
@@ -42,10 +44,10 @@ WORK_TABLE_PATH_BY_HEIGHT = {
     "middle": "/World/WorkTable2",
     "bottom": "/World/WorkTable3",
 }
-# PhysX static colliders: switches (for insert contact) + work tables + cable
-# blocks. Do NOT enable the facility rack under DataHall_01 (doors/rails/etc.
-# were causing false high-wrench jams). CableBlocks already author CollisionAPI
-# in the USD; listing them here re-asserts triangle meshes after de-instance.
+# PhysX static colliders: work tables + cable blocks + (optionally) only the
+# selected station's AS4610 Switch subtree — NOT the entire Network_Switches
+# tree (that alone authored ~6163 triangle colliders and CUDA-700'd GPU PhysX).
+DATAHALL_COLLISION_SCOPE_TO_SELECTED = True
 DATAHALL_COLLISION_ROOTS = (
     NETWORK_SWITCHES_SCOPE,
     *tuple(WORK_TABLE_PATH_BY_HEIGHT.values()),
@@ -571,10 +573,12 @@ RENDERING_DT = 1.0 / 60.0
 SCENE_SOLVER_TYPE = "TGS"  # "TGS" (stable) or "PGS"
 SCENE_ENABLE_GPU_DYNAMICS = True
 SCENE_ENABLE_CCD = True
-# GPU broadphase buffers (defaults are 1024; DataHall contact volume overflows).
-SCENE_GPU_TOTAL_AGGREGATE_PAIRS_CAPACITY = 4096
-SCENE_GPU_FOUND_LOST_AGGREGATE_PAIRS_CAPACITY = 4096
-SCENE_GPU_FOUND_LOST_PAIRS_CAPACITY = 262144
+# GPU broadphase buffers — PhysX cannot grow these at runtime.
+# With full Network_Switches triangle meshes (~6k), 4096 overflowed and caused
+# CUDA 700 (illegal address) ~90s into grasp. Keep large even with scoped hulls.
+SCENE_GPU_TOTAL_AGGREGATE_PAIRS_CAPACITY = 65536
+SCENE_GPU_FOUND_LOST_AGGREGATE_PAIRS_CAPACITY = 65536
+SCENE_GPU_FOUND_LOST_PAIRS_CAPACITY = 2097152
 SCENE_MIN_POSITION_ITERS = 8
 SCENE_MIN_VELOCITY_ITERS = 2
 SCENE_BOUNCE_THRESHOLD = 0.2  # relative speed below which no bounce
@@ -661,6 +665,8 @@ PORT_OFFSET_ALIGN_ORI_TOLERANCE_RAD = 0.08
 # Tip-fixed ori blend for arrive→align (avoids one big joint-interp tip swing).
 PORT_OFFSET_ORI_BLEND_STEPS = 12
 PORT_OFFSET_ORI_BLEND_JOINT_STEPS = 40
+# Insert TipOffset→seat waypoints only (not TipLift→TipOffset maneuver).
+INSERT_ORI_TOLERANCE_RAD = 0.05
 # NegativeY: joint-space pan/lift bumps fight the clearance tip path — keep False
 # so Lula cartesian tracks the waypoint tips (crystal follows markers).
 PORT_NEGY_USE_BASE_SWEEP = False
@@ -700,8 +706,34 @@ MANEUVER_STRETCH_Y_BLEND = (0.25, 0.40, 0.55)  # Y progress during stretch via
 MANEUVER_APPROACH_Z_CLEAR_M = 0.015  # legacy high approach; dip path preferred
 MANEUVER_APPROACH_Z_DIP_M = 0.08  # meters below tip_offset Z while sliding −X
 MANEUVER_DIP_START_X_AHEAD_M = 0.10  # start duck this far +X of tip_offset
-# TipOffset Z pad on copper-pin mid (meters). 0 = jack center Z.
+# TipOffset / insert crystal path — X-only slide at fixed YZ from a measured
+# half-inserted crystal-head world pose (Isaac: E_crystal_head1_45).
+# Stage units assume metersPerUnit=0.01 (cm). Converted to meters at runtime.
+# Measured mid (half-inserted) head pose from Isaac viewport:
+#   pos stage=[-13.4914, -102.5997, 386.4533]
+#   ori ijkw≈[0, 0, 1, 0]  (≈180° about +Z) — used for mating X/YZ anchor only.
+INSERT_CRYSTAL_USE_ANCHOR = True
+INSERT_CRYSTAL_HEAD_MID_POS_STAGE = (-13.491441607475284, -102.5997406269046, 386.453283023821)
+INSERT_CRYSTAL_HEAD_MID_ORI_IJKW = (0.0, 0.0, 0.9999999999999806, 1.9729003370455804e-07)
+# Insert TipOffset→seat waypoints only: crystal-head world Euler XYZ (deg).
+# Maneuver TipLift→TipOffset is unchanged (no Euler lock — that blocked offset).
+# Validate insertion axis ≈ world −X. With REQUIRE=True, a failing Euler keeps
+# the TipOffset tool ori (extrinsic XYZ: (0,0,±180)→−X; (0,0,-90)→−Y).
+INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG = (0.0, 0.0, -90.0)
+INSERT_WAYPOINT_REQUIRE_AXIS_NEG_X = True
+INSERT_WAYPOINT_AXIS_DOT_MIN = 0.90  # |axis·(−X)| must be ≥ this
+# Fine YZ tweaks in *meters* if the head sits a little off (keep small).
+# Stage nudge @ mpu=0.01: 0.5 → 0.005 m, 0.05 → 0.0005 m.
+INSERT_CRYSTAL_Y_DELTA_M = 0.0015
+INSERT_CRYSTAL_Z_DELTA_M = 0.004  # was 0.005; −0.05 stage
+# X span: start = mid_mating_X + ahead; seat X = port mating X (override optional).
+INSERT_CRYSTAL_APPROACH_X_AHEAD_M = 0.06  # more +X than mid before inserting
+INSERT_CRYSTAL_SEAT_X_M = None  # None → live port mating X
+# Legacy Z settle (disabled when INSERT_CRYSTAL_USE_ANCHOR).
 PORT_OFFSET_Z_BIAS_M = 0.0
+PORT_CRYSTAL_Z_BIAS_M = PORT_OFFSET_Z_BIAS_M
+INSERT_Z_SETTLE_WAYPOINT = 5
+INSERT_APPROACH_Z_USE_HALF_CRYSTAL = False
 MANEUVER_OFFSET_ABOVE_X_RETRACT_M = 0.06
 MANEUVER_POLYLINE_SAMPLES_PER_SEG = 5
 # Replay verified cache tips; only rediscover when cache is missing/unverified.
@@ -809,8 +841,8 @@ WORKTABLE_FRICTION_DYNAMIC = 0.0
 WORKTABLE_FRICTION_COMBINE_MODE = "min"
 WORKTABLE_FRICTIONLESS = True
 
-# Align + translate: match crystal↔port mating YZ via features, then advance
-# along the crystal insertion axis; repeat. Cache successful tip poses.
+# TipOffset → seat: cached cartesian IK path. Crystal mating center steps along
+# the insertion axis in INSERT_STEP_M increments until coincident with port mating.
 INSERT_CACHE_PATH = Path(__file__).resolve().parent / "insert_cache.json"
 INSERT_CACHE_LOAD = True
 INSERT_CACHE_SAVE = True
@@ -819,21 +851,24 @@ MATING_SIDE_MARGIN_M = 0.00015
 MATING_CENTER_YZ_TOL_M = 0.0015
 LATCH_Y_MARGIN_M = 0.00015
 AXIS_DOT_MIN = 0.98
-INSERT_STEP_M = 0.01  # 1 cm along crystal insertion axis per translate
+INSERT_STEP_M = 0.01  # 1 cm mating-center spacing TipOffset → seat
+# Cartesian densify step for each insert waypoint (was ALIGN_STEP 0.004).
+INSERT_LINEAR_STEP_M = 0.01
 MATING_TOUCH_GAP_M = 0.002
+# Validate seat: crystal mating within this of port mating (meters).
+INSERT_AT_SEAT_TOL_M = 0.008
 ALIGN_INSERT_MAX_FRAMES = 6000
-# Temporary: TipOffset YZ is trusted; insert is axis-only translates (align kept
-# in code but skipped). Re-enable ALIGN_INSERT_ENABLE_YZ when ready.
+# Legacy flag (YZ live-align loop removed; insert is a cached maneuver).
 ALIGN_INSERT_ENABLE_YZ = False
 # Insert-step diagnostics: wrist wrench + contact impulses + friction props → JSONL.
 INSERT_DIAG_ENABLE = True
 INSERT_DIAG_PATH = Path(__file__).resolve().parent / "insert_diag.jsonl"
 # Sample/print only when a translate IK target is reached (not every sim frame).
-INSERT_DIAG_SAMPLE_EVERY_N = 0  # 0 = pose-arrival only (see tick_align_and_insert)
+INSERT_DIAG_SAMPLE_EVERY_N = 0  # 0 = labeled / arrival samples only
 INSERT_DIAG_LOG_EVERY_N = 1  # print each recorded pose sample
 INSERT_DIAG_FORCE_LOG_N = 5.0  # always print when |F_wrist| exceeds this
 INSERT_DIAG_IMPULSE_LOG = 0.01  # always print when contact impulse exceeds this
-INSERT_DIAG_CONTACT_LOG = True  # log cable↔any-mesh contacts during insert (no abort)
+INSERT_DIAG_CONTACT_LOG = False  # TipOffset→seat: no [COLLISION] spam
 # Skip gripper/robot contacts so pad pinch does not flood the log. Set False to
 # include those too. Ethernet/RJ45 and all other scene meshes are logged.
 INSERT_CONTACT_SKIP_ROBOT = True
@@ -852,17 +887,22 @@ ALIGN_YZ_MAX_M = 0.025
 ALIGN_NUDGE_POS_MAX_M = 0.002  # legacy; align-yz uses ALIGN_YZ_MAX_M
 ALIGN_NUDGE_ROT_MAX_RAD = 0.02
 ALIGN_ROT_AFTER_YZ_ERR_M = 0.004
-# Strict per-iteration motion (align / translate).
-ALIGN_STEP_JOINT_STEPS = 90
-ALIGN_STEP_MAX_FRAMES = 360
+# Strict per-iteration motion (insert TipOffset→seat segments).
+ALIGN_STEP_JOINT_STEPS = 22  # was 45 — faster insert path
+ALIGN_STEP_MAX_FRAMES = 90  # was 180
 ALIGN_STEP_POS_TOLERANCE_M = 0.003
 ALIGN_STEP_ORI_TOLERANCE_RAD = 0.05
-ALIGN_STEP_LINEAR_STEP_M = 0.002
+ALIGN_STEP_LINEAR_STEP_M = 0.004
 ALIGN_LOG_EVERY_N = 1
 # Single next-target insert marker (diameter = crystal mating-plane hypotenuse).
 ALIGN_INSERT_DEBUG_MARKERS_VISIBLE = False
 ALIGN_INSERT_AXIS_LENGTH_M = 0.03
 ALIGN_INSERT_AXIS_RADIUS_M = 0.00125
+INSERT_PATH_MARKER_SCALE_M = 0.006
+INSERT_PATH_DEBUG_MARKERS_VISIBLE = False  # uses station DebugPortMarkers visibility
+# Insert cartesian densify (also see INSERT_LINEAR_STEP_M).
+INSERT_JOINT_STEPS = ALIGN_STEP_JOINT_STEPS
+INSERT_MAX_FRAMES = ALIGN_STEP_MAX_FRAMES
 
 # Debug spheres: radius in meters (converted to stage units at spawn).
 PORT_DEBUG_MARKER_SCALE_M = 0.01
@@ -884,4 +924,6 @@ def debug_marker_names() -> tuple[str, ...]:
         "TipLift",
         "TipYaw",
         "TipOffset",
+        "CrystalOffset",
+        "LiveCrystal",
     )

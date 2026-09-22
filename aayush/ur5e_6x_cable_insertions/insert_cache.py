@@ -45,6 +45,9 @@ def _waypoint_to_json(wp: dict[str, Any]) -> dict[str, Any]:
     axis = _as_vec3(wp.get("insertion_axis"))
     if axis is not None:
         out["insertion_axis"] = [float(x) for x in axis]
+    mating = _as_vec3(wp.get("mating_center"))
+    if mating is not None:
+        out["mating_center"] = [float(x) for x in mating]
     kind = wp.get("kind")
     if kind:
         out["kind"] = str(kind)
@@ -81,16 +84,18 @@ def load_station(
         ori = _as_quat(item.get("orientation_wxyz"))
         if tip is None or ori is None:
             continue
-        waypoints.append(
-            {
-                "t": float(item.get("t", 0.0)),
-                "label": str(item.get("label", "")),
-                "kind": str(item.get("kind") or item.get("label") or ""),
-                "tip": tip,
-                "orientation_wxyz": ori,
-                "insertion_axis": _as_vec3(item.get("insertion_axis")),
-            }
-        )
+        wp = {
+            "t": float(item.get("t", 0.0)),
+            "label": str(item.get("label", "")),
+            "kind": str(item.get("kind") or item.get("label") or ""),
+            "tip": tip,
+            "orientation_wxyz": ori,
+            "insertion_axis": _as_vec3(item.get("insertion_axis")),
+        }
+        mating = _as_vec3(item.get("mating_center"))
+        if mating is not None:
+            wp["mating_center"] = mating
+        waypoints.append(wp)
     waypoints.sort(key=lambda w: float(w["t"]))
     return {
         "station_id": str(station_id),

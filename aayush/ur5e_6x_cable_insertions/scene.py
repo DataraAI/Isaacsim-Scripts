@@ -80,16 +80,23 @@ def wait_for_stage_loading(simulation_app) -> None:
         time.sleep(0.01)
 
 
-def _enable_gpu_dynamics(stage, simulation_manager) -> None:
+def _enable_gpu_dynamics(stage, simulation_manager, world=None) -> None:
+    """Apply PhysX GPU/CPU mode from ``cfg.SCENE_ENABLE_GPU_DYNAMICS``.
+
+    When False, force CPU dynamics + MBP broadphase on the USD PhysxScene,
+    SimulationManager, and (if provided) World PhysicsContext — otherwise a
+    leftover GPU broadphase opinion restarts the CUDA 700 abort loop.
+    """
+
+    use_gpu = bool(cfg.SCENE_ENABLE_GPU_DYNAMICS)
+    broadphase = "GPU" if use_gpu else "MBP"
     scenes = [prim for prim in stage.Traverse() if prim.IsA(UsdPhysics.Scene)]
     if not scenes:
         scenes = [UsdPhysics.Scene.Define(stage, "/physicsScene").GetPrim()]
     for prim in scenes:
         api = PhysxSchema.PhysxSceneAPI.Apply(prim)
-        api.CreateEnableGPUDynamicsAttr(bool(cfg.SCENE_ENABLE_GPU_DYNAMICS)).Set(
-            bool(cfg.SCENE_ENABLE_GPU_DYNAMICS)
-        )
-        api.CreateBroadphaseTypeAttr("GPU").Set("GPU")
+        api.CreateEnableGPUDynamicsAttr(use_gpu).Set(use_gpu)
+        api.CreateBroadphaseTypeAttr(broadphase).Set(broadphase)
         api.CreateSolverTypeAttr(str(cfg.SCENE_SOLVER_TYPE)).Set(str(cfg.SCENE_SOLVER_TYPE))
         try:
             api.CreateEnableCCDAttr(bool(cfg.SCENE_ENABLE_CCD)).Set(
@@ -112,31 +119,45 @@ def _enable_gpu_dynamics(stage, simulation_manager) -> None:
             )
         except Exception:
             pass
-        # Fixed GPU buffers — PhysX cannot grow these; undersize → missed contacts.
-        try:
-            total_cap = int(
-                getattr(cfg, "SCENE_GPU_TOTAL_AGGREGATE_PAIRS_CAPACITY", 4096)
-            )
-            found_agg = int(
-                getattr(cfg, "SCENE_GPU_FOUND_LOST_AGGREGATE_PAIRS_CAPACITY", 4096)
-            )
-            found_pairs = int(
-                getattr(cfg, "SCENE_GPU_FOUND_LOST_PAIRS_CAPACITY", 262144)
-            )
-            api.CreateGpuTotalAggregatePairsCapacityAttr(total_cap).Set(total_cap)
-            api.CreateGpuFoundLostAggregatePairsCapacityAttr(found_agg).Set(found_agg)
-            api.CreateGpuFoundLostPairsCapacityAttr(found_pairs).Set(found_pairs)
-            print(
-                f"[SCENE] GPU aggregate capacities "
-                f"total={total_cap} foundLostAgg={found_agg} foundLost={found_pairs}"
-            )
-        except Exception as exc:
-            print(f"[SCENE] GPU aggregate capacity warning: {exc}")
+        if use_gpu:
+            try:
+                total_cap = int(
+                    getattr(cfg, "SCENE_GPU_TOTAL_AGGREGATE_PAIRS_CAPACITY", 4096)
+                )
+                found_agg = int(
+                    getattr(cfg, "SCENE_GPU_FOUND_LOST_AGGREGATE_PAIRS_CAPACITY", 4096)
+                )
+                found_pairs = int(
+                    getattr(cfg, "SCENE_GPU_FOUND_LOST_PAIRS_CAPACITY", 262144)
+                )
+                api.CreateGpuTotalAggregatePairsCapacityAttr(total_cap).Set(total_cap)
+                api.CreateGpuFoundLostAggregatePairsCapacityAttr(found_agg).Set(found_agg)
+                api.CreateGpuFoundLostPairsCapacityAttr(found_pairs).Set(found_pairs)
+                print(
+                    f"[SCENE] GPU PhysX on: broadphase=GPU "
+                    f"total={total_cap} foundLostAgg={found_agg} foundLost={found_pairs}"
+                )
+            except Exception as exc:
+                print(f"[SCENE] GPU aggregate capacity warning: {exc}")
+        else:
+            print("[SCENE] CPU PhysX (SCENE_ENABLE_GPU_DYNAMICS=False, broadphase=MBP)")
     try:
         for scene in simulation_manager.get_physics_scenes():
-            scene.set_enabled_gpu_dynamics(bool(cfg.SCENE_ENABLE_GPU_DYNAMICS))
+            scene.set_enabled_gpu_dynamics(use_gpu)
     except Exception as exc:
         print(f"[SCENE] GPU dynamics manager warning: {exc}")
+    if world is not None:
+        try:
+            pc = world.get_physics_context()
+            if hasattr(pc, "enable_gpu_dynamics"):
+                pc.enable_gpu_dynamics(use_gpu)
+            if hasattr(pc, "set_broadphase_type"):
+                pc.set_broadphase_type(broadphase)
+            print(
+                f"[SCENE] PhysicsContext gpu_dynamics={use_gpu} broadphase={broadphase}"
+            )
+        except Exception as exc:
+            print(f"[SCENE] PhysicsContext GPU/CPU warning: {exc}")
 
 
 def open_datahall_stage(simulation_app, usd_path: Path):
@@ -159,7 +180,7 @@ def open_datahall_stage(simulation_app, usd_path: Path):
     world.set_simulation_dt(
         physics_dt=float(cfg.PHYSICS_DT), rendering_dt=float(cfg.RENDERING_DT)
     )
-    _enable_gpu_dynamics(stage, SimulationManager)
+    _enable_gpu_dynamics(stage, SimulationManager, world=world)
     print(f"[SCENE] Opened {path} metersPerUnit={scale}")
     return stage, world
 
@@ -451,23 +472,81 @@ def deinstance_prim_tree(
     return total_changed
 
 
+def collision_roots_for_stations(selected) -> tuple[str, ...]:
+    """Static collider roots: tables + cable blocks + selected AS4610 Switch trees.
+
+    Avoids enabling CollisionAPI on the entire ``/World/Network_Switches`` tree
+    (~6k triangle meshes), which overflows PhysX GPU pair buffers (CUDA 700).
+    """
+
+    roots: list[str] = [
+        *tuple(cfg.WORK_TABLE_PATH_BY_HEIGHT.values()),
+        str(cfg.CABLE_BLOCKS_SCOPE),
+    ]
+    if not bool(getattr(cfg, "DATAHALL_COLLISION_SCOPE_TO_SELECTED", True)):
+        return tuple(dict.fromkeys((*roots, *tuple(cfg.DATAHALL_COLLISION_ROOTS))))
+
+    for spec in selected or ():
+        pack = str(getattr(spec, "port_pack_path", "") or "")
+        if not pack:
+            continue
+        # De-instance from AS4610_inst (parent of Switch) — Switch alone stays
+        # instance-proxy and authored 0 colliders in the last run.
+        inst = pack
+        for marker in ("/AS4610_01/", "/Switch/", "/Net_12_Pack", "/RJ45_Group"):
+            if marker in inst:
+                # Keep path through AS4610_inst when present.
+                if "/AS4610_inst/" in inst:
+                    inst = inst.split("/AS4610_inst/", 1)[0] + "/AS4610_inst"
+                break
+        switch = pack
+        for marker in ("/Net_12_Pack", "/RJ45_Group"):
+            if marker in switch:
+                switch = switch.split(marker, 1)[0]
+                break
+        roots.append(inst)
+        roots.append(switch)
+        if pack not in roots:
+            roots.append(pack)
+    if len(roots) <= 4:
+        # Fallback: no station paths resolved — use authored roots.
+        print(
+            "[SCENE] WARN: no selected switch packs for collision scope; "
+            "falling back to DATAHALL_COLLISION_ROOTS (may stress GPU PhysX)"
+        )
+        return tuple(dict.fromkeys((*roots, *tuple(cfg.DATAHALL_COLLISION_ROOTS))))
+    return tuple(dict.fromkeys(roots))
+
+
 def enable_datahall_static_collisions(
     stage,
     root_paths: tuple[str, ...] | None = None,
     *,
     approximation_shape: str | None = None,
+    selected=None,
 ) -> int:
     """Author static mesh colliders so the arm cannot pass through the hall/rack.
 
-    Mirrors ``asset_spawn.enable_datahall_static_collisions``: triangle-mesh
-    approximation on visible solid geometry; skip invisible / no_collision /
-    instance-proxy prims so switch ports are not sealed by parent hulls.
+    Mirrors ``asset_spawn.enable_datahall_static_collisions``: mesh approximation
+    on visible solid geometry; skip invisible / no_collision / instance-proxy
+    prims so switch ports are not sealed by parent hulls.
     Optionally de-instances each root first so former proxies become editable.
+
+    When ``selected`` stations are passed (or ``DATAHALL_COLLISION_SCOPE_TO_SELECTED``),
+    only those AS4610 Switch subtrees are colliders — not every Network_Switches mesh.
     """
 
     from omni.physx.scripts import utils as physx_utils
 
-    roots = root_paths if root_paths is not None else tuple(cfg.DATAHALL_COLLISION_ROOTS)
+    if root_paths is None:
+        if selected is not None or bool(
+            getattr(cfg, "DATAHALL_COLLISION_SCOPE_TO_SELECTED", True)
+        ):
+            roots = collision_roots_for_stations(selected)
+        else:
+            roots = tuple(cfg.DATAHALL_COLLISION_ROOTS)
+    else:
+        roots = tuple(root_paths)
     # Prefer live DataHall_01 if the configured root is missing.
     resolved: list[str] = []
     for root_path in roots:
@@ -483,8 +562,9 @@ def enable_datahall_static_collisions(
                     resolved.append(str(alt))
                     break
         else:
-            resolved.append(root_path)
+            print(f"[SCENE] DataHall collision skipped: missing {root_path}")
     roots = tuple(dict.fromkeys(resolved))
+    print(f"[SCENE] Static collision roots ({len(roots)}): {list(roots)}")
     approx = (
         str(cfg.DATAHALL_COLLISION_APPROXIMATION)
         if approximation_shape is None
@@ -1671,17 +1751,12 @@ def _root_joint_articulation_status(stage, robot_prim_path: str) -> str:
 
 
 def freeze_inactive_ur5e_robots(stage, selected) -> None:
-    """Hide idle UR5es without deactivating their prims or killing articulations.
+    """Hide idle UR5es and remove them from the PhysX articulation solve.
 
-    Reactivating a deactivated robot reloads authored ``ROS_ActionGraph`` from
-    USD and OmniGraph immediately resumes ``ArticulationController`` ticks
-    against ``root_joint``.
-
-    Critically: do **not** set ``articulationEnabled=False``. That leaves the
-    USD ``root_joint`` prim composed but removes it from PhysX, so any leftover
-    ``JointStateSensor`` spams ``Failed to find articulation`` / ``no DOFs``.
-    Idle robots stay active + invisible, articulations **on**, ROS graphs and
-    JointStateSensors deleted.
+    Idle arms used to stay ``articulationEnabled=True`` (to avoid JointStateSensor
+    spam). Sensors are stripped now, and leaving 5 extra UR5e+Robotiq articulations
+    (with PhysxMimicJoint) on the GPU solver is what dies with CUDA 700 during
+    TipLift after grasp. Disable their articulations + colliders.
     """
 
     selected = tuple(selected)
@@ -1691,6 +1766,7 @@ def freeze_inactive_ur5e_robots(stage, selected) -> None:
     robots = stage.GetPrimAtPath(cfg.ROBOTS_SCOPE)
     if not robots or not robots.IsValid():
         return
+    disabled = 0
     for child in robots.GetChildren():
         if not child.GetName().startswith("UR5e_"):
             continue
@@ -1717,21 +1793,32 @@ def freeze_inactive_ur5e_robots(stage, selected) -> None:
                 child.SetActive(True)
             except Exception:
                 pass
-        # Idle arms: mute work, never log (only --station robots are logged).
         remove_robot_ros_graphs(stage, path, quiet=True)
         remove_robot_joint_state_sensors(stage, path, quiet=True)
         child = stage.GetPrimAtPath(path)
         if not child or not child.IsValid():
             continue
-        # Keep PhysX articulations alive so ``root_joint`` still has DOFs.
         for prim in Usd.PrimRange(child):
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
                 art = PhysxSchema.PhysxArticulationAPI.Apply(prim)
-                art.CreateArticulationEnabledAttr(True).Set(True)
+                art.CreateArticulationEnabledAttr(False).Set(False)
+                disabled += 1
+            if prim.HasAPI(UsdPhysics.CollisionAPI) or prim.IsA(UsdGeom.Mesh):
+                try:
+                    UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(
+                        False
+                    ).Set(False)
+                except Exception:
+                    pass
         try:
             UsdGeom.Imageable(child).MakeInvisible()
         except Exception:
             pass
+    if disabled:
+        print(
+            f"[SCENE] Disabled PhysX articulation on {disabled} idle UR5e root(s) "
+            "(keeps GPU MimicJoint load on the selected arm only)"
+        )
 
 
 
@@ -2278,17 +2365,26 @@ def spawn_maneuver_orientation_markers(
     visible: bool | None = None,
     branch_name: str = "Maneuver",
     tip_scale_m: float | None = None,
+    touch_station_visibility: bool = True,
 ) -> None:
     """Tip spheres + insertion-axis arrows for each maneuver/insert waypoint.
 
     Prim tree: ``{debug_marker_root}/{branch_name}/Wp00..``. Leaves inherit
     visibility from the station debug root (toggle that root in Isaac).
+    Set ``touch_station_visibility=False`` when adding a sibling branch (e.g.
+    Insert) so an existing station-root visibility toggle is preserved.
     """
 
     show = cfg.DEBUG_MARKER_VISIBLE_DEFAULT if visible is None else bool(visible)
     station_root = spec.debug_marker_root
-    if not stage.GetPrimAtPath(station_root).IsValid():
+    station_prim = stage.GetPrimAtPath(station_root)
+    if not station_prim.IsValid():
         UsdGeom.Xform.Define(stage, Sdf.Path(station_root))
+        station_prim = stage.GetPrimAtPath(station_root)
+        # New root: apply default visibility once.
+        _set_imageable_visibility(
+            station_prim, "visible" if show else "invisible"
+        )
     root = f"{station_root}/{branch_name}"
     if stage.GetPrimAtPath(root).IsValid():
         stage.RemovePrim(Sdf.Path(root))
@@ -2309,7 +2405,11 @@ def spawn_maneuver_orientation_markers(
         axis_rad *= 0.5
     n = len(waypoints)
     for i, wp in enumerate(waypoints):
-        tip = np.asarray(wp["tip"], dtype=np.float64).reshape(3)
+        # Prefer crystal mating center for insert path viz (matches jack height).
+        center = wp.get("mating_center")
+        if center is None:
+            center = wp.get("tip")
+        tip = np.asarray(center, dtype=np.float64).reshape(3)
         axis = np.asarray(
             wp.get("insertion_axis", (0.0, 0.0, -1.0)), dtype=np.float64
         ).reshape(3)
@@ -2341,12 +2441,13 @@ def spawn_maneuver_orientation_markers(
             visibility="inherited",
         )
     _set_imageable_visibility(stage.GetPrimAtPath(root), "inherited")
-    _set_imageable_visibility(
-        stage.GetPrimAtPath(station_root), "visible" if show else "invisible"
-    )
+    if touch_station_visibility:
+        _set_imageable_visibility(
+            stage.GetPrimAtPath(station_root), "visible" if show else "invisible"
+        )
     print(
         f"[SCENE] {branch_name} orientation markers under {root} "
-        f"({n} waypoints, root_visible={show}; toggle {station_root} in Isaac)"
+        f"({n} waypoints; toggle {station_root} in Isaac)"
     )
 
 
@@ -2459,11 +2560,17 @@ def spawn_station_debug_markers(
     tip_lift_m: np.ndarray | None = None,
     tip_yaw_m: np.ndarray | None = None,
     tip_offset_m: np.ndarray | None = None,
+    crystal_offset_m: np.ndarray | None = None,
+    live_crystal_m: np.ndarray | None = None,
     visible: bool | None = None,
+    touch_root_visibility: bool = True,
 ) -> None:
     """Spheres for targets. Default-hidden; toggle the station root in Isaac.
 
     Leaf markers inherit visibility from ``spec.debug_marker_root``.
+    ``CrystalOffset`` is the commanded crystal mating standoff (port +X/+Z);
+    ``TipOffset`` is the fingertip IK target; ``LiveCrystal`` is the measured
+    mating center at plan time (often lower than CrystalOffset before rebase).
     """
 
     show = cfg.DEBUG_MARKER_VISIBLE_DEFAULT if visible is None else bool(visible)
@@ -2472,6 +2579,7 @@ def spawn_station_debug_markers(
     if not root_prim.IsValid():
         UsdGeom.Xform.Define(stage, Sdf.Path(root))
         root_prim = stage.GetPrimAtPath(root)
+        _set_imageable_visibility(root_prim, "visible" if show else "invisible")
     scale = float(cfg.OBSERVE_DEBUG_MARKER_SCALE_M)
     via_scale = float(cfg.PORT_MANEUVER_MARKER_SCALE_M)
     markers = (
@@ -2483,6 +2591,8 @@ def spawn_station_debug_markers(
         ("TipLift", tip_lift_m, (0.4, 0.7, 1.0), scale),
         ("TipYaw", tip_yaw_m, (0.55, 0.85, 0.2), via_scale),
         ("TipOffset", tip_offset_m, (1.0, 0.2, 0.6), scale),
+        ("CrystalOffset", crystal_offset_m, (0.15, 1.0, 0.55), scale),
+        ("LiveCrystal", live_crystal_m, (1.0, 0.55, 0.1), scale),
     )
     spawned: list[str] = []
     for name, center, color, marker_scale in markers:
@@ -2498,11 +2608,13 @@ def spawn_station_debug_markers(
             visibility="inherited",
         )
         spawned.append(name)
-    _set_imageable_visibility(root_prim, "visible" if show else "invisible")
+    if touch_root_visibility:
+        _set_imageable_visibility(root_prim, "visible" if show else "invisible")
     if spawned:
         print(
             f"[SCENE] Debug markers under {root} "
-            f"(root_visible={show}; toggle in Isaac): {', '.join(spawned)}"
+            f"(root_visible={show if touch_root_visibility else 'unchanged'}; "
+            f"toggle in Isaac): {', '.join(spawned)}"
         )
 
 def resolve_grasp_part_path(stage, spec: cfg.StationSpec) -> str:
@@ -2673,9 +2785,8 @@ def build_scene(
 ) -> SceneBundle:
     """Open the UR5e DataHall; wire + home only selected stations.
 
-    Unselected UR5es stay composed but invisible (articulations kept on so
-    ``root_joint`` remains a PhysX articulation). ROS graphs and JointStateSensors
-    are stripped; the selected station is driven by the BT only.
+    Unselected UR5es stay composed but invisible with PhysX articulations
+    **disabled** (sensors stripped) so GPU MimicJoint solve only sees the BT arm.
     ActionGraphs are deleted on every arm so OmniGraph cannot tick idle
     ``ArticulationController`` nodes after play/reset.
     """
@@ -2684,11 +2795,13 @@ def build_scene(
         simulation_app, usd_path or cfg.DATAHALL_6R_UR5E_USD
     )
     selected = tuple(stations) if stations is not None else cfg.STATIONS
-    # Nested Robotiq ArticulationRoot breaks the arm root_joint; strip it.
-    strip_nested_gripper_articulation_roots(stage)
+    # Nested Robotiq ArticulationRoot breaks the arm root_joint; strip selected only.
+    for spec in selected:
+        strip_nested_gripper_articulation_roots(stage, robot_prim_path=spec.robot_prim_path)
     # Re-assert mimic repair + masses after any stage compose that preceded World.
-    repair_robotiq_mimic_joints(stage)
-    ensure_robotiq_link_masses(stage)
+    for spec in selected:
+        repair_robotiq_mimic_joints(stage, spec.robot_prim_path)
+        ensure_robotiq_link_masses(stage, spec.robot_prim_path)
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
     for spec in selected:
@@ -2702,7 +2815,7 @@ def build_scene(
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
     if bool(cfg.ENABLE_DATAHALL_STATIC_COLLISIONS):
-        enable_datahall_static_collisions(stage)
+        enable_datahall_static_collisions(stage, selected=selected)
     for spec in selected:
         enable_crystal_head_physics(stage, spec.path45, spec.path39)
         try:
@@ -2717,13 +2830,16 @@ def build_scene(
     world.reset()
     from isaacsim.core.simulation_manager import SimulationManager
 
-    _enable_gpu_dynamics(stage, SimulationManager)
+    _enable_gpu_dynamics(stage, SimulationManager, world=world)
     # Reset can rebuild PhysX from composed USD opinions — re-strip/repair
     # *before* attaching SingleManipulator so the physics view stays valid.
     # Skip mount-joint rewrite: physics already started.
-    strip_nested_gripper_articulation_roots(stage, repair_mount=False)
-    repair_robotiq_mimic_joints(stage)
-    ensure_robotiq_link_masses(stage)
+    for spec in selected:
+        strip_nested_gripper_articulation_roots(
+            stage, robot_prim_path=spec.robot_prim_path, repair_mount=False
+        )
+        repair_robotiq_mimic_joints(stage, spec.robot_prim_path)
+        ensure_robotiq_link_masses(stage, spec.robot_prim_path)
     # Reset reloads authored ROS graphs from USD — strip again.
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
@@ -2750,7 +2866,7 @@ def build_scene(
     world.reset()
     from isaacsim.core.simulation_manager import SimulationManager
 
-    _enable_gpu_dynamics(stage, SimulationManager)
+    _enable_gpu_dynamics(stage, SimulationManager, world=world)
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
     lula_config = interface_config_loader.load_supported_lula_kinematics_solver_config(
