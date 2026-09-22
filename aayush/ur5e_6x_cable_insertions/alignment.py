@@ -14,6 +14,7 @@ class AlignmentResidual:
     latch_z_ok: bool
     mating_sides_ok: bool
     axis_ok: bool
+    mating_centers_ok: bool
     mating_gap_m: float
     pos_error_m: np.ndarray  # tip translation suggestion in world metres
     rot_error_rad: np.ndarray  # small-angle axis-angle suggestion
@@ -42,17 +43,31 @@ def assert_unit_linear_scale(
 
 
 def port_standoff_target(port: ConnectorFeatures, standoff_m: float) -> np.ndarray:
-    """Return a point outside the port, opposite its insertion direction."""
+    """Tip target just before −X insertion: higher world-X than the Ethernet face.
 
-    return np.asarray(port.mating_center, dtype=np.float64) - float(
-        standoff_m
-    ) * _unit(port.insertion_axis)
+    DataHall RJ45 openings face the cables (+X). The cable approaches from +X and
+    only then moves −X into the jack. Do **not** use ``mating − insertion_axis``
+    here: with axis ≈ +X that lands *inside* the port (−X of the face).
+    """
+
+    mating = np.asarray(port.mating_center, dtype=np.float64).reshape(3).copy()
+    mating[0] = float(mating[0]) + abs(float(standoff_m))
+    return mating
+
+
+def insert_direction_crystal_neg_x(crystal: ConnectorFeatures) -> np.ndarray:
+    """Unit insert step direction: crystal axis with negative world-X sense."""
+
+    axis = _unit(crystal.insertion_axis)
+    if float(np.dot(axis, np.array([-1.0, 0.0, 0.0], dtype=np.float64))) < 0.0:
+        axis = -axis
+    return axis
 
 
 def mating_gap_along_axis(crystal: ConnectorFeatures, port: ConnectorFeatures) -> float:
-    """Signed distance from port mating plane to crystal mating center along port axis."""
+    """Signed mating-center separation along the crystal −X insert direction."""
 
-    axis = _unit(port.insertion_axis)
+    axis = insert_direction_crystal_neg_x(crystal)
     return float(np.dot(crystal.mating_center - port.mating_center, axis))
 
 
@@ -63,52 +78,98 @@ def evaluate_alignment(
     latch_z_margin_m: float,
     mating_side_margin_m: float,
     axis_dot_min: float,
+    mating_center_yz_tol_m: float = 0.0015,
+    latch_y_margin_m: float | None = None,
 ) -> AlignmentResidual:
+    """World-YZ alignment gates + tip/ori nudge residuals."""
+
+    y_margin = (
+        float(mating_side_margin_m)
+        if latch_y_margin_m is None
+        else float(latch_y_margin_m)
+    )
     port_axis = _unit(port.insertion_axis)
     crystal_axis = _unit(crystal.insertion_axis)
-    # Prefer same sense as port (flip crystal if anti-parallel).
+    # Either sense is fine for collinearity; flip for rotation residual only.
     if float(np.dot(crystal_axis, port_axis)) < 0.0:
-        crystal_axis = -crystal_axis
+        crystal_axis_for_rot = -crystal_axis
+    else:
+        crystal_axis_for_rot = crystal_axis
 
-    crystal_latch_z = float(np.max(crystal.latch_keypoints[:, 2]))
-    port_latch_z = float(np.min(port.latch_keypoints[:, 2]))
-    latch_z_ok = crystal_latch_z < port_latch_z - float(latch_z_margin_m)
-
-    width = _unit(port.width_axis)
-    up = _unit(port.up_axis)
-    # Port mating rectangle half-extents from corners.
-    rel = port.mating_corners - port.mating_center
-    half_w = float(np.max(np.abs(rel @ width)))
-    half_u = float(np.max(np.abs(rel @ up)))
-    c_rel = crystal.mating_corners - port.mating_center
-    inside = (
-        (np.abs(c_rel @ width) <= half_w - float(mating_side_margin_m))
-        & (np.abs(c_rel @ up) <= half_u - float(mating_side_margin_m))
+    c_mc = np.asarray(crystal.mating_center, dtype=np.float64).reshape(3)
+    p_mc = np.asarray(port.mating_center, dtype=np.float64).reshape(3)
+    tol = float(mating_center_yz_tol_m)
+    mating_centers_ok = bool(
+        abs(float(c_mc[1] - p_mc[1])) <= tol and abs(float(c_mc[2] - p_mc[2])) <= tol
     )
-    mating_sides_ok = bool(np.all(inside))
 
-    axis_dot = abs(float(np.dot(crystal_axis, port_axis)))
+    # Mating-corner rectangles in world YZ: crystal ⊆ port (with margin).
+    p_corners = np.asarray(port.mating_corners, dtype=np.float64).reshape(-1, 3)
+    c_corners = np.asarray(crystal.mating_corners, dtype=np.float64).reshape(-1, 3)
+    side_m = float(mating_side_margin_m)
+    py0 = float(np.min(p_corners[:, 1])) + side_m
+    py1 = float(np.max(p_corners[:, 1])) - side_m
+    pz0 = float(np.min(p_corners[:, 2])) + side_m
+    pz1 = float(np.max(p_corners[:, 2])) - side_m
+    if py1 < py0 or pz1 < pz0:
+        mating_sides_ok = False
+    else:
+        inside = (
+            (c_corners[:, 1] >= py0)
+            & (c_corners[:, 1] <= py1)
+            & (c_corners[:, 2] >= pz0)
+            & (c_corners[:, 2] <= pz1)
+        )
+        mating_sides_ok = bool(np.all(inside))
+
+    axis_dot = abs(float(np.dot(_unit(crystal.insertion_axis), port_axis)))
     axis_ok = axis_dot >= float(axis_dot_min)
 
-    # Lateral error: crystal mating center projected into port width/up plane.
-    delta = crystal.mating_center - port.mating_center
-    lateral = (float(np.dot(delta, width)) * width) + (float(np.dot(delta, up)) * up)
-    # Latch Z error: raise/lower tip so crystal latch max Z clears below port min Z.
-    z_err = np.zeros(3, dtype=np.float64)
+    c_latch = np.asarray(crystal.latch_keypoints, dtype=np.float64).reshape(-1, 3)
+    p_latch = np.asarray(port.latch_keypoints, dtype=np.float64).reshape(-1, 3)
+    crystal_latch_z = float(np.max(c_latch[:, 2]))
+    port_latch_z = float(np.min(p_latch[:, 2]))
+    latch_z_ok = crystal_latch_z < port_latch_z - float(latch_z_margin_m)
+    port_latch_y0 = float(np.min(p_latch[:, 1])) + y_margin
+    port_latch_y1 = float(np.max(p_latch[:, 1])) - y_margin
+    if port_latch_y1 < port_latch_y0:
+        latch_y_ok = False
+    else:
+        latch_y_ok = bool(
+            np.all(
+                (c_latch[:, 1] >= port_latch_y0) & (c_latch[:, 1] <= port_latch_y1)
+            )
+        )
+    latch_ok = bool(latch_z_ok and latch_y_ok)
+
+    # Tip nudge: cancel mating-center world YZ; deepen Z if latch still high.
+    pos_error = np.array(
+        [0.0, float(p_mc[1] - c_mc[1]), float(p_mc[2] - c_mc[2])],
+        dtype=np.float64,
+    )
     if not latch_z_ok:
-        z_err[2] = (port_latch_z - float(latch_z_margin_m)) - crystal_latch_z
-    pos_error = -lateral + z_err  # move tip to cancel crystal offset
+        latch_dz = (port_latch_z - float(latch_z_margin_m)) - crystal_latch_z
+        if latch_dz < pos_error[2]:
+            pos_error[2] = latch_dz
+    if not latch_y_ok:
+        c_latch_y = float(np.mean(c_latch[:, 1]))
+        if c_latch_y < port_latch_y0:
+            pos_error[1] += port_latch_y0 - c_latch_y
+        elif c_latch_y > port_latch_y1:
+            pos_error[1] += port_latch_y1 - c_latch_y
 
     # Rotation: align crystal_axis → port_axis (small-angle approx).
-    cross = np.cross(crystal_axis, port_axis)
-    rot_error = cross  # magnitude ~ sin(theta) ≈ theta for small errors
+    rot_error = np.cross(crystal_axis_for_rot, port_axis)
 
     gap = mating_gap_along_axis(crystal, port)
-    passed = bool(latch_z_ok and mating_sides_ok and axis_ok)
+    passed = bool(
+        latch_ok and mating_sides_ok and axis_ok and mating_centers_ok
+    )
     return AlignmentResidual(
-        latch_z_ok=latch_z_ok,
+        latch_z_ok=latch_ok,
         mating_sides_ok=mating_sides_ok,
         axis_ok=axis_ok,
+        mating_centers_ok=mating_centers_ok,
         mating_gap_m=gap,
         pos_error_m=pos_error,
         rot_error_rad=rot_error,

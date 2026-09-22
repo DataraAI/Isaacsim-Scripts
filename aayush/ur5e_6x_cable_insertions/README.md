@@ -1,87 +1,63 @@
-# ur5e_6x_cable_insertions
+# ur5e_6x_cable_insertions (hover → orient → descend → grasp)
 
-Six-arm behaviour-tree demo on `~/Desktop/Aayush_ws/DataHall_6r_ur5e.usd`. Each UR5e
-(with a Robotiq 2F-85) detects `E_part006_44`, grasps/lifts with a **30°** wrist
-tilt, carries the held tip to that station's RJ45 **offset**, then closed-loop
-**aligns and inserts** using cached crystal/port features, releases, and returns
-home. Same grasp physics as [`ur10e_1x_cable_insertion/`](../ur10e_1x_cable_insertion/).
+Minimal behaviour-tree demo on `DataHall_6r_ur5e.usd`:
+
+1. Select a station (default `NegativeY_Top`).
+2. Hover: **fingertips** at Network cable XY, Z = **370** stage units,
+   fingers straight down — above the cable / CableBlocks (hand ~0.16 m higher).
+3. Orient + tilt: wrist to `GRASP_ORIENTATION` (60° toward +X, fingers yawed
+   90° about tool Z) so pads share X/Z and straddle the cable on ±Y.
+4. Descend to cable neck `E_part006_44`, tip clamped into the Left/Right
+   CableBlocks X-gap so knuckles clear the supports.
+5. Close the gripper and squeeze-hold on the neck.
+6. Lift the cable clear of the CableBlocks (`GRASP_LIFT_CLEARANCE_M`).
+7. Maneuver to the port offset: at TipLift, yaw ~90° in place, then finish
+   yaw to ±180° while moving to TipOffset
+   (NegativeY CW +X→−Y→−X; PositiveY CCW +X→+Y→−X), landing at
+   `mating_center` with **+X** standoff `PORT_APPROACH_X_OFFSET_M`
+   (station jack features from cache + live RJ45 group pose).
+8. Leave the simulation running until you stop Isaac.
+
+Debug markers live under `/World/DebugPortMarkers/<station>/` and are **hidden
+by default**. Toggle that Xform’s visibility in Isaac to show them
+(`DEBUG_MARKER_VISIBLE_DEFAULT` in `config.py`).
 
 ## Run
 
-From `Isaacsim-Scripts`:
-
-```bash
-/home/aayush/isaacsim/python.sh aayush/ur5e_6x_cable_insertions/main.py
-```
-
-Optional:
-
-```bash
-# One station only
-/home/aayush/isaacsim/python.sh aayush/ur5e_6x_cable_insertions/main.py \
-    --station NegativeY_Top
-
-# Alternate USD
-/home/aayush/isaacsim/python.sh aayush/ur5e_6x_cable_insertions/main.py \
-    --usd ~/Desktop/Aayush_ws/DataHall_6r_ur5e.usd
-```
-
-## Motion verification
-
-Validate one station before running all six:
-
 ```bash
 /home/aayush/isaacsim/python.sh aayush/ur5e_6x_cable_insertions/main.py \
     --station NegativeY_Top
 ```
 
-The arm must visibly reach observation and hover, descend before finger
-closure, and lift the cable. Any `Joint-interp IK target failed` message must
-produce behaviour-tree `FAILURE`; it must never be followed by `REACHED` for the
-same waypoint.
+Optional: `--usd /path/to/DataHall_6r_ur5e.usd`, `--headless`,
+`--max-frames N` (0 = no limit).
 
-## Stations
+## Notes
 
-| Station | Robot | Side | Height | `grid_option` | `robot_loc` |
-|---|---|---|---|---|---|
-| `NegativeY_Top` | `/World/Robots/UR5e_NegativeY_Top` | left (−Y) | top | `AS4610_Ethernet_Row_Top_1x_Grid` | `Upper_Left` |
-| `PositiveY_Top` | `/World/Robots/UR5e_PositiveY_Top` | right (+Y) | top | `AS4610_Ethernet_Row_Top_1x_Grid` | `Upper_Right` |
-| `NegativeY_Middle` | `/World/Robots/UR5e_NegativeY_Middle` | left | middle | `AS4610_Ethernet_Row_Middle_1x_Grid` | `Upper_Left` |
-| `PositiveY_Middle` | `/World/Robots/UR5e_PositiveY_Middle` | right | middle | `AS4610_Ethernet_Row_Middle_1x_Grid` | `Upper_Right` |
-| `NegativeY_Lower` | `/World/Robots/UR5e_NegativeY_Lower` | left | bottom | `AS4610_01_1x_Grid` | `Upper_Left` |
-| `PositiveY_Lower` | `/World/Robots/UR5e_PositiveY_Lower` | right | bottom | `AS4610_01_1x_Grid` | `Upper_Right` |
+- Other arms stay visible and idle (no BT).
+- Descend / grasp / insert are still parked; extend `task_intelligence.json` later.
+- Orient timing: `ORIENT_JOINT_STEPS` / `ORIENT_SETTLE_FRAMES` in `config.py`.
 
-Port pack (feature alignment):
+## Tuning (arm / gripper stability)
 
-`/World/Network_Switches/<grid_option>/<robot_loc>/AS4610_inst/AS4610_01/Switch/Net_12_Pack_no_LED_Component_04/RJ45_Group01`
+All knobs live in `config.py`. Start here if the arm wobbles, sleeps, or
+overshoots:
 
-Port contacts (debug / fallback pins):
-
-`/World/Network_Switches/<grid_option>/<robot_loc>/AS4610_inst/AS4610_01/Switch/Net_12_Pack_no_LED_Component_04/RJ45_Group01/CopperContacts/Group_14343`
-
-Cables live at `/World/NetworkCables/Cable_<station_id>/`.
-
-### Jack override
-
-Default jack is `jack_upper_c2` (copper `Group_14343`). Override per station in
-`config.py` via `make_station(..., jack_id=...)` or edit the `STATIONS` tuple.
-See `JACK_COPPER_GROUP` for valid IDs.
-
-## Physics
-
-- Grasp friction: **0.8** static/dynamic, combine mode **max** (physical pinch only)
-- No `FixedJoint` / weld between cable and gripper
-- Cable head45 is a dynamic rigid body held by finger friction
-
-## Debug markers
-
-Debug marker names and scales are reserved in `config.py`, but marker prim
-creation is not implemented yet. The pre-insert offset is computed 0.02 m
-opposite each port's insertion axis, rather than along a fixed world axis.
-
-## Host-side tests
-
-```bash
-cd Isaacsim-Scripts/aayush
-python3 -m unittest discover -s ur5e_6x_cable_insertions/tests -v
-```
+| Knob | Role | If unstable… |
+|---|---|---|
+| `UR5E_ARM_DRIVE_PARAMETERS` | Meter-physical angular drive (K, D, maxForce); scene ÷mpu² | Must stay gravity-capable on cm DataHall |
+| `UR5E_LIVE_STIFFNESS_MULTIPLIER` / `UR5E_LIVE_DAMPING_MULTIPLIER` | Isaac articulation PD after physics ready | Prefer ↑ KD over KP (overdamped) |
+| `ROBOTIQ_DRIVE_PARAMETERS` | Finger joint drive | ↑ if fingers flop while open |
+| `ROBOTIQ_MIMIC_NATURAL_FREQUENCY` / `ROBOTIQ_MIMIC_DAMPING_RATIO` | Soft mimic after root strip | ↑ freq if fingers lag; ↑ ratio if they oscillate |
+| `ARTICULATION_SOLVER_POSITION_ITERS` / `_VELOCITY_ITERS` | PhysX articulation solver | ↑ pos iters (e.g. 32→64) if joints look soft |
+| `ARTICULATION_SLEEP_THRESHOLD` / `_STABILIZATION_THRESHOLD` | When PhysX puts the arm to sleep | ↓ sleep if tracking stalls mid-move |
+| `ARTICULATION_ENABLE_SELF_COLLISIONS` | Arm/gripper self-collision | Keep `False` |
+| `LINK_DISABLE_GRAVITY` | Gravity on robot links | `False` (gravity on, like ur10e_1x) |
+| `LINK_LINEAR_DAMPING` / `LINK_ANGULAR_DAMPING` | Viscous damping on every link | ↑ for less shake |
+| `LINK_MAX_LINEAR_VELOCITY` / `LINK_MAX_ANGULAR_VELOCITY` | Velocity clamps (stage units / rad/s) | Lower if links explode; raise if motion is clipped |
+| `JOINT_FRICTION` / `JOINT_ARMATURE` | Revolute joint friction + motor inertia | Small ↑ armature helps numerics |
+| `SCENE_SOLVER_TYPE` / `SCENE_ENABLE_CCD` / `SCENE_*_ITERS` / `SCENE_BOUNCE_THRESHOLD` | Global PhysX scene | Keep `TGS` + CCD on for contacts |
+| `PHYSICS_DT` / `RENDERING_DT` | Sim / render step | Smaller physics dt = more stable, slower |
+| `HOVER_JOINT_STEPS` / `HOVER_SETTLE_FRAMES` | Trajectory duration / settle hold | ↑ for smoother, slower moves |
+| `HOVER_Z_STAGE` / `TOOL_OFFSET_M` | Tip height / tip↔hand offset | Keep tip reach ≲0.85 m from base |
+| `HOVER_IK_POS_TOLERANCE_M` / `HOVER_IK_ORI_TOLERANCE_RAD` | Lula IK acceptance | Loosen if IK fails; tighten for accuracy |

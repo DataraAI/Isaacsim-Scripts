@@ -1,94 +1,57 @@
 {
   "tree": {
     "type": "sequence",
-    "name": "Grasp, align-insert, release, and home",
+    "name": "Grasp cable, maneuver to port offset, and insert",
     "children": [
       {
         "type": "action",
-        "name": "Move to observation pose",
+        "name": "Move to cable hover",
         "primitive": "navigate_to_workspace",
         "preconditions": ["robot_ready"],
         "success_conditions": ["at_workspace"]
       },
       {
-        "type": "selector",
-        "name": "Find grasp part on crystal head 45",
-        "children": [
-          {"type": "condition", "name": "Use cached detection", "fact": "target_visible"},
-          {
-            "type": "retry",
-            "name": "Retry detection",
-            "max_attempts": 3,
-            "child": {
-              "type": "action",
-              "name": "Detect E_part006_44",
-              "primitive": "perceive_objects",
-              "success_conditions": ["target_visible"]
-            }
-          }
-        ]
+        "type": "action",
+        "name": "Orient + tilt gripper",
+        "primitive": "orient_gripper",
+        "preconditions": ["at_workspace"],
+        "success_conditions": ["gripper_oriented"]
       },
       {
-        "type": "selector",
-        "name": "Acquire the cable",
-        "children": [
-          {"type": "condition", "name": "Cable already held", "fact": "cable_held"},
-          {
-            "type": "retry",
-            "name": "Retry physical grasp",
-            "max_attempts": 2,
-            "child": {
-              "type": "action",
-              "name": "Grasp and lift E_part006_44",
-              "primitive": "grasp_object",
-              "preconditions": ["target_visible"],
-              "success_conditions": ["cable_held"]
-            }
-          }
-        ]
+        "type": "action",
+        "name": "Descend to cable neck",
+        "primitive": "descend_to_neck",
+        "preconditions": ["gripper_oriented"],
+        "success_conditions": ["at_grasp_pose"]
       },
-      {"type": "condition", "name": "Confirm grasp after lift", "fact": "cable_held"},
       {
-        "type": "selector",
+        "type": "action",
+        "name": "Close gripper on neck",
+        "primitive": "grasp_object",
+        "preconditions": ["at_grasp_pose"],
+        "success_conditions": ["cable_held"]
+      },
+      {
+        "type": "action",
+        "name": "Lift cable",
+        "primitive": "lift_cable",
+        "preconditions": ["cable_held"],
+        "success_conditions": ["cable_lifted"]
+      },
+      {
+        "type": "action",
         "name": "Maneuver to port offset",
-        "children": [
-          {"type": "condition", "name": "Already at port offset", "fact": "at_port_offset"},
-          {
-            "type": "action",
-            "name": "Maneuver held cable to port offset",
-            "primitive": "maneuver_to_port_offset",
-            "preconditions": ["cable_held"],
-            "success_conditions": ["at_port_offset"]
-          }
-        ]
-      },
-      {
-        "type": "selector",
-        "name": "Align and insert into port",
-        "children": [
-          {"type": "condition", "name": "Already inserted", "fact": "at_port_insert"},
-          {
-            "type": "action",
-            "name": "Align and insert until mating planes touch",
-            "primitive": "align_and_insert",
-            "preconditions": ["cable_held", "at_port_offset"],
-            "success_conditions": ["at_port_insert"]
-          }
-        ]
+        "primitive": "maneuver_to_ports",
+        "preconditions": ["cable_lifted"],
+        "success_conditions": ["at_port_offset"]
       },
       {
         "type": "action",
-        "name": "Release cable after insert",
-        "primitive": "release_gripper",
-        "preconditions": ["at_port_insert"],
-        "success_conditions": ["cable_released"]
-      },
-      {
-        "type": "action",
-        "name": "Return home",
-        "primitive": "return_home",
-        "preconditions": ["cable_released"],
-        "success_conditions": ["at_home"]
+        "name": "Align + translate into port",
+        "primitive": "align_and_insert",
+        "preconditions": ["at_port_offset"],
+        "success_conditions": ["port_inserted"],
+        "notes": "At TipOffset: IK must reach crystal-mating≡port-mating; pan-reconfig at fixed offset tip if needed, then align YZ → translate along crystal axis."
       }
     ]
   }

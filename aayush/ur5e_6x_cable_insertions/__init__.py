@@ -1,1 +1,1 @@
-"""Six-UR5e behaviour-tree cable grasp + port insertion demo package."""
+"""UR5e DataHall hover → orient+tilt demo package (thin BT; expand later)."""
