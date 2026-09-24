@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import carb
 import numpy as np
+from isaacsim.core.utils.types import ArticulationAction
 
 from franka_motion_controller import FrankaMotionController
 from ur5e_6x_cable_insertions import config as cfg
@@ -22,10 +24,31 @@ class Ur5eSixArmMotionController(FrankaMotionController):
     def clear_queue(self) -> None:
         super().clear_queue()
         self._six_arm_failure_reason = ""
+        self._cumotion_fallback_warned = False
         # Preserve last commanded joints from the arm lock so the next segment
         # does not rebuild targets from a gravity-sagged measurement.
         lock = getattr(self, "_lock_joint_positions", None)
         self._last_commanded_joint_positions = list(lock) if lock is not None else None
+
+    def _extra_arrive_ok(self, cmd: dict) -> bool:
+        """Insert TipOffset→seat: also require live crystal MC near planned MC."""
+
+        planned = cmd.get("arrive_mating_center_m")
+        if planned is None:
+            return True
+        getter = getattr(self, "_arrive_crystal_mc_fn", None)
+        if not callable(getter):
+            return True
+        tol_m = cmd.get("arrive_crystal_tol_m")
+        if tol_m is None:
+            tol_m = float(getattr(cfg, "INSERT_ARRIVE_CRYSTAL_TOL_M", 0.001))
+        try:
+            live = np.asarray(getter(), dtype=np.float64).reshape(3)
+            planned_m = np.asarray(planned, dtype=np.float64).reshape(3)
+        except Exception:
+            return False
+        err = float(np.linalg.norm(live - planned_m))
+        return err <= float(tol_m)
 
     def add_cartesian_waypoint(self, position, orientation, **kwargs):
         kwargs = dict(kwargs)
@@ -33,6 +56,10 @@ class Ur5eSixArmMotionController(FrankaMotionController):
         if "pos_tolerance" in kwargs and kwargs["pos_tolerance"] is not None:
             kwargs["pos_tolerance"] = (
                 float(kwargs["pos_tolerance"]) / self._meters_per_unit
+            )
+        if "ik_pos_tolerance" in kwargs and kwargs["ik_pos_tolerance"] is not None:
+            kwargs["ik_pos_tolerance"] = (
+                float(kwargs["ik_pos_tolerance"]) / self._meters_per_unit
             )
         if kwargs.get("linear") and "linear_step" in kwargs:
             kwargs["linear_step"] = float(kwargs["linear_step"]) / self._meters_per_unit
@@ -283,6 +310,123 @@ class Ur5eSixArmMotionController(FrankaMotionController):
             )
             print(f"[Ur5eSixArm settle] FAILURE {self._six_arm_failure_reason}")
         return self._hold_action(n_dof)
+
+    def _arm_seed_from_robot(self) -> np.ndarray | None:
+        names = list(getattr(self._robot, "dof_names", []) or [])
+        try:
+            q = np.asarray(self._robot.get_joint_positions(), dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        arm = np.zeros(len(cfg.UR5E_ARM_JOINT_NAMES), dtype=np.float64)
+        for i, name in enumerate(cfg.UR5E_ARM_JOINT_NAMES):
+            if name not in names:
+                return None
+            arm[i] = float(q[names.index(name)])
+        return arm
+
+    def _base_pose_meters(self):
+        try:
+            pos_stage, quat = self._robot.get_world_pose()
+        except Exception:
+            return None, None
+        return stage_to_meters(pos_stage, self._meters_per_unit), np.asarray(
+            quat, dtype=np.float64
+        ).reshape(4)
+
+    def _action_from_arm_q(self, arm_q: np.ndarray, n_dof: int) -> ArticulationAction:
+        action = self._hold_action(n_dof)
+        positions = list(action.joint_positions)
+        for index, value in zip(self._configured_arm_indices(), arm_q):
+            if index < len(positions):
+                positions[index] = float(value)
+        action.joint_positions = positions
+        return action
+
+    def _cumotion_ik_action(
+        self,
+        target_hand_stage: np.ndarray,
+        ori_wxyz: np.ndarray,
+        *,
+        pos_tol_stage: float,
+        ori_tol: float,
+        n_dof: int,
+    ):
+        """Return ``(action, success, detail)`` using cuMotion ``solve_ik``."""
+
+        from ur5e_6x_cable_insertions import cumotion_ik
+
+        seed = self._arm_seed_from_robot()
+        base_pos, base_quat = self._base_pose_meters()
+        if seed is None or base_pos is None:
+            return None, False, "missing seed joints or base pose"
+        target_m = stage_to_meters(target_hand_stage, self._meters_per_unit)
+        pos_tol_m = float(pos_tol_stage) * float(self._meters_per_unit)
+        ok, arm_q, detail = cumotion_ik.solve_arm_ik(
+            target_pos_m=target_m,
+            target_quat_wxyz=ori_wxyz,
+            base_pos_m=base_pos,
+            base_quat_wxyz=base_quat,
+            seed_arm_rad=seed,
+            ee_frame=self._ee_frame,
+            position_tolerance_m=pos_tol_m,
+            orientation_tolerance_rad=float(ori_tol),
+        )
+        if not ok or arm_q is None:
+            return None, False, detail
+        return self._action_from_arm_q(arm_q, n_dof), True, detail
+
+    def _linear_ik_action(self, cmd: dict, n_dof: int) -> ArticulationAction:
+        next_progress = min(self._linear_progress + cmd["linear_step"], self._linear_length)
+        target = self._linear_start + self._linear_dir * next_progress
+        backend = str(cmd.get("ik_backend") or "").strip().lower()
+        use_cumotion = backend == "cumotion"
+
+        action = None
+        success = False
+        if use_cumotion:
+            action, success, detail = self._cumotion_ik_action(
+                target,
+                cmd["ori"],
+                pos_tol_stage=self._ik_pos_tol(cmd),
+                ori_tol=self._ori_tol(cmd),
+                n_dof=n_dof,
+            )
+            if not success:
+                if not getattr(self, "_cumotion_fallback_warned", False):
+                    carb.log_warn(
+                        f"cuMotion IK failed ({detail}); falling back to Lula "
+                        f"{self._debug_tag(cmd)}"
+                    )
+                    self._cumotion_fallback_warned = True
+                action, success = self._art_kinematics.compute_inverse_kinematics(
+                    target_position=target,
+                    target_orientation=cmd["ori"],
+                    position_tolerance=self._ik_pos_tol(cmd),
+                    orientation_tolerance=self._ori_tol(cmd),
+                )
+        else:
+            action, success = self._art_kinematics.compute_inverse_kinematics(
+                target_position=target,
+                target_orientation=cmd["ori"],
+                position_tolerance=self._ik_pos_tol(cmd),
+                orientation_tolerance=self._ori_tol(cmd),
+            )
+
+        if not success:
+            if not self._linear_ik_warned:
+                carb.log_warn(
+                    f"Linear IK failed at {np.round(target, 4)}; halting command queue "
+                    f"{self._debug_tag(cmd)}."
+                )
+                self._linear_ik_warned = True
+            self._segment_failed = True
+            label = str(cmd.get("label", "unlabelled waypoint"))
+            self._six_arm_failure_reason = f"IK failed for {label}"
+            hold = self._hold_action(n_dof)
+            return self._with_closed_gripper(hold, n_dof) if cmd.get("hold_gripper") else hold
+
+        self._linear_progress = next_progress
+        return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
 
     def _init_joint_interp_segment(self, cmd, current_joint_positions, n_dof):
         super()._init_joint_interp_segment(cmd, current_joint_positions, n_dof)

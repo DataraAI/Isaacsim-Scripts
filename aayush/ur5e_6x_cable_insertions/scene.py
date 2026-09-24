@@ -429,11 +429,39 @@ def apply_worktable_frictionless_materials(stage) -> None:
     )
 
 
+def _resolve_instance_edit_root(stage, root_path: str) -> str:
+    """If ``root_path`` is an instance proxy, lift to its owning instance root.
+
+    Mesh133/Mesh134 live under ``…/Lower_Left/AS4610_inst/…``. ``AS4610_inst``
+    itself is still a proxy; only ``Lower_Left`` (or ``Upper_Right``) is the
+    editable instance. De-instancing a proxy path is a no-op.
+    """
+
+    prim = stage.GetPrimAtPath(root_path)
+    if not prim or not prim.IsValid():
+        return root_path
+    if not prim.IsInstanceProxy():
+        return root_path
+    cur = prim.GetParent()
+    while cur and cur.IsValid():
+        path = str(cur.GetPath())
+        if path in ("/", "/World", str(cfg.NETWORK_SWITCHES_SCOPE)):
+            break
+        if not cur.IsInstanceProxy() and (
+            (hasattr(cur, "IsInstance") and cur.IsInstance()) or cur.IsInstanceable()
+        ):
+            print(f"[SCENE] De-instance root lifted {root_path} → {path}")
+            return path
+        cur = cur.GetParent()
+    return root_path
+
+
 def deinstance_prim_tree(
     stage, root_path: str, *, max_passes: int | None = None
 ) -> int:
     """Clear USD instanceable flags so mesh CollisionAPI can be authored."""
 
+    root_path = _resolve_instance_edit_root(stage, root_path)
     root = stage.GetPrimAtPath(root_path)
     if not root or not root.IsValid():
         print(f"[SCENE] De-instance skipped: missing {root_path}")
@@ -477,6 +505,10 @@ def collision_roots_for_stations(selected) -> tuple[str, ...]:
 
     Avoids enabling CollisionAPI on the entire ``/World/Network_Switches`` tree
     (~6k triangle meshes), which overflows PhysX GPU pair buffers (CUDA 700).
+
+    Roots include the robot-loc pack (``Lower_Left`` / ``Upper_Right``), which is
+    the USD instance root — ``AS4610_inst`` alone is still an instance proxy and
+    cannot receive CollisionAPI until that parent is de-instanced.
     """
 
     roots: list[str] = [
@@ -490,20 +522,19 @@ def collision_roots_for_stations(selected) -> tuple[str, ...]:
         pack = str(getattr(spec, "port_pack_path", "") or "")
         if not pack:
             continue
-        # De-instance from AS4610_inst (parent of Switch) — Switch alone stays
-        # instance-proxy and authored 0 colliders in the last run.
+        # robot_loc instance root (…/Lower_Left), then AS4610_inst / Switch / pack.
+        robot_loc = pack
+        if "/AS4610_inst" in robot_loc:
+            robot_loc = robot_loc.split("/AS4610_inst", 1)[0]
         inst = pack
-        for marker in ("/AS4610_01/", "/Switch/", "/Net_12_Pack", "/RJ45_Group"):
-            if marker in inst:
-                # Keep path through AS4610_inst when present.
-                if "/AS4610_inst/" in inst:
-                    inst = inst.split("/AS4610_inst/", 1)[0] + "/AS4610_inst"
-                break
+        if "/AS4610_inst/" in inst:
+            inst = inst.split("/AS4610_inst/", 1)[0] + "/AS4610_inst"
         switch = pack
         for marker in ("/Net_12_Pack", "/RJ45_Group"):
             if marker in switch:
                 switch = switch.split(marker, 1)[0]
                 break
+        roots.append(robot_loc)
         roots.append(inst)
         roots.append(switch)
         if pack not in roots:
@@ -670,6 +701,51 @@ def enable_datahall_static_collisions(
             "[SCENE] Skipping Mesh4679 force-colliders "
             "(DataHall facility not in DATAHALL_COLLISION_ROOTS)"
         )
+    # Ethernet jack shells (Mesh133 / Mesh134) under selected switch roots.
+    port_names = tuple(
+        str(n)
+        for n in getattr(cfg, "DATAHALL_FORCE_ETHERNET_PORT_MESHES", ())
+        if n
+    )
+    if port_names:
+        override = getattr(cfg, "DATAHALL_FORCE_ETHERNET_PORT_APPROXIMATION", None)
+        port_approx = str(override) if override else approx
+        switch_roots = tuple(
+            r
+            for r in roots
+            if "Network_Switches" in str(r)
+            or "AS4610" in str(r)
+            or "/Switch" in str(r)
+            or "RJ45" in str(r)
+            or "Lower_Left" in str(r)
+            or "Upper_Right" in str(r)
+            or "Lower_Right" in str(r)
+            or "Upper_Left" in str(r)
+        )
+        if not switch_roots:
+            print(
+                "[SCENE] WARN: no Network_Switches roots for Mesh133/Mesh134 "
+                f"(collision roots={list(roots)})"
+            )
+        else:
+            forced_ports = _force_named_static_colliders(
+                stage,
+                name_tokens=port_names,
+                approximation=port_approx,
+                root_paths=switch_roots,
+                exact_name=True,
+            )
+            if forced_ports:
+                print(
+                    f"[SCENE] Ethernet port colliders ON: {forced_ports} "
+                    f"prim(s) {list(port_names)} approx={port_approx!r}"
+                )
+                total += forced_ports
+            else:
+                print(
+                    f"[SCENE] WARN: Mesh133/Mesh134 still have no colliders "
+                    f"(still proxies? roots={list(switch_roots)})"
+                )
     if bool(getattr(cfg, "DATAHALL_DISABLE_FRONT_DOOR_COLLISION", True)):
         disable_datahall_front_door_collisions(stage)
     return total
@@ -744,22 +820,48 @@ def disable_datahall_front_door_collisions(stage) -> int:
 
 
 def _force_named_static_colliders(
-    stage, *, name_tokens: tuple[str, ...], approximation: str
+    stage,
+    *,
+    name_tokens: tuple[str, ...],
+    approximation: str,
+    root_paths: tuple[str, ...] | None = None,
+    exact_name: bool = False,
 ) -> int:
-    """Enable static mesh collision on prims matching ``name_tokens`` (any root)."""
+    """Enable static mesh collision on prims matching ``name_tokens``.
+
+    When ``root_paths`` is set, only those subtrees are scanned. ``exact_name``
+    matches prim name equality (case-insensitive); otherwise substring.
+    """
 
     from omni.physx.scripts import utils as physx_utils
 
     tokens = tuple(t.lower() for t in name_tokens)
     count = 0
-    for prim in stage.Traverse():
+
+    def _iter_prims():
+        if not root_paths:
+            yield from stage.Traverse()
+            return
+        for root_path in root_paths:
+            root = stage.GetPrimAtPath(root_path)
+            if not root or not root.IsValid():
+                continue
+            yield from Usd.PrimRange(root)
+
+    for prim in _iter_prims():
         name = prim.GetName().lower()
-        if not any(token in name for token in tokens):
+        if exact_name:
+            if name not in tokens:
+                continue
+        elif not any(token in name for token in tokens):
             continue
         if not prim.IsA(UsdGeom.Mesh):
             continue
         try:
             if prim.IsInstanceProxy():
+                continue
+            points = UsdGeom.Mesh(prim).GetPointsAttr().Get()
+            if points is None or len(points) == 0:
                 continue
             UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(True).Set(
                 True
@@ -778,9 +880,9 @@ def _force_named_static_colliders(
             if approx_api is not None:
                 approx_api.Apply(prim)
             count += 1
-            print(f"[SCENE] Mesh4679 collider ON: {prim.GetPath()}")
+            print(f"[SCENE] Forced collider ON ({approximation}): {prim.GetPath()}")
         except Exception as exc:
-            print(f"[SCENE] Mesh4679 collider skip {prim.GetPath()}: {exc}")
+            print(f"[SCENE] Forced collider skip {prim.GetPath()}: {exc}")
     return count
 
 
@@ -1821,6 +1923,74 @@ def freeze_inactive_ur5e_robots(stage, selected) -> None:
         )
 
 
+def freeze_inactive_network_cables(stage, selected) -> None:
+    """Disable rigid/collision physics on non-selected ``/World/NetworkCables``.
+
+    Authored USD enables RigidBody on every station's crystal heads. Idle cables
+    still simulate and can NaN (``Invalid PhysX transform``) while the BT arm
+    runs another station — freeze them like idle UR5es.
+    """
+
+    selected = tuple(selected)
+    keep = {str(spec.cable_root_path) for spec in selected}
+    cables = stage.GetPrimAtPath(cfg.CABLES_SCOPE)
+    if not cables or not cables.IsValid():
+        return
+    frozen = 0
+    for child in cables.GetChildren():
+        path = str(child.GetPath())
+        if path in keep:
+            continue
+        disabled_rb = 0
+        disabled_col = 0
+        for prim in Usd.PrimRange(child):
+            try:
+                if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    UsdPhysics.RigidBodyAPI(prim).CreateRigidBodyEnabledAttr(
+                        False
+                    ).Set(False)
+                    disabled_rb += 1
+            except Exception:
+                attr = prim.GetAttribute("physics:rigidBodyEnabled")
+                if attr and attr.IsValid():
+                    try:
+                        attr.Set(False)
+                        disabled_rb += 1
+                    except Exception:
+                        pass
+            try:
+                if prim.HasAPI(UsdPhysics.CollisionAPI) or prim.IsA(UsdGeom.Mesh):
+                    UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr(
+                        False
+                    ).Set(False)
+                    disabled_col += 1
+            except Exception:
+                pass
+            for attr_name in (
+                "physxDeformableBody:deformableEnabled",
+                "physxDeformable:deformableEnabled",
+            ):
+                attr = prim.GetAttribute(attr_name)
+                if attr and attr.IsValid():
+                    try:
+                        attr.Set(False)
+                    except Exception:
+                        pass
+        try:
+            UsdGeom.Imageable(child).MakeInvisible()
+        except Exception:
+            pass
+        frozen += 1
+        print(
+            f"[SCENE] Idle cable physics OFF {path} "
+            f"(rigid={disabled_rb}, colliders={disabled_col})"
+        )
+    if frozen:
+        print(
+            f"[SCENE] Froze {frozen} idle NetworkCable(s) "
+            f"(kept {sorted(p.split('/')[-1] for p in keep) or '-'})"
+        )
+
 
 def configure_robot_physics(stage, root_path: str) -> None:
     """Enable link/gripper collision, optional self-collision, PhysX params."""
@@ -2804,6 +2974,7 @@ def build_scene(
         ensure_robotiq_link_masses(stage, spec.robot_prim_path)
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
+    freeze_inactive_network_cables(stage, selected)
     for spec in selected:
         robot_prim = stage.GetPrimAtPath(spec.robot_prim_path)
         if not robot_prim or not robot_prim.IsValid():
@@ -2814,6 +2985,7 @@ def build_scene(
 
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
+    freeze_inactive_network_cables(stage, selected)
     if bool(cfg.ENABLE_DATAHALL_STATIC_COLLISIONS):
         enable_datahall_static_collisions(stage, selected=selected)
     for spec in selected:
@@ -2843,6 +3015,7 @@ def build_scene(
     # Reset reloads authored ROS graphs from USD — strip again.
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
+    freeze_inactive_network_cables(stage, selected)
     robots: dict[str, Any] = {}
     ee_paths: dict[str, str] = {}
     for spec in selected:
@@ -2869,6 +3042,7 @@ def build_scene(
     _enable_gpu_dynamics(stage, SimulationManager, world=world)
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
+    freeze_inactive_network_cables(stage, selected)
     lula_config = interface_config_loader.load_supported_lula_kinematics_solver_config(
         cfg.UR5E_LULA_NAME
     )
@@ -2899,6 +3073,7 @@ def build_scene(
     apply_worktable_frictionless_materials(stage)
     remove_all_ur5e_ros_graphs(stage, selected)
     freeze_inactive_ur5e_robots(stage, selected)
+    freeze_inactive_network_cables(stage, selected)
     print(
         f"[SCENE] BT stations={len(bundles)}; "
         f"inactive UR5es hidden (no sim)"

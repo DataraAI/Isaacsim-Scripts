@@ -32,6 +32,10 @@ DATAHALL_DISABLE_FRONT_DOOR_COLLISION = True
 DATAHALL_COLLISION_SKIP_PATH_TOKENS = (
     "Front_Door",
 )
+# RJ45 jack shells — force CollisionAPI after de-instance (same approx as bulk
+# unless overridden). Mesh133/134 are instance proxies until Lower_Left expands.
+DATAHALL_FORCE_ETHERNET_PORT_MESHES = ("Mesh133", "Mesh134")
+DATAHALL_FORCE_ETHERNET_PORT_APPROXIMATION = None  # None → DATAHALL_COLLISION_APPROXIMATION
 
 ROBOTS_SCOPE = "/World/Robots"
 CABLES_SCOPE = "/World/NetworkCables"
@@ -666,7 +670,7 @@ PORT_OFFSET_ALIGN_ORI_TOLERANCE_RAD = 0.08
 PORT_OFFSET_ORI_BLEND_STEPS = 12
 PORT_OFFSET_ORI_BLEND_JOINT_STEPS = 40
 # Insert TipOffset→seat waypoints only (not TipLift→TipOffset maneuver).
-INSERT_ORI_TOLERANCE_RAD = 0.05
+INSERT_ORI_TOLERANCE_RAD = 0.01
 # NegativeY: joint-space pan/lift bumps fight the clearance tip path — keep False
 # so Lula cartesian tracks the waypoint tips (crystal follows markers).
 PORT_NEGY_USE_BASE_SWEEP = False
@@ -706,28 +710,40 @@ MANEUVER_STRETCH_Y_BLEND = (0.25, 0.40, 0.55)  # Y progress during stretch via
 MANEUVER_APPROACH_Z_CLEAR_M = 0.015  # legacy high approach; dip path preferred
 MANEUVER_APPROACH_Z_DIP_M = 0.08  # meters below tip_offset Z while sliding −X
 MANEUVER_DIP_START_X_AHEAD_M = 0.10  # start duck this far +X of tip_offset
-# TipOffset / insert crystal path — X-only slide at fixed YZ from a measured
-# half-inserted crystal-head world pose (Isaac: E_crystal_head1_45).
-# Stage units assume metersPerUnit=0.01 (cm). Converted to meters at runtime.
-# Measured mid (half-inserted) head pose from Isaac viewport:
-#   pos stage=[-13.4914, -102.5997, 386.4533]
-#   ori ijkw≈[0, 0, 1, 0]  (≈180° about +Z) — used for mating X/YZ anchor only.
-INSERT_CRYSTAL_USE_ANCHOR = True
+# Insert TipOffset / insert path — port mating geometry:
+#   seat  = port mating center
+#   offset = port mating + (+PORT_APPROACH_X_OFFSET_M along +X)
+# Tip IK from crystal-head ↔ mating-center relative pose.
+INSERT_CRYSTAL_USE_ANCHOR = False
 INSERT_CRYSTAL_HEAD_MID_POS_STAGE = (-13.491441607475284, -102.5997406269046, 386.453283023821)
 INSERT_CRYSTAL_HEAD_MID_ORI_IJKW = (0.0, 0.0, 0.9999999999999806, 1.9729003370455804e-07)
-# Insert TipOffset→seat waypoints only: crystal-head world Euler XYZ (deg).
-# Maneuver TipLift→TipOffset is unchanged (no Euler lock — that blocked offset).
-# Validate insertion axis ≈ world −X. With REQUIRE=True, a failing Euler keeps
-# the TipOffset tool ori (extrinsic XYZ: (0,0,±180)→−X; (0,0,-90)→−Y).
-INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG = (0.0, 0.0, -90.0)
+# Insert TipOffset→seat orientation: keep TipOffset tool ori by default.
+# Forcing crystal Euler (0,0,180) remaps the wrist (~70°+) and pitches the
+# gripper down. Set LOCK_CRYSTAL_EULER=True only if you need an absolute head pose.
+INSERT_WAYPOINT_LOCK_CRYSTAL_EULER = False
+INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG = (0.0, 0.0, 180.0)  # used only if LOCK=True
 INSERT_WAYPOINT_REQUIRE_AXIS_NEG_X = True
-INSERT_WAYPOINT_AXIS_DOT_MIN = 0.90  # |axis·(−X)| must be ≥ this
-# Fine YZ tweaks in *meters* if the head sits a little off (keep small).
-# Stage nudge @ mpu=0.01: 0.5 → 0.005 m, 0.05 → 0.0005 m.
-INSERT_CRYSTAL_Y_DELTA_M = 0.0015
-INSERT_CRYSTAL_Z_DELTA_M = 0.004  # was 0.005; −0.05 stage
-# X span: start = mid_mating_X + ahead; seat X = port mating X (override optional).
-INSERT_CRYSTAL_APPROACH_X_AHEAD_M = 0.06  # more +X than mid before inserting
+INSERT_WAYPOINT_AXIS_DOT_MIN = 0.90  # live crystal axis · (−X) must be ≥ this
+# TipOffset→seat: pitch insert axis from −X toward −Z (world-Y; + = down).
+INSERT_WAYPOINT_AXIS_PITCH_DOWN_DEG = 3.0
+# Roll about the insert axis; + = clockwise when looking along the axis (into jack).
+INSERT_WAYPOINT_AXIS_ROLL_CW_DEG = -2.5
+# World-Z yaw of crystal/tool; + = clockwise (looking down +Z).
+INSERT_WAYPOINT_AXIS_YAW_CW_DEG = 1.0
+# Reject Euler remap if it would swing the tool more than this (deg).
+INSERT_WAYPOINT_MAX_TOOL_DELTA_DEG = 15.0
+# Fine tip-only nudges in *meters* (planned mating centers stay on port YZ).
+# Visual: crystal a bit low (+Z) and a bit right / high-Y (−Y). X left near 0
+# after −4 mm overshot; arrive |Δ| at 0.78 was already ~0.4 mm.
+INSERT_CRYSTAL_X_DELTA_M = -0.0005
+INSERT_CRYSTAL_Y_DELTA_M = 0.00115
+INSERT_CRYSTAL_Z_DELTA_M = 0.00575
+# Require live crystal MC within this of planned MC before advancing a WP
+# (hand tol alone was declaring arrive ~3–4 mm early along −X).
+INSERT_ARRIVE_CRYSTAL_MC = True
+INSERT_ARRIVE_CRYSTAL_TOL_M = 0.001  # 1 mm on |crystal−planned|
+# X span uses PORT_APPROACH_X_OFFSET_M for TipOffset / insert start.
+INSERT_CRYSTAL_APPROACH_X_AHEAD_M = 0.06  # legacy; insert start uses PORT_APPROACH_X_OFFSET_M
 INSERT_CRYSTAL_SEAT_X_M = None  # None → live port mating X
 # Legacy Z settle (disabled when INSERT_CRYSTAL_USE_ANCHOR).
 PORT_OFFSET_Z_BIAS_M = 0.0
@@ -853,13 +869,35 @@ LATCH_Y_MARGIN_M = 0.00015
 AXIS_DOT_MIN = 0.98
 INSERT_STEP_M = 0.01  # 1 cm mating-center spacing TipOffset → seat
 # Cartesian densify step for each insert waypoint (was ALIGN_STEP 0.004).
-INSERT_LINEAR_STEP_M = 0.01
+INSERT_LINEAR_STEP_M = 0.005
 MATING_TOUCH_GAP_M = 0.002
-# Validate seat: crystal mating within this of port mating (meters).
-INSERT_AT_SEAT_TOL_M = 0.008
 ALIGN_INSERT_MAX_FRAMES = 6000
 # Legacy flag (YZ live-align loop removed; insert is a cached maneuver).
 ALIGN_INSERT_ENABLE_YZ = False
+# TipOffset→seat tracking (meters). Arrive logs still showed |Δyz|≈4.3 mm and
+# tip_vs_planned≈5–6 mm under 2 mm hand tol — tighten default to 1 mm.
+INSERT_POS_TOLERANCE_M = 0.001  # 1 mm
+INSERT_SEAT_POS_TOLERANCE_M = 0.0005  # 0.5 mm
+INSERT_AT_SEAT_TOL_M = 0.0005
+# IK solver tol for linear steps (≥ arrival tol so progress does not freeze).
+INSERT_IK_POS_TOLERANCE_M = 0.001
+# TipOffset→seat linear IK only. "cumotion" uses project URDF+XRDF; Lula elsewhere
+# and on cuMotion failure.
+INSERT_IK_BACKEND = "cumotion"
+CUMOTION_UR5E_CONFIG_DIR = Path(__file__).resolve().parent / "robot_configurations" / "ur5e"
+# 1-based insert waypoints with tighter arrival (0.0005 m = 0.5 mm).
+INSERT_PRECISION_WP_1BASED = (4, 5, 6, 7)
+INSERT_PRECISION_POS_TOLERANCE_M = 0.0005
+INSERT_PRECISION_IK_POS_TOLERANCE_M = 0.0005
+INSERT_PRECISION_LINEAR_STEP_M = 0.0005
+# On each TipOffset→seat waypoint complete: log live crystal MC vs planned MC.
+INSERT_ARRIVE_MC_LOG = True
+# Legacy late-WP knobs (unused when PRECISION_WP is set; kept for compatibility).
+INSERT_LATE_FROM_WP = 999
+INSERT_LATE_POS_TOLERANCE_M = INSERT_POS_TOLERANCE_M
+INSERT_LATE_LINEAR_STEP_M = INSERT_LINEAR_STEP_M
+INSERT_LATE_MAX_FRAMES = 600
+INSERT_LATE_JOINT_STEPS = 120
 # Insert-step diagnostics: wrist wrench + contact impulses + friction props → JSONL.
 INSERT_DIAG_ENABLE = True
 INSERT_DIAG_PATH = Path(__file__).resolve().parent / "insert_diag.jsonl"
@@ -868,7 +906,11 @@ INSERT_DIAG_SAMPLE_EVERY_N = 0  # 0 = labeled / arrival samples only
 INSERT_DIAG_LOG_EVERY_N = 1  # print each recorded pose sample
 INSERT_DIAG_FORCE_LOG_N = 5.0  # always print when |F_wrist| exceeds this
 INSERT_DIAG_IMPULSE_LOG = 0.01  # always print when contact impulse exceeds this
-INSERT_DIAG_CONTACT_LOG = False  # TipOffset→seat: no [COLLISION] spam
+INSERT_DIAG_CONTACT_LOG = False  # TipOffset→seat: no general [COLLISION] spam
+# FIRST crystal-head-45 ↔ Mesh133/Mesh134: log crystal mating vs port mating
+# (YZ error + insert-axis vs −X) for waypoint / INSERT_CRYSTAL_*_DELTA tuning.
+INSERT_PORT_HIT_LOG = True
+INSERT_PORT_HIT_MESH_NAMES = ("Mesh133", "Mesh134")
 # Skip gripper/robot contacts so pad pinch does not flood the log. Set False to
 # include those too. Ethernet/RJ45 and all other scene meshes are logged.
 INSERT_CONTACT_SKIP_ROBOT = True
@@ -901,8 +943,9 @@ ALIGN_INSERT_AXIS_RADIUS_M = 0.00125
 INSERT_PATH_MARKER_SCALE_M = 0.006
 INSERT_PATH_DEBUG_MARKERS_VISIBLE = False  # uses station DebugPortMarkers visibility
 # Insert cartesian densify (also see INSERT_LINEAR_STEP_M).
+# Constant per-waypoint budget (same as ALIGN_STEP_MAX_FRAMES).
 INSERT_JOINT_STEPS = ALIGN_STEP_JOINT_STEPS
-INSERT_MAX_FRAMES = ALIGN_STEP_MAX_FRAMES
+INSERT_MAX_FRAMES = 180  # crystal-MC arrive gate needs headroom vs hand-only
 
 # Debug spheres: radius in meters (converted to stage units at spawn).
 PORT_DEBUG_MARKER_SCALE_M = 0.01

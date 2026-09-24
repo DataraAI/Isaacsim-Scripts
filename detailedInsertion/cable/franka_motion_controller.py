@@ -112,6 +112,7 @@ class FrankaMotionController(BaseController):
         max_frames: int = 400,
         pos_tolerance: typing.Optional[float] = None,
         ori_tolerance: typing.Optional[float] = None,
+        ik_pos_tolerance: typing.Optional[float] = None,
         linear: bool = False,
         linear_step: float = 0.001,
         joint_interp: bool = False,
@@ -119,6 +120,9 @@ class FrankaMotionController(BaseController):
         hold_gripper: bool = False,
         target_is_hand: bool = False,
         label: str = "",
+        ik_backend: str = "",
+        arrive_mating_center_m: typing.Optional[np.ndarray] = None,
+        arrive_crystal_tol_m: typing.Optional[float] = None,
     ) -> None:
         self._command_queue.append({
             "type": "cartesian",
@@ -127,6 +131,8 @@ class FrankaMotionController(BaseController):
             "max_frames": int(max_frames),
             "frames_spent": 0,
             "pos_tolerance": pos_tolerance,
+            # Optional looser solver tol for Lula IK steps; arrival still uses pos_tolerance.
+            "ik_pos_tolerance": ik_pos_tolerance,
             "ori_tolerance": ori_tolerance,
             "linear": bool(linear),
             "linear_step": float(linear_step),
@@ -135,6 +141,15 @@ class FrankaMotionController(BaseController):
             "hold_gripper": bool(hold_gripper),
             "target_is_hand": bool(target_is_hand),
             "label": str(label),
+            # "" / "lula" = ArticulationKinematicsSolver; "cumotion" = cuMotion solve_ik.
+            "ik_backend": str(ik_backend or ""),
+            # Optional TipOffset→seat gate: live crystal MC vs planned MC (meters).
+            "arrive_mating_center_m": (
+                None
+                if arrive_mating_center_m is None
+                else np.asarray(arrive_mating_center_m, dtype=np.float64).reshape(3)
+            ),
+            "arrive_crystal_tol_m": arrive_crystal_tol_m,
         })
 
     def add_gripper_command(
@@ -312,9 +327,18 @@ class FrankaMotionController(BaseController):
                     and self._segment_goal_hand is not None
                 ):
                     hand_pos, _ = self._current_hand_pose()
-                    pos_tol = float(cmd.get("pos_tolerance") or self._pos_tolerance)
-                    if float(np.linalg.norm(self._segment_goal_hand - hand_pos)) < pos_tol:
-                        goal_reached = True
+                    err = float(
+                        np.linalg.norm(self._segment_goal_hand - hand_pos)
+                    )
+                    pos_tol = float(
+                        cmd.get("pos_tolerance") or self._pos_tolerance
+                    )
+                    # Prefer arrival tol; if IK uses a looser solver tol, allow
+                    # that so ultra-tight arrival does not freeze the path.
+                    if err < pos_tol or err < self._ik_pos_tol(cmd):
+                        # Hand close at linear end — still honor extra gates
+                        # (e.g. crystal mating-center arrive on insert).
+                        goal_reached = self._extra_arrive_ok(cmd)
                 if goal_reached or timed_out:
                     self._log_waypoint_complete(cmd, timed_out)
                     self._advance_command()
@@ -472,7 +496,7 @@ class FrankaMotionController(BaseController):
             action, success = self._art_kinematics.compute_inverse_kinematics(
                 target_position=self._segment_goal_hand,
                 target_orientation=cmd["ori"],
-                position_tolerance=cmd.get("pos_tolerance") or self._pos_tolerance,
+                position_tolerance=self._ik_pos_tol(cmd),
                 orientation_tolerance=self._ori_tol(cmd),
             )
             if not success:
@@ -498,13 +522,20 @@ class FrankaMotionController(BaseController):
         value = cmd.get("ori_tolerance")
         return float(self._ori_tolerance if value is None else value)
 
+    def _ik_pos_tol(self, cmd: dict) -> float:
+        """Tolerance passed to Lula IK (may be looser than arrival ``pos_tolerance``)."""
+
+        if cmd.get("ik_pos_tolerance") is not None:
+            return float(cmd["ik_pos_tolerance"])
+        return float(cmd.get("pos_tolerance") or self._pos_tolerance)
+
     def _linear_ik_action(self, cmd: dict, n_dof: int) -> ArticulationAction:
         next_progress = min(self._linear_progress + cmd["linear_step"], self._linear_length)
         target = self._linear_start + self._linear_dir * next_progress
         action, success = self._art_kinematics.compute_inverse_kinematics(
             target_position=target,
             target_orientation=cmd["ori"],
-            position_tolerance=cmd.get("pos_tolerance") or self._pos_tolerance,
+            position_tolerance=self._ik_pos_tol(cmd),
             orientation_tolerance=self._ori_tol(cmd),
         )
         if not success:
@@ -529,7 +560,7 @@ class FrankaMotionController(BaseController):
         action, success = self._art_kinematics.compute_inverse_kinematics(
             target_position=self._segment_goal_hand,
             target_orientation=cmd["ori"],
-            position_tolerance=cmd.get("pos_tolerance") or self._pos_tolerance,
+            position_tolerance=self._ik_pos_tol(cmd),
             orientation_tolerance=self._ori_tol(cmd),
         )
         start = np.asarray(current_joint_positions, dtype=np.float64).copy()
@@ -564,6 +595,11 @@ class FrankaMotionController(BaseController):
         action = ArticulationAction(joint_positions=q.tolist())
         return self._with_closed_gripper(action, n_dof) if cmd.get("hold_gripper") else action
 
+    def _extra_arrive_ok(self, cmd: dict) -> bool:
+        """Subclass hook for gates beyond hand pose (default: pass)."""
+
+        return True
+
     def _segment_goal_reached(self, cmd: dict) -> bool:
         if self._segment_goal_hand is None:
             return False
@@ -573,20 +609,22 @@ class FrankaMotionController(BaseController):
             return False
         ori_tol = cmd.get("ori_tolerance")
         if ori_tol is None:
-            return True
+            return self._extra_arrive_ok(cmd)
         # Quaternion absolute dot ≥ cos(θ/2) for angle ≤ ori_tol.
         q_goal = np.asarray(cmd.get("ori"), dtype=np.float64).reshape(4)
         q_now = np.asarray(hand_ori, dtype=np.float64).reshape(4)
         n_g = float(np.linalg.norm(q_goal))
         n_n = float(np.linalg.norm(q_now))
         if n_g < 1e-12 or n_n < 1e-12:
-            return True
+            return self._extra_arrive_ok(cmd)
         q_goal = q_goal / n_g
         q_now = q_now / n_n
         dot = abs(float(np.dot(q_goal, q_now)))
         dot = min(1.0, dot)
         angle = 2.0 * float(np.arccos(dot))
-        return angle <= float(ori_tol)
+        if angle > float(ori_tol):
+            return False
+        return self._extra_arrive_ok(cmd)
 
     def _log_waypoint_complete(self, cmd: dict, timed_out: bool) -> None:
         if not self._debug:

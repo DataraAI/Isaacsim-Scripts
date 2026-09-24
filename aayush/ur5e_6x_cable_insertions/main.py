@@ -82,6 +82,7 @@ from ur5e_6x_cable_insertions.scene import (
     apply_live_arm_gains,
     apply_ur5e_home_pose,
     build_scene,
+    freeze_inactive_network_cables,
     freeze_inactive_ur5e_robots,
     hold_idle_ur5e_homes,
     remove_all_ur5e_ros_graphs,
@@ -343,6 +344,7 @@ def main() -> int:
     selected_specs = [station.spec for station in bundle.stations]
     remove_all_ur5e_ros_graphs(bundle.stage, selected_specs)
     freeze_inactive_ur5e_robots(bundle.stage, selected_specs)
+    freeze_inactive_network_cables(bundle.stage, selected_specs)
     physics_ready = False
     for warm in range(240):
         if not simulation_app.is_running():
@@ -351,6 +353,7 @@ def main() -> int:
             world.play()
             remove_all_ur5e_ros_graphs(bundle.stage, selected_specs)
             freeze_inactive_ur5e_robots(bundle.stage, selected_specs)
+            freeze_inactive_network_cables(bundle.stage, selected_specs)
         world.step(render=not ARGS.headless)
         # Keep unselected arms glued to home from the first physics step.
         hold_idle_ur5e_homes(bundle.idle_stations)
@@ -389,6 +392,7 @@ def main() -> int:
             hold_idle_ur5e_homes(bundle.idle_stations)
             remove_all_ur5e_ros_graphs(bundle.stage, selected_specs)
             freeze_inactive_ur5e_robots(bundle.stage, selected_specs)
+            freeze_inactive_network_cables(bundle.stage, selected_specs)
             physics_ready = True
             print(
                 f"[BT CABLE UR5E 6X] Physics view ready after {warm + 1} warmup step(s)"
@@ -483,6 +487,7 @@ def main() -> int:
         if frame == 1 or frame % 180 == 0:
             remove_all_ur5e_ros_graphs(bundle.stage, selected_specs)
             freeze_inactive_ur5e_robots(bundle.stage, selected_specs)
+            freeze_inactive_network_cables(bundle.stage, selected_specs)
         if frame <= warmup_frames:
             continue
         for tree in trees:

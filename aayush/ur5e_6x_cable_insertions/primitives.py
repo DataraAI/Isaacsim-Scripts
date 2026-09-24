@@ -747,6 +747,30 @@ def _quat_slerp(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
     return _normalize_quat(s0 * a + s1 * b)
 
 
+def _rotate_about_world_y(vec: np.ndarray, pitch_deg: float) -> np.ndarray:
+    """Rotate a world vector about +Y by ``pitch_deg`` (CCW when looking along +Y)."""
+
+    v = np.asarray(vec, dtype=np.float64).reshape(3)
+    rad = np.deg2rad(float(pitch_deg))
+    c, s = float(np.cos(rad)), float(np.sin(rad))
+    return np.array(
+        [c * v[0] + s * v[2], float(v[1]), -s * v[0] + c * v[2]],
+        dtype=np.float64,
+    )
+
+
+def _quat_about_axis(axis: np.ndarray, angle_deg: float) -> np.ndarray:
+    """Unit quaternion for a right-hand rotation of ``angle_deg`` about ``axis``."""
+
+    a = _normalize_vec(axis)
+    half = 0.5 * np.deg2rad(float(angle_deg))
+    s = float(np.sin(half))
+    return np.array(
+        [float(np.cos(half)), a[0] * s, a[1] * s, a[2] * s],
+        dtype=np.float64,
+    )
+
+
 def _yaw_about_world_z(quat_wxyz: np.ndarray, yaw_deg: float) -> np.ndarray:
     """Apply a world-Z yaw (tool −Z stays roughly world −Z for vertical grasp)."""
 
@@ -1006,6 +1030,103 @@ def tip_for_desired_crystal_mating(
     r_tgt = cfg._quat_to_rot_matrix(_normalize_quat(tool_ori_tgt))
     p_local = r_now.T @ (crystal_mc_now - tip_now)
     return desired - (r_tgt @ p_local)
+
+
+def crystal_head_world_pose_meters(
+    stage, head_prim_path: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Crystal-head world ``(position_m, quat_wxyz)``."""
+
+    prim = stage.GetPrimAtPath(head_prim_path)
+    if not prim or not prim.IsValid():
+        raise RuntimeError(f"Missing crystal head {head_prim_path}")
+    cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    mat = cache.GetLocalToWorldTransform(prim)
+    translate = mat.ExtractTranslation()
+    mpu = meters_per_unit(stage)
+    pos_m = np.array(
+        [float(translate[0]), float(translate[1]), float(translate[2])],
+        dtype=np.float64,
+    ) * mpu
+    quat = crystal_head_world_quat_wxyz(stage, head_prim_path)
+    return pos_m, quat
+
+
+def tip_for_desired_crystal_mating_via_head(
+    *,
+    tip_now: np.ndarray,
+    head_pos_now: np.ndarray,
+    head_ori_now: np.ndarray,
+    crystal_mc_now: np.ndarray,
+    desired_crystal_mc: np.ndarray,
+) -> np.ndarray:
+    """Tip that places crystal mating at ``desired_crystal_mc`` via head↔MC offset.
+
+    Uses the rigid relative pose of the mating center in the crystal-head frame
+    (and tip in that same frame) so FK tip bias does not pull the path low.
+    """
+
+    tip_now = np.asarray(tip_now, dtype=np.float64).reshape(3)
+    head_pos = np.asarray(head_pos_now, dtype=np.float64).reshape(3)
+    mc_now = np.asarray(crystal_mc_now, dtype=np.float64).reshape(3)
+    desired = np.asarray(desired_crystal_mc, dtype=np.float64).reshape(3)
+    r_head = cfg._quat_to_rot_matrix(_normalize_quat(head_ori_now))
+    mc_in_head = r_head.T @ (mc_now - head_pos)
+    tip_in_head = r_head.T @ (tip_now - head_pos)
+    head_tgt = desired - (r_head @ mc_in_head)
+    return head_tgt + (r_head @ tip_in_head)
+
+
+def tip_for_port_mating_path(
+    context,
+    *,
+    tip_now: np.ndarray,
+    desired_crystal_mc: np.ndarray,
+    tool_ori_now: np.ndarray | None = None,
+    tool_ori_tgt: np.ndarray | None = None,
+) -> np.ndarray:
+    """Tip IK target so crystal mating lands on ``desired_crystal_mc`` (port path).
+
+    Prefers head↔mating relative pose; falls back to tip↔mating tool-frame map.
+    """
+
+    tip_now = np.asarray(tip_now, dtype=np.float64).reshape(3)
+    desired = np.asarray(desired_crystal_mc, dtype=np.float64).reshape(3)
+    crystal = live_crystal_features(context)
+    mc_now = np.asarray(crystal.mating_center, dtype=np.float64).reshape(3)
+    stage = context.services.get("stage")
+    spec = context.services.get("station_spec")
+    path45 = str(getattr(spec, "path45", "") or "") if spec is not None else ""
+    if stage is not None and path45:
+        try:
+            head_pos, head_ori = crystal_head_world_pose_meters(stage, path45)
+            return tip_for_desired_crystal_mating_via_head(
+                tip_now=tip_now,
+                head_pos_now=head_pos,
+                head_ori_now=head_ori,
+                crystal_mc_now=mc_now,
+                desired_crystal_mc=desired,
+            )
+        except Exception as exc:
+            print(
+                f"[BT INSERT{_station_tag(context)}] head↔mating tip failed "
+                f"({exc}); using tip↔mating fallback"
+            )
+    if tool_ori_now is None or tool_ori_tgt is None:
+        controller = context.services.get("motion_controller")
+        if controller is not None:
+            tool_ori_now = live_tool_orientation_wxyz(controller)
+            tool_ori_tgt = tool_ori_now if tool_ori_tgt is None else tool_ori_tgt
+        else:
+            tool_ori_now = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+            tool_ori_tgt = tool_ori_now
+    return tip_for_desired_crystal_mating(
+        tip_now=tip_now,
+        tool_ori_now=tool_ori_now,
+        crystal_mc_now=mc_now,
+        tool_ori_tgt=tool_ori_tgt,
+        desired_crystal_mc=desired,
+    )
 
 
 def _measure_post_lift_tip(context) -> np.ndarray:
@@ -1504,80 +1625,37 @@ def queue_maneuver_to_port_offset(context) -> None:
         )
     lula_align = cfg.lula_orientation_from_tool(tool_align)
 
-    # TipOffset: crystal mating at insert-path start X, fixed YZ from measured
-    # half-inserted head pose (INSERT_CRYSTAL_*). Only X changes during insert.
+    # TipOffset: crystal mating = port mating + (+X standoff). Tip from
+    # head↔mating relative pose so the crystal MC (not a low FK tip) drives IK.
     pin_tip = compute_tip_offset_meters(
         stage, spec, port, float(cfg.PORT_APPROACH_X_OFFSET_M)
     )
-    if bool(getattr(cfg, "INSERT_CRYSTAL_USE_ANCHOR", True)):
-        try:
-            anchor = insert_crystal_anchor_mating_meters(context)
-            desired_crystal = np.array(
-                [anchor["x_start"], anchor["y"], anchor["z"]],
-                dtype=np.float64,
-            )
-            tip_end = tip_for_desired_crystal_mating(
-                tip_now=tip_lift,
-                tool_ori_now=tool_start,
-                crystal_mc_now=crystal.mating_center,
-                tool_ori_tgt=tool_align,
-                desired_crystal_mc=desired_crystal,
-            )
-            context.services["insert_crystal_anchor"] = {
-                "y": anchor["y"],
-                "z": anchor["z"],
-                "x_start": anchor["x_start"],
-                "x_mid": anchor["x_mid"],
-                "x_seat": anchor["x_seat"],
-            }
-            print(
-                f"[BT MANEUVER{_station_tag(context)}] TipOffset: crystal mating "
-                f"on insert X-slide (fixed YZ from measured head)\n"
-                f"  head_mid={np.round(anchor['head_m'], 4)} "
-                f"mating_mid={np.round(anchor['mating_m'], 4)}\n"
-                f"  port_mc={np.round(port.mating_center, 4)}\n"
-                f"  desired_crystal={np.round(desired_crystal, 4)} "
-                f"(Δyz_port=[{desired_crystal[1]-port.mating_center[1]:+.4f},"
-                f"{desired_crystal[2]-port.mating_center[2]:+.4f}])\n"
-                f"  X: start={anchor['x_start']:.4f} mid={anchor['x_mid']:.4f} "
-                f"seat={anchor['x_seat']:.4f}\n"
-                f"  crystal_now={np.round(crystal.mating_center, 4)} "
-                f"tip_lift={np.round(tip_lift, 4)}\n"
-                f"  tip_end={np.round(tip_end, 4)} "
-                f"(tip_z−crystal_z={tip_end[2] - desired_crystal[2]:+.4f}; "
-                f"pin_ref={np.round(pin_tip, 4)})"
-            )
-        except Exception as exc:
-            print(
-                f"[BT MANEUVER{_station_tag(context)}] crystal anchor failed "
-                f"({exc}); falling back to port YZ +X standoff"
-            )
-            tip_end, desired_crystal = tip_offset_for_crystal_mating(
-                tip_now=tip_lift,
-                tool_ori_now=tool_start,
-                crystal_mc_now=crystal.mating_center,
-                tool_ori_tgt=tool_align,
-                port_mc=port.mating_center,
-                standoff_m=float(cfg.PORT_APPROACH_X_OFFSET_M),
-                z_bias_m=0.0,
-            )
-    else:
-        tip_end, desired_crystal = tip_offset_for_crystal_mating(
-            tip_now=tip_lift,
-            tool_ori_now=tool_start,
-            crystal_mc_now=crystal.mating_center,
-            tool_ori_tgt=tool_align,
-            port_mc=port.mating_center,
-            standoff_m=float(cfg.PORT_APPROACH_X_OFFSET_M),
-            z_bias_m=float(getattr(cfg, "PORT_CRYSTAL_Z_BIAS_M", 0.0)),
-        )
-        print(
-            f"[BT MANEUVER{_station_tag(context)}] TipOffset: crystal mating = "
-            f"port mating +X\n"
-            f"  port_mc={np.round(port.mating_center, 4)} "
-            f"desired_crystal={np.round(desired_crystal, 4)}\n"
-            f"  tip_end={np.round(tip_end, 4)} pin_ref={np.round(pin_tip, 4)}"
-        )
+    port_mc = np.asarray(port.mating_center, dtype=np.float64).reshape(3)
+    standoff = abs(float(cfg.PORT_APPROACH_X_OFFSET_M))
+    desired_crystal = np.array(
+        [
+            float(port_mc[0]) + standoff,
+            float(port_mc[1]),
+            float(port_mc[2]) + float(getattr(cfg, "PORT_CRYSTAL_Z_BIAS_M", 0.0)),
+        ],
+        dtype=np.float64,
+    )
+    tip_end = tip_for_port_mating_path(
+        context,
+        tip_now=tip_lift,
+        desired_crystal_mc=desired_crystal,
+        tool_ori_now=tool_start,
+        tool_ori_tgt=tool_align,
+    )
+    print(
+        f"[BT MANEUVER{_station_tag(context)}] TipOffset: crystal mating = "
+        f"port mating +X\n"
+        f"  port_mc={np.round(port_mc, 4)} "
+        f"desired_crystal={np.round(desired_crystal, 4)} "
+        f"(standoff=+{standoff:.3f}m)\n"
+        f"  crystal_now={np.round(crystal.mating_center, 4)}\n"
+        f"  tip_end={np.round(tip_end, 4)} pin_ref={np.round(pin_tip, 4)}"
+    )
     tip_end = tip_end.copy()
     desired_crystal = desired_crystal.copy()
 
@@ -2340,11 +2418,24 @@ def _save_insert_cache(context, *, verified: bool) -> None:
     try:
         from ur5e_6x_cable_insertions import insert_cache
 
+        cache_path = getattr(cfg, "INSERT_CACHE_PATH", None)
+        # Do not clobber a manually tuned / verified cache with a failed run.
+        if not verified:
+            existing = insert_cache.load_station(
+                str(station_id), path=cache_path
+            )
+            if existing is not None and existing.get("verified"):
+                print(
+                    f"[INSERT CACHE] keep verified cache for {station_id} "
+                    "(skip unverified overwrite)"
+                )
+                return
+
         insert_cache.save_station(
             str(station_id),
             waypoints=plan,
             verified=bool(verified),
-            path=getattr(cfg, "INSERT_CACHE_PATH", None),
+            path=cache_path,
         )
     except Exception as exc:
         print(f"[INSERT CACHE] save failed: {exc}")
@@ -2677,7 +2768,7 @@ def insert_crystal_head_target_quat_wxyz() -> np.ndarray:
     euler = getattr(
         cfg,
         "INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG",
-        getattr(cfg, "INSERT_CRYSTAL_HEAD_EULER_XYZ_DEG", (0.0, 0.0, -90.0)),
+        getattr(cfg, "INSERT_CRYSTAL_HEAD_EULER_XYZ_DEG", (0.0, 0.0, 180.0)),
     )
     return _euler_xyz_deg_to_quat_wxyz(euler)
 
@@ -2685,21 +2776,87 @@ def insert_crystal_head_target_quat_wxyz() -> np.ndarray:
 def tool_ori_for_insert_waypoints(context, tool_fallback: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Tool ori for TipOffset→seat insert waypoints only (not TipOffset itself).
 
-    Targets crystal-head world Euler ``INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG``
-    (default 0,0,-90) via the rigid grasp, then validates that the crystal
-    insertion axis at that head pose is world −X. TipLift→TipOffset is unchanged.
+    Default: keep TipOffset ``tool_fallback`` and validate the *live* crystal
+    insertion axis ≈ world −X. Absolute crystal Euler lock is opt-in
+    (``INSERT_WAYPOINT_LOCK_CRYSTAL_EULER``) and skipped if it would swing the
+    tool more than ``INSERT_WAYPOINT_MAX_TOOL_DELTA_DEG``.
     """
 
     tool_fallback = _normalize_quat(tool_fallback)
     neg_x = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
+    need = float(getattr(cfg, "INSERT_WAYPOINT_AXIS_DOT_MIN", 0.90))
+    require = bool(getattr(cfg, "INSERT_WAYPOINT_REQUIRE_AXIS_NEG_X", True))
+    lock_euler = bool(getattr(cfg, "INSERT_WAYPOINT_LOCK_CRYSTAL_EULER", False))
+    yaw_ccw = float(getattr(cfg, "INSERT_WAYPOINT_AXIS_YAW_CCW_DEG", 0.0))
+    yaw_cw = float(getattr(cfg, "INSERT_WAYPOINT_AXIS_YAW_CW_DEG", 0.0))
+    # CW+ is the preferred knob; legacy CCW adds with opposite sign.
+    yaw_ccw = float(yaw_ccw) - float(yaw_cw)
+    pitch_down = float(getattr(cfg, "INSERT_WAYPOINT_AXIS_PITCH_DOWN_DEG", 0.0))
+    roll_cw = float(getattr(cfg, "INSERT_WAYPOINT_AXIS_ROLL_CW_DEG", 0.0))
+
+    def _with_insert_axis_tilt(tool: np.ndarray, axis: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        tool2 = _normalize_quat(tool)
+        axis2 = _normalize_vec(axis)
+        # Pitch down: −X → −Z uses negative world-Y pitch (helper + = nose-up).
+        if abs(pitch_down) > 1e-9:
+            pitch = -float(pitch_down)
+            tool2 = _pitch_about_world_y(tool2, pitch)
+            axis2 = _normalize_vec(_rotate_about_world_y(axis2, pitch))
+        if abs(yaw_ccw) > 1e-9:
+            tool2 = _yaw_about_world_z(tool2, yaw_ccw)
+            axis2 = _normalize_vec(_rotate_about_world_z(axis2, yaw_ccw))
+        if float(np.dot(axis2, neg_x)) < 0.0:
+            axis2 = -axis2
+        # Roll CW looking along insert axis (= RH about −axis).
+        if abs(roll_cw) > 1e-9:
+            tool2 = _quat_multiply(_quat_about_axis(axis2, -float(roll_cw)), tool2)
+        if abs(pitch_down) > 1e-9 or abs(yaw_ccw) > 1e-9 or abs(roll_cw) > 1e-9:
+            print(
+                f"[BT INSERT{_station_tag(context)}] insert axis tilt "
+                f"pitch_down={pitch_down:+.2f}° roll_cw={roll_cw:+.2f}° "
+                f"yaw_cw={yaw_cw:+.2f}° → axis={np.round(axis2, 4)} "
+                f"dot(−X)={float(np.dot(axis2, neg_x)):.4f}"
+            )
+        return tool2, axis2
+
+    # Live crystal axis at TipOffset (preferred).
+    live_axis = neg_x.copy()
+    live_dot = 1.0
+    try:
+        crystal = live_crystal_features(context)
+        axis_raw = _normalize_vec(crystal.insertion_axis)
+        if float(np.dot(axis_raw, neg_x)) < 0.0:
+            live_axis = -axis_raw
+        else:
+            live_axis = axis_raw
+        live_dot = float(np.dot(live_axis, neg_x))
+        print(
+            f"[BT INSERT{_station_tag(context)}] insert waypoint ori "
+            f"(TipOffset hold) live_axis={np.round(live_axis, 4)} "
+            f"dot(−X)={live_dot:.3f} (need≥{need:.2f})"
+        )
+    except Exception as exc:
+        print(
+            f"[BT INSERT{_station_tag(context)}] live insert axis skipped: {exc}"
+        )
+
+    if not lock_euler:
+        if require and live_dot < need:
+            print(
+                f"[BT INSERT{_station_tag(context)}] WARN: live crystal axis "
+                f"not −X (dot={live_dot:.3f}) — still keeping TipOffset tool ori "
+                f"(set INSERT_WAYPOINT_LOCK_CRYSTAL_EULER=True to force Euler)"
+            )
+        axis_out = live_axis if live_dot >= 0.0 else neg_x.copy()
+        return _with_insert_axis_tilt(tool_fallback, axis_out)
+
+    # Opt-in: remap tool so crystal head reaches INSERT_WAYPOINT_CRYSTAL_EULER.
     head_tgt = insert_crystal_head_target_quat_wxyz()
     euler_tgt = np.asarray(
-        getattr(cfg, "INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG", (0.0, 0.0, -90.0)),
+        getattr(cfg, "INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG", (0.0, 0.0, 180.0)),
         dtype=np.float64,
     ).reshape(3)
-
     axis = neg_x.copy()
-    # Axis check from cached local features posed at the desired head ori.
     try:
         from insertion_features.cache import world_features_for_head
 
@@ -2710,46 +2867,39 @@ def tool_ori_for_insert_waypoints(context, tool_fallback: np.ndarray) -> tuple[n
         t_head = _transform_from_pos_ori_wxyz(np.zeros(3), head_tgt)
         feats = world_features_for_head(head_name, t_head, meters_per_unit=1.0)
         axis_raw = _normalize_vec(feats.insertion_axis)
-        # Prefer the sense pointing −X (into the jack).
         if float(np.dot(axis_raw, neg_x)) < 0.0:
             axis = -axis_raw
         else:
             axis = axis_raw
         dot = float(np.dot(axis, neg_x))
-        need = float(getattr(cfg, "INSERT_WAYPOINT_AXIS_DOT_MIN", 0.90))
-        require = bool(getattr(cfg, "INSERT_WAYPOINT_REQUIRE_AXIS_NEG_X", True))
         print(
             f"[BT INSERT{_station_tag(context)}] insert waypoint ori "
             f"crystal_euler_xyz={np.round(euler_tgt, 1)}° "
             f"axis={np.round(axis, 4)} dot(−X)={dot:.3f} (need≥{need:.2f})"
         )
-        if dot < need:
-            msg = (
-                f"[BT INSERT{_station_tag(context)}] WARN: crystal axis not −X "
-                f"at Euler {np.round(euler_tgt, 1)}° "
-                f"(raw_axis={np.round(axis_raw, 4)}; "
-                f"extrinsic XYZ (0,0,±180)→−X, (0,0,-90)→−Y)"
+        if require and dot < need:
+            print(
+                f"[BT INSERT{_station_tag(context)}] WARN: Euler axis not −X "
+                f"— keeping TipOffset tool ori"
             )
-            if require:
-                print(f"{msg} — keeping TipOffset tool ori")
-                return tool_fallback, neg_x.copy()
-            print(f"{msg} — applying Euler anyway (REQUIRE_AXIS_NEG_X=False)")
-
+            axis_out = live_axis if live_dot >= need else neg_x.copy()
+            return _with_insert_axis_tilt(tool_fallback, axis_out)
     except Exception as exc:
         print(
-            f"[BT INSERT{_station_tag(context)}] insert axis validate skipped: {exc}"
+            f"[BT INSERT{_station_tag(context)}] insert Euler axis validate "
+            f"skipped: {exc} — keeping TipOffset tool ori"
         )
-        return tool_fallback, neg_x.copy()
+        axis_out = live_axis if live_dot >= need else neg_x.copy()
+        return _with_insert_axis_tilt(tool_fallback, axis_out)
 
-    # Map desired head ori → tool ori via live rigid grasp.
     spec = context.services.get("station_spec")
     stage = context.services.get("stage")
     controller = context.services.get("motion_controller")
     if spec is None or stage is None or controller is None:
-        return tool_fallback, axis
+        return _with_insert_axis_tilt(tool_fallback, axis)
     path45 = str(getattr(spec, "path45", "") or "")
     if not path45:
-        return tool_fallback, axis
+        return _with_insert_axis_tilt(tool_fallback, axis)
     try:
         tool_now = live_tool_orientation_wxyz(controller)
         head_now = crystal_head_world_quat_wxyz(stage, path45)
@@ -2758,18 +2908,30 @@ def tool_ori_for_insert_waypoints(context, tool_fallback: np.ndarray) -> tuple[n
             crystal_head_ori_now=head_now,
             crystal_head_ori_tgt=head_tgt,
         )
+        tool_tgt = _normalize_quat(tool_tgt)
+        delta_deg = float(np.rad2deg(_quat_angle_rad(tool_now, tool_tgt)))
+        max_delta = float(getattr(cfg, "INSERT_WAYPOINT_MAX_TOOL_DELTA_DEG", 15.0))
         euler_now = _quat_wxyz_to_euler_xyz_deg(head_now)
         print(
             f"[BT INSERT{_station_tag(context)}] insert waypoint tool from head "
-            f"euler_now={np.round(euler_now, 1)}° → {np.round(euler_tgt, 1)}°"
+            f"euler_now={np.round(euler_now, 1)}° → {np.round(euler_tgt, 1)}° "
+            f"toolΔ={delta_deg:.1f}° (max={max_delta:.1f}°)"
         )
-        return _normalize_quat(tool_tgt), axis
+        if delta_deg > max_delta:
+            print(
+                f"[BT INSERT{_station_tag(context)}] WARN: Euler remap toolΔ "
+                f"{delta_deg:.1f}° > {max_delta:.1f}° — keeping TipOffset tool ori "
+                f"(avoids gripper pitch-down)"
+            )
+            axis_out = live_axis if live_dot >= need else axis
+            return _with_insert_axis_tilt(tool_fallback, axis_out)
+        return _with_insert_axis_tilt(tool_tgt, axis)
     except Exception as exc:
         print(
             f"[BT INSERT{_station_tag(context)}] insert head→tool ori failed "
             f"({exc}) — keeping TipOffset tool ori"
         )
-        return tool_fallback, axis
+        return _with_insert_axis_tilt(tool_fallback, axis)
 
 
 def lock_insert_tool_orientation(context, tool_fallback: np.ndarray) -> np.ndarray:
@@ -2865,11 +3027,15 @@ def insert_crystal_anchor_mating_meters(context) -> dict:
 
 
 def _plan_insert_maneuver_waypoints(context) -> list[dict]:
-    """TipOffset → seat: X-only crystal mating slide at fixed YZ (anchor pose).
+    """TipOffset → seat: crystal mating slides −X onto the port mating center.
 
-    YZ (+ orientation intent) come from the measured half-inserted crystal-head
-    pose in config; only X decreases from approach → mid → seat. Tip IK uses the
-    live tip↔crystal rigid offset so the fingertip tracks that mating path.
+    Waypoints (same count / X spacing as before):
+      - offset / start: port_mc + (+PORT_APPROACH_X_OFFSET_M, 0, 0)
+      - seat / end: port_mc
+      - common YZ = port mating YZ; only X changes
+
+    Tip IK targets use the crystal-head ↔ mating-center relative pose so the
+    solver tracks the crystal mating center (not a low FK tip).
     """
 
     controller = context.services["motion_controller"]
@@ -2877,7 +3043,6 @@ def _plan_insert_maneuver_waypoints(context) -> list[dict]:
     if tool_fallback is None:
         tool_fallback, _ = _grasp_tool_and_lula(context)
     tool_fallback = _normalize_quat(tool_fallback)
-    # Insert waypoints only: crystal head Euler (0,0,-90) + axis −X validate.
     tool_tgt, insert_axis = tool_ori_for_insert_waypoints(context, tool_fallback)
     context.services["port_approach_tool_orientation"] = tool_tgt.copy()
     try:
@@ -2891,52 +3056,66 @@ def _plan_insert_maneuver_waypoints(context) -> list[dict]:
     context.services["crystal_features"] = crystal
     context.services["port_features"] = port
     live_c = np.asarray(crystal.mating_center, dtype=np.float64).reshape(3)
+    port_mc = np.asarray(port.mating_center, dtype=np.float64).reshape(3)
 
-    use_anchor = bool(getattr(cfg, "INSERT_CRYSTAL_USE_ANCHOR", True))
-    if use_anchor:
-        anchor = insert_crystal_anchor_mating_meters(context)
-        y = float(anchor["y"])
-        z = float(anchor["z"])
-        x_start = float(anchor["x_start"])
-        x_mid = float(anchor["x_mid"])
-        x_seat = float(anchor["x_seat"])
-        print(
-            f"[BT INSERT{_station_tag(context)}] crystal anchor (half-inserted head)\n"
-            f"  head_m={np.round(anchor['head_m'], 4)} "
-            f"mating_mid={np.round(anchor['mating_m'], 4)}\n"
-            f"  YZ=({y:.4f},{z:.4f}) "
-            f"(Δy={float(cfg.INSERT_CRYSTAL_Y_DELTA_M):+.4f} "
-            f"Δz={float(cfg.INSERT_CRYSTAL_Z_DELTA_M):+.4f})\n"
-            f"  X path: start={x_start:.4f} → mid={x_mid:.4f} → seat={x_seat:.4f}\n"
-            f"  live_crystal={np.round(live_c, 4)} "
-            f"(Δyz_anchor=[{live_c[1]-y:+.4f},{live_c[2]-z:+.4f}])"
-        )
-    else:
-        # Legacy: port YZ + optional Z bias / half-head settle.
-        port_mc = np.asarray(port.mating_center, dtype=np.float64).reshape(3)
-        y = float(port_mc[1])
-        z = float(port_mc[2]) + float(
-            getattr(cfg, "PORT_CRYSTAL_Z_BIAS_M", 0.0)
-        )
-        standoff = abs(float(cfg.PORT_APPROACH_X_OFFSET_M))
-        x_seat = float(port_mc[0])
-        x_mid = 0.5 * (x_seat + standoff + x_seat)
-        x_start = x_seat + standoff
+    # Insertion pose = port mating; offset pose = port mating + (+X standoff).
+    # Mating YZ stay on the port; INSERT_CRYSTAL_*_DELTA are tip-only nudges.
+    y = float(port_mc[1])
+    z = float(port_mc[2])
+    seat_x_cfg = getattr(cfg, "INSERT_CRYSTAL_SEAT_X_M", None)
+    x_seat = float(port_mc[0]) if seat_x_cfg is None else float(seat_x_cfg)
+    standoff = abs(float(cfg.PORT_APPROACH_X_OFFSET_M))
+    x_start = x_seat + standoff
+    x_mid = x_seat + 0.5 * standoff
 
-    # Insertion axis for TipOffset→seat waypoints only (validated −X when Euler ok).
+    tip_nudge = np.array(
+        [
+            float(getattr(cfg, "INSERT_CRYSTAL_X_DELTA_M", 0.0)),
+            float(getattr(cfg, "INSERT_CRYSTAL_Y_DELTA_M", 0.0)),
+            float(getattr(cfg, "INSERT_CRYSTAL_Z_DELTA_M", 0.0)),
+        ],
+        dtype=np.float64,
+    )
+
+    print(
+        f"[BT INSERT{_station_tag(context)}] insert MC path "
+        f"(port mating seat, +X offset)\n"
+        f"  port_mc={np.round(port_mc, 4)} YZ=({y:.4f},{z:.4f})\n"
+        f"  X: offset={x_start:.4f} → mid={x_mid:.4f} → seat={x_seat:.4f} "
+        f"(standoff=+{standoff:.3f}m)\n"
+        f"  live_crystal={np.round(live_c, 4)} "
+        f"(Δyz_port=[{live_c[1]-y:+.4f},{live_c[2]-z:+.4f}])\n"
+        f"  tip_nudge_xyz=[{tip_nudge[0]:+.4f},{tip_nudge[1]:+.4f},"
+        f"{tip_nudge[2]:+.4f}] (INSERT_CRYSTAL_X/Y/Z_DELTA_M)"
+    )
+
+    neg_x = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
     axis = _normalize_vec(insert_axis)
+    if float(np.dot(axis, neg_x)) < float(
+        getattr(cfg, "INSERT_WAYPOINT_AXIS_DOT_MIN", 0.90)
+    ):
+        axis = neg_x.copy()
 
     mc_start = np.array([x_start, y, z], dtype=np.float64)
     mc_mid = np.array([x_mid, y, z], dtype=np.float64)
     mc_end = np.array([x_seat, y, z], dtype=np.float64)
 
-    tip_start = tip_for_desired_crystal_mating(
-        tip_now=tip_live,
-        tool_ori_now=tool_live,
-        crystal_mc_now=live_c,
-        tool_ori_tgt=tool_tgt,
-        desired_crystal_mc=mc_start,
-    )
+    def _tip_for_mc(mc: np.ndarray) -> np.ndarray:
+        tip = tip_for_port_mating_path(
+            context,
+            tip_now=tip_live,
+            desired_crystal_mc=mc,
+            tool_ori_now=tool_live,
+            tool_ori_tgt=tool_tgt,
+        )
+        # Y/Z/X deltas are tip-only; mating centers stay on port YZ (+ planned X).
+        out = tip.copy()
+        out[0] += tip_nudge[0]
+        out[1] += tip_nudge[1]
+        out[2] += tip_nudge[2]
+        return out
+
+    tip_start = _tip_for_mc(mc_start)
     context.services["port_offset_tip"] = tip_start.copy()
     context.services["port_offset_crystal"] = mc_start.copy()
     context.services["insert_live_crystal"] = live_c.copy()
@@ -2949,7 +3128,6 @@ def _plan_insert_maneuver_waypoints(context) -> list[dict]:
         "x_seat": x_seat,
     }
 
-    # Build X samples: start → mid → seat (unique, sorted by descending X).
     step = float(getattr(cfg, "INSERT_STEP_M", 0.01))
     xs: list[float] = []
     for x0, x1 in ((x_start, x_mid), (x_mid, x_seat)):
@@ -2958,7 +3136,6 @@ def _plan_insert_maneuver_waypoints(context) -> list[dict]:
         for i in range(n_seg + 1):
             t = float(i) / float(n_seg)
             xs.append(float(x0) + t * (float(x1) - float(x0)))
-    # Dedup while preserving order (descending X).
     xs_unique: list[float] = []
     for x in xs:
         if not xs_unique or abs(x - xs_unique[-1]) > 1e-6:
@@ -2966,16 +3143,30 @@ def _plan_insert_maneuver_waypoints(context) -> list[dict]:
     if abs(xs_unique[-1] - x_seat) > 1e-6:
         xs_unique.append(x_seat)
 
+    # Head↔mating offset diagnostics.
+    head_dbg = ""
+    try:
+        stage = context.services["stage"]
+        spec = context.services.get("station_spec")
+        path45 = str(getattr(spec, "path45", "") or "")
+        if path45:
+            head_pos, _head_ori = crystal_head_world_pose_meters(stage, path45)
+            head_dbg = (
+                f"\n  head_pos={np.round(head_pos, 4)} "
+                f"head→mc={np.round(live_c - head_pos, 4)}"
+            )
+    except Exception:
+        pass
+
     print(
-        f"[BT INSERT{_station_tag(context)}] live tip↔crystal rebase\n"
-        f"  tip_live={np.round(tip_live, 4)} toolΔ="
-        f"{np.rad2deg(_quat_angle_rad(tool_live, tool_tgt)):.1f}°\n"
-        f"  mc_start={np.round(mc_start, 4)} mc_mid={np.round(mc_mid, 4)} "
-        f"mc_end={np.round(mc_end, 4)}\n"
+        f"[BT INSERT{_station_tag(context)}] tip from crystal mating "
+        f"(head↔MC relative)\n"
+        f"  tip_live={np.round(tip_live, 4)} crystal_live={np.round(live_c, 4)}"
+        f"{head_dbg}\n"
+        f"  toolΔ={np.rad2deg(_quat_angle_rad(tool_live, tool_tgt)):.1f}°\n"
+        f"  mc_start={np.round(mc_start, 4)} mc_end={np.round(mc_end, 4)}\n"
         f"  tip_start={np.round(tip_start, 4)} "
-        f"(tip_z−mc_z={tip_start[2] - mc_start[2]:+.4f}; "
-        f"raise_tip_z={tip_start[2] - tip_live[2]:+.4f}) "
-        f"n={len(xs_unique)}"
+        f"axis={np.round(axis, 4)} n={len(xs_unique)}"
     )
 
     waypoints: list[dict] = []
@@ -2983,13 +3174,7 @@ def _plan_insert_maneuver_waypoints(context) -> list[dict]:
     for i, x in enumerate(xs_unique):
         t = float(i) / float(n)
         mc = np.array([x, y, z], dtype=np.float64)
-        tip = tip_for_desired_crystal_mating(
-            tip_now=tip_start,
-            tool_ori_now=tool_tgt,
-            crystal_mc_now=mc_start,
-            tool_ori_tgt=tool_tgt,
-            desired_crystal_mc=mc,
-        )
+        tip = _tip_for_mc(mc)
         if abs(x - x_seat) < 1e-6 and i == len(xs_unique) - 1:
             label = "insert-seat"
         elif abs(x - x_mid) < 0.5 * step:
@@ -3073,11 +3258,20 @@ def queue_align_and_insert(context) -> None:
     context.services["monitor_cable_hold"] = True
     context.services["insert_path_plan"] = []
     context.services["insert_cache_queue"] = None
+    context.services["insert_last_completed_waypoint"] = None
+    context.services["insert_current_waypoint"] = None
+    context.services["_insert_cmd_idx"] = None
+    context.services["insert_port_hit"] = None
+    context.services["insert_port_mating_center"] = None
 
     context.services["collision_abort_active"] = False
     monitor = context.services.get("collision_monitor")
     spec = context.services.get("station_spec")
     if monitor is not None:
+        if hasattr(monitor, "bind_services"):
+            monitor.bind_services(context.services)
+        if hasattr(monitor, "begin_insert_session"):
+            monitor.begin_insert_session()
         if hasattr(monitor, "clear_ignore_obstacles"):
             monitor.clear_ignore_obstacles()
         if hasattr(monitor, "set_skip_prefixes") and spec is not None:
@@ -3086,7 +3280,8 @@ def queue_align_and_insert(context) -> None:
             else:
                 monitor.set_skip_prefixes(())
         if hasattr(monitor, "set_logging"):
-            # Keep insert contact prints off unless INSERT_DIAG_CONTACT_LOG.
+            # General [COLLISION] spam off unless INSERT_DIAG_CONTACT_LOG.
+            # Port-hit (head45↔Mesh133/134) logs via INSERT_PORT_HIT_LOG.
             monitor.set_logging(bool(getattr(cfg, "INSERT_DIAG_CONTACT_LOG", False)))
         if hasattr(monitor, "clear_recent_contacts"):
             monitor.clear_recent_contacts()
@@ -3103,6 +3298,17 @@ def queue_align_and_insert(context) -> None:
         )
         context.services["cable_path"] = str(
             getattr(spec, "cable_root_path", "") or ""
+        )
+    try:
+        port = live_port_features(context)
+        context.services["port_features"] = port
+        context.services["insert_port_mating_center"] = np.asarray(
+            port.mating_center, dtype=np.float64
+        ).reshape(3).copy()
+    except Exception as exc:
+        print(
+            f"[BT INSERT{_station_tag(context)}] WARN: port mating for hit-log "
+            f"unavailable ({exc})"
         )
     start_insert_diagnostics(context)
 
@@ -3166,6 +3372,16 @@ def queue_align_and_insert(context) -> None:
 
     controller = context.services["motion_controller"]
     controller.clear_queue()
+    # Crystal-MC arrive gate for TipOffset→seat (hand alone was ~3–4 mm early in X).
+    if bool(getattr(cfg, "INSERT_ARRIVE_CRYSTAL_MC", True)):
+        def _live_crystal_mc():
+            return np.asarray(
+                live_crystal_features(context).mating_center, dtype=np.float64
+            ).reshape(3)
+
+        controller._arrive_crystal_mc_fn = _live_crystal_mc
+    else:
+        controller._arrive_crystal_mc_fn = None
 
     # Dense linear tip path through the planned tips (hold TipOffset ori).
     tips = [np.asarray(w["tip"], dtype=np.float64).reshape(3) for w in waypoints]
@@ -3173,14 +3389,57 @@ def queue_align_and_insert(context) -> None:
         _normalize_quat(w["orientation_wxyz"]) for w in waypoints
     ]
     labels = [str(w.get("label") or f"insert-{i}") for i, w in enumerate(waypoints)]
+    mating_centers = []
+    for w in waypoints:
+        mc = w.get("mating_center")
+        mating_centers.append(
+            None
+            if mc is None
+            else np.asarray(mc, dtype=np.float64).reshape(3)
+        )
 
-    linear_step = float(
+    linear_step_default = float(
         getattr(
             cfg,
             "INSERT_LINEAR_STEP_M",
             getattr(cfg, "ALIGN_STEP_LINEAR_STEP_M", cfg.MANEUVER_LINEAR_STEP_M),
         )
     )
+    pos_tol_default = float(
+        getattr(
+            cfg,
+            "INSERT_POS_TOLERANCE_M",
+            getattr(cfg, "ALIGN_STEP_POS_TOLERANCE_M", 0.01),
+        )
+    )
+    pos_tol_seat = float(
+        getattr(cfg, "INSERT_SEAT_POS_TOLERANCE_M", pos_tol_default)
+    )
+    ik_pos_tol_default = float(
+        getattr(cfg, "INSERT_IK_POS_TOLERANCE_M", pos_tol_default)
+    )
+    precision_wps = {
+        int(x)
+        for x in getattr(cfg, "INSERT_PRECISION_WP_1BASED", (6, 7))
+    }
+    pos_tol_precision = float(
+        getattr(cfg, "INSERT_PRECISION_POS_TOLERANCE_M", 0.0005)
+    )
+    ik_pos_tol_precision = float(
+        getattr(cfg, "INSERT_PRECISION_IK_POS_TOLERANCE_M", pos_tol_precision)
+    )
+    linear_step_precision = float(
+        getattr(cfg, "INSERT_PRECISION_LINEAR_STEP_M", linear_step_default)
+    )
+    max_frames = int(
+        getattr(cfg, "INSERT_MAX_FRAMES", cfg.ALIGN_STEP_MAX_FRAMES)
+    )
+    joint_steps = int(
+        getattr(cfg, "INSERT_JOINT_STEPS", cfg.ALIGN_STEP_JOINT_STEPS)
+    )
+    ik_backend = str(getattr(cfg, "INSERT_IK_BACKEND", "lula") or "lula").strip().lower()
+    crystal_arrive = bool(getattr(cfg, "INSERT_ARRIVE_CRYSTAL_MC", True))
+    crystal_tol = float(getattr(cfg, "INSERT_ARRIVE_CRYSTAL_TOL_M", 0.001))
     for i in range(len(tips)):
         tip = tips[i]
         tool_ori = oris[i]
@@ -3188,6 +3447,21 @@ def queue_align_and_insert(context) -> None:
         lula_ori = cfg.lula_orientation_from_tool(tool_ori)
         hand = hand_from_tip(tip, tool_ori)
         is_seat = label == "insert-seat" or i == len(tips) - 1
+        wp_1based = i + 1
+        is_precision = wp_1based in precision_wps
+        if is_seat:
+            pos_tol = pos_tol_seat
+            ik_tol = max(ik_pos_tol_default, pos_tol)
+            linear_step = linear_step_default
+        elif is_precision:
+            pos_tol = pos_tol_precision
+            ik_tol = max(ik_pos_tol_precision, pos_tol)
+            linear_step = linear_step_precision
+        else:
+            pos_tol = pos_tol_default
+            ik_tol = max(ik_pos_tol_default, pos_tol)
+            linear_step = linear_step_default
+        mc_i = mating_centers[i]
         controller.add_cartesian_waypoint(
             hand,
             lula_ori,
@@ -3196,17 +3470,10 @@ def queue_align_and_insert(context) -> None:
             linear=True,
             linear_step=linear_step,
             hold_gripper=True,
-            joint_steps=int(
-                getattr(cfg, "INSERT_JOINT_STEPS", cfg.ALIGN_STEP_JOINT_STEPS)
-            ),
-            max_frames=int(
-                getattr(cfg, "INSERT_MAX_FRAMES", cfg.ALIGN_STEP_MAX_FRAMES)
-            ),
-            pos_tolerance=float(
-                cfg.ALIGN_STEP_POS_TOLERANCE_M
-                if not is_seat
-                else min(cfg.ALIGN_STEP_POS_TOLERANCE_M, 0.004)
-            ),
+            joint_steps=joint_steps,
+            max_frames=max_frames,
+            pos_tolerance=float(pos_tol),
+            ik_pos_tolerance=float(ik_tol),
             ori_tolerance=float(
                 getattr(
                     cfg,
@@ -3214,20 +3481,26 @@ def queue_align_and_insert(context) -> None:
                     getattr(cfg, "ALIGN_STEP_ORI_TOLERANCE_RAD", 0.05),
                 )
             ),
+            ik_backend=ik_backend,
+            arrive_mating_center_m=mc_i if crystal_arrive else None,
+            arrive_crystal_tol_m=crystal_tol if crystal_arrive else None,
             label=f"{context.step.name}: {label}",
         )
         context.services["_insert_diag_label"] = label
 
     print(
         f"[BT INSERT{_station_tag(context)}] executing TipOffset→seat cartesian "
-        f"path ({len(tips)} poses, linear_step={linear_step:.4f}m, "
-        f"max_frames/wp={int(getattr(cfg, 'INSERT_MAX_FRAMES', cfg.ALIGN_STEP_MAX_FRAMES))})"
+        f"path ({len(tips)} poses, ik={ik_backend}, arrive_tol={pos_tol_default:.4f}m, "
+        f"crystal_gate={crystal_arrive} tol={crystal_tol:.4f}m, "
+        f"precision_wp={sorted(precision_wps)} tol={pos_tol_precision:.4f}m, "
+        f"ik_tol={ik_pos_tol_default:.4f}/{ik_pos_tol_precision:.4f}m)"
     )
 
 
 def while_align_and_insert(context) -> None:
     """Cable-hold only — insert path is a single queued cartesian maneuver."""
 
+    _track_insert_waypoint_progress(context)
     monitor_cable_hold(context)
     if context.services.get("abort_simulation"):
         from ur5e_6x_cable_insertions.insert_diagnostics import finish_insert_diagnostics
@@ -3237,6 +3510,135 @@ def while_align_and_insert(context) -> None:
             finish_insert_diagnostics(context, reason="aborted")
         context.services["align_insert_active"] = False
         _save_insert_cache(context, verified=False)
+
+
+def _waypoint_snapshot_from_plan(plan: list, label: str) -> dict | None:
+    """Match a motion-command label to an insert plan waypoint snapshot."""
+
+    lab = str(label or "")
+    if ": " in lab:
+        lab = lab.split(": ", 1)[-1]
+    for wp in plan or ():
+        if str(wp.get("label") or "") == lab:
+            tip = wp.get("tip")
+            mc = wp.get("mating_center")
+            return {
+                "label": lab,
+                "tip": None
+                if tip is None
+                else np.asarray(tip, dtype=np.float64).reshape(3).tolist(),
+                "mating_center": None
+                if mc is None
+                else np.asarray(mc, dtype=np.float64).reshape(3).tolist(),
+                "t": float(wp.get("t", 0.0)),
+            }
+    if lab:
+        return {"label": lab, "tip": None, "mating_center": None, "t": None}
+    return None
+
+
+def _log_insert_arrive_mc_delta(context, *, snap: dict, completed_cmd: dict) -> None:
+    """Log live crystal mating vs planned waypoint MC when a hand arrival completes."""
+
+    if not bool(getattr(cfg, "INSERT_ARRIVE_MC_LOG", True)):
+        return
+    planned = snap.get("mating_center")
+    if planned is None:
+        return
+    planned_mc = np.asarray(planned, dtype=np.float64).reshape(3)
+    try:
+        live_mc = np.asarray(
+            live_crystal_features(context).mating_center, dtype=np.float64
+        ).reshape(3)
+    except Exception as exc:
+        print(
+            f"[INSERT ARRIVE{_station_tag(context)}] {snap.get('label')}: "
+            f"crystal MC unavailable ({exc})"
+        )
+        return
+
+    delta = live_mc - planned_mc
+    mpu = float(
+        getattr(
+            context.services.get("motion_controller"),
+            "_meters_per_unit",
+            meters_per_unit(context.services["stage"]),
+        )
+    )
+    hand_tol_stage = completed_cmd.get("pos_tolerance")
+    hand_tol_m = (
+        None
+        if hand_tol_stage is None
+        else float(hand_tol_stage) * mpu
+    )
+    hand_err_m = None
+    controller = context.services.get("motion_controller")
+    tip_planned = snap.get("tip")
+    if controller is not None and tip_planned is not None:
+        try:
+            getter = getattr(controller, "current_hand_pose_meters", None)
+            if callable(getter):
+                hand_m, lula_ori = getter()
+                tool_ori = cfg.tool_orientation_from_lula(lula_ori)
+                tip_now = tip_from_hand(hand_m, tool_ori)
+                tip_err = tip_now - np.asarray(tip_planned, dtype=np.float64).reshape(3)
+                hand_err_m = float(np.linalg.norm(tip_err))
+        except Exception:
+            hand_err_m = None
+
+    print(
+        f"[INSERT ARRIVE{_station_tag(context)}] {snap.get('label')}\n"
+        f"  planned_mc_m={np.round(planned_mc, 5)}\n"
+        f"  live_crystal_mc_m={np.round(live_mc, 5)}\n"
+        f"  Δ(crystal−planned)_m={np.round(delta, 5)} "
+        f"|Δ|={float(np.linalg.norm(delta)):.5f} "
+        f"|Δyz|={float(np.linalg.norm(delta[1:3])):.5f}\n"
+        f"  hand_arrive_tol_m="
+        f"{None if hand_tol_m is None else round(float(hand_tol_m), 5)} "
+        f"tip_vs_planned_m="
+        f"{None if hand_err_m is None else round(hand_err_m, 5)}"
+    )
+
+
+def _track_insert_waypoint_progress(context) -> None:
+    """Update current / last-completed insert waypoints from the motion queue."""
+
+    if not context.services.get("align_insert_active"):
+        return
+    controller = context.services.get("motion_controller")
+    if controller is None:
+        return
+    plan = context.services.get("insert_path_plan") or []
+    try:
+        idx = int(controller._current_command_index)
+        queue = controller._command_queue
+    except Exception:
+        return
+    if not queue or idx < 0 or idx >= len(queue):
+        return
+
+    prev_idx = context.services.get("_insert_cmd_idx")
+    if prev_idx is not None:
+        try:
+            prev_idx = int(prev_idx)
+        except Exception:
+            prev_idx = None
+    if prev_idx is not None and idx > prev_idx:
+        completed = queue[idx - 1]
+        snap = _waypoint_snapshot_from_plan(plan, completed.get("label", ""))
+        if snap is not None:
+            context.services["insert_last_completed_waypoint"] = snap
+            _log_insert_arrive_mc_delta(
+                context, snap=snap, completed_cmd=completed
+            )
+
+    cur = queue[idx]
+    snap_cur = _waypoint_snapshot_from_plan(plan, cur.get("label", ""))
+    if snap_cur is not None:
+        context.services["insert_current_waypoint"] = snap_cur
+    context.services["_insert_cmd_idx"] = idx
+    if snap_cur is not None and snap_cur.get("label"):
+        context.services["_insert_diag_label"] = snap_cur["label"]
 
 
 def check_port_inserted(context) -> bool:
