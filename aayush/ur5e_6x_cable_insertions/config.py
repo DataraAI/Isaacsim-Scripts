@@ -18,7 +18,8 @@ DATAHALL_PRIM_PATH_FALLBACKS = (
     "/World/DataHall_01",
     "/World/DataHall",
 )
-ENABLE_DATAHALL_STATIC_COLLISIONS = True
+# TEMP: DataHall static collision off (caches / de-instance / monitors unchanged).
+ENABLE_DATAHALL_STATIC_COLLISIONS = False
 # Prefer convexHull for bulk static meshes — triangle ("none") on every switch
 # prim (~6k) overflows PhysX GPU buffers and triggers CUDA 700 mid-grasp.
 DATAHALL_COLLISION_APPROXIMATION = "convexHull"
@@ -725,7 +726,7 @@ INSERT_WAYPOINT_CRYSTAL_EULER_XYZ_DEG = (0.0, 0.0, 180.0)  # used only if LOCK=T
 INSERT_WAYPOINT_REQUIRE_AXIS_NEG_X = True
 INSERT_WAYPOINT_AXIS_DOT_MIN = 0.90  # live crystal axis · (−X) must be ≥ this
 # TipOffset→seat: pitch insert axis from −X toward −Z (world-Y; + = down).
-INSERT_WAYPOINT_AXIS_PITCH_DOWN_DEG = 3.0
+INSERT_WAYPOINT_AXIS_PITCH_DOWN_DEG = 0.0
 # Roll about the insert axis; + = clockwise when looking along the axis (into jack).
 INSERT_WAYPOINT_AXIS_ROLL_CW_DEG = -2.5
 # World-Z yaw of crystal/tool; + = clockwise (looking down +Z).
@@ -737,7 +738,7 @@ INSERT_WAYPOINT_MAX_TOOL_DELTA_DEG = 15.0
 # after −4 mm overshot; arrive |Δ| at 0.78 was already ~0.4 mm.
 INSERT_CRYSTAL_X_DELTA_M = -0.0005
 INSERT_CRYSTAL_Y_DELTA_M = 0.00115
-INSERT_CRYSTAL_Z_DELTA_M = 0.00575
+INSERT_CRYSTAL_Z_DELTA_M = 0.00625
 # Require live crystal MC within this of planned MC before advancing a WP
 # (hand tol alone was declaring arrive ~3–4 mm early along −X).
 INSERT_ARRIVE_CRYSTAL_MC = True
